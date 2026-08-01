@@ -1,0 +1,1039 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+}
+
+model audit_logs {
+  id          String   @id(map: "PK__audit_lo__3213E83F7D61AA61") @default(dbgenerated("newid()"), map: "DF__audit_logs__id__59063A47") @db.UniqueIdentifier
+  user_id     String?  @db.UniqueIdentifier
+  action      String   @db.NVarChar(100)
+  entity_type String?  @db.NVarChar(50)
+  entity_id   String?  @db.UniqueIdentifier
+  ip_address  String?  @db.NVarChar(50)
+  user_agent  String?  @db.NVarChar(255)
+  created_at  DateTime @default(now(), map: "DF__audit_log__creat__5AEE82B9")
+  users       users?   @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK__audit_log__user___59FA5E80")
+
+  @@index([created_at], map: "IX_audit_logs_created")
+  @@index([user_id], map: "IX_audit_logs_user")
+}
+
+model audit_plans {
+  id             String  @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  project_id     String  @db.UniqueIdentifier
+  audit_event_id String? @db.UniqueIdentifier
+
+  plan_code  String? @unique @db.NVarChar(50)
+  version_no Int     @default(1)
+
+  audit_type String? @db.NVarChar(30)
+
+  planned_start_date DateTime? @map("plan_date") @db.Date
+  planned_end_date   DateTime? @db.Date
+
+  location         String? @db.NVarChar(Max)
+  audit_scope      String? @db.NVarChar(Max)
+  audit_criteria   String? @db.NVarChar(Max)
+  audit_objectives String? @db.NVarChar(Max)
+
+  status     String?  @default("draft") @db.NVarChar(30)
+  form_data  String?  @db.NVarChar(Max)
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  certification_projects certification_projects @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  audit_event            audit_program_events?  @relation(fields: [audit_event_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  reports                reports[]
+  audit_team_appointment audit_team_appointments?
+
+  @@index([project_id])
+  @@index([audit_event_id])
+  @@index([audit_type])
+  @@index([status])
+  @@index([planned_start_date])
+}
+
+model certificates {
+  id                  String            @id(map: "PK__certific__3213E83F937E4BBE") @default(dbgenerated("newid()"), map: "DF__certificates__id__1EA48E88") @db.UniqueIdentifier
+  verification_code   String            @unique @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  technical_review_id String            @unique(map: "UQ__certific__6ED41B569BBE96A3") @db.UniqueIdentifier
+  cert_number         String            @unique(map: "UQ__certific__B8309B494E412033") @db.NVarChar(50)
+  issue_date          DateTime?         @db.Date
+  expire_date         DateTime?         @db.Date
+  status              String?           @default("active", map: "DF__certifica__statu__208CD6FA") @db.NVarChar(20)
+  created_at          DateTime          @default(now(), map: "DF__certifica__creat__22751F6C")
+  updated_at          DateTime          @default(now(), map: "DF__certifica__updat__236943A5")
+  technical_reviews   technical_reviews @relation(fields: [technical_review_id], references: [id], onUpdate: NoAction, map: "FK__certifica__techn__1F98B2C1")
+
+  status_histories certificate_status_histories[]
+}
+
+model certificate_status_histories {
+  id String @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+
+  certificate_id String @db.UniqueIdentifier
+
+  from_status String @db.NVarChar(20)
+  to_status   String @db.NVarChar(20)
+
+  reason         String   @db.NVarChar(Max)
+  effective_date DateTime @db.Date
+
+  changed_by String? @db.UniqueIdentifier
+
+  created_at DateTime @default(now()) @db.DateTime2
+
+  certificates certificates @relation(fields: [certificate_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  changed_by_user users? @relation("CertificateStatusChangedBy", fields: [changed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([certificate_id, created_at], map: "IX_certificate_status_histories_certificate")
+}
+
+model certification_projects {
+  id             String   @id(map: "PK__certific__3213E83F23548939") @default(dbgenerated("newid()"), map: "DF__certificatio__id__02084FDA") @db.UniqueIdentifier
+  application_id String   @db.UniqueIdentifier
+  contract_id    String?  @db.UniqueIdentifier
+  agreement_id   String?  @db.UniqueIdentifier
+  project_code   String   @unique(map: "UQ__certific__891B3A6F31225100") @db.NVarChar(50)
+  standard_name  String?  @db.NVarChar(100)
+  status         String?  @default("draft") @db.NVarChar(50)
+  created_at     DateTime @default(now(), map: "DF__certifica__creat__03F0984C")
+  updated_at     DateTime @default(now(), map: "DF__certifica__updat__04E4BC85") @updatedAt
+
+  audit_plans         audit_plans[]
+  manday_calculations manday_calculations[]
+  audit_programs      audit_programs[]
+  industry_scopes     certification_project_scopes[]
+
+  certification_applications certification_applications @relation(fields: [application_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts                  contracts?                 @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  certification_agreements   certification_agreements?  @relation(fields: [agreement_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([application_id])
+  @@index([contract_id])
+  @@index([agreement_id])
+}
+
+model contacts {
+  id          String    @id(map: "PK__contacts__3213E83F8A1DD906") @default(dbgenerated("newid()"), map: "DF__contacts__id__75A278F5") @db.UniqueIdentifier
+  customer_id String    @db.UniqueIdentifier
+  full_name   String    @db.NVarChar(100)
+  email       String?   @db.NVarChar(255)
+  phone       String?   @db.NVarChar(20)
+  position    String?   @db.NVarChar(100)
+  customers   customers @relation(fields: [customer_id], references: [id], onUpdate: NoAction, map: "FK__contacts__custom__76969D2E")
+}
+
+model contracts {
+  id                       String                     @id(map: "PK__contract__3213E83FE3E41EAB") @default(dbgenerated("newid()"), map: "DF__contracts__id__7A672E12") @db.UniqueIdentifier
+  customer_id              String                     @db.UniqueIdentifier
+  contract_number          String?                    @unique(map: "UQ__contract__1CA37CCEA677F36B") @db.NVarChar(50)
+  sign_date                DateTime?                  @db.Date
+  start_date               DateTime?                  @db.Date
+  end_date                 DateTime?                  @db.Date
+  total_value              Decimal?                   @db.Decimal(18, 2)
+  created_at               DateTime                   @default(now(), map: "DF__contracts__creat__7C4F7684")
+  updated_at               DateTime                   @default(now(), map: "DF__contracts__updat__7D439ABD")
+  certification_projects   certification_projects[]
+  certification_agreements certification_agreements[]
+  customers                customers                  @relation(fields: [customer_id], references: [id], onUpdate: NoAction, map: "FK__contracts__custo__7B5B524B")
+}
+
+model certification_agreements {
+  id               String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  customer_id      String   @db.UniqueIdentifier
+  contract_id      String?  @db.UniqueIdentifier
+  agreement_number String   @unique @db.NVarChar(50)
+  sign_date        DateTime @db.Date
+  created_at       DateTime @default(now())
+
+  customers              customers                @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts              contracts?               @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  certification_projects certification_projects[]
+
+  @@index([customer_id])
+  @@index([contract_id])
+}
+
+model customers {
+  id                         String                       @id(map: "PK__customer__3213E83F9D8A955A") @default(dbgenerated("newid()"), map: "DF__customers__id__6EF57B66") @db.UniqueIdentifier
+  customer_code              String                       @unique(map: "UQ__customer__6A9E4CB7960D22F9") @db.NVarChar(20)
+  company_name               String                       @db.NVarChar(255)
+  tax_code                   String?                      @unique(map: "UQ__customer__13E39CF6CBF8D193") @db.NVarChar(20)
+  address                    String?                      @db.NVarChar(Max)
+  phone                      String?                      @db.NVarChar(20)
+  email                      String?                      @db.NVarChar(255)
+  status                     String?                      @default("active", map: "DF__customers__statu__6FE99F9F") @db.NVarChar(20)
+  created_at                 DateTime                     @default(now(), map: "DF__customers__creat__71D1E811")
+  updated_at                 DateTime                     @default(now(), map: "DF__customers__updat__72C60C4A") @updatedAt
+  contacts                   contacts[]
+  contracts                  contracts[]
+  certification_applications certification_applications[]
+  certification_agreements   certification_agreements[]
+}
+
+model certification_applications {
+  id                   String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  customer_id          String    @db.UniqueIdentifier
+  application_code     String    @unique @db.NVarChar(50)
+  application_date     DateTime  @db.Date
+  certification_type   String?   @db.NVarChar(50)
+  standard_name        String    @db.NVarChar(100)
+  certification_scope  String    @db.NVarChar(Max)
+  site_count           Int       @default(1)
+  employee_count       Int?
+  shift_count          Int?
+  requested_audit_date DateTime? @db.Date
+  status               String    @default("draft") @db.NVarChar(30)
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @default(now()) @updatedAt
+
+  customers customers @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  application_reviews    application_reviews[]
+  certification_projects certification_projects[]
+
+  @@index([customer_id])
+  @@index([status])
+}
+
+model application_reviews {
+  id             String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  application_id String    @db.UniqueIdentifier
+  reviewer_id    String?   @db.UniqueIdentifier
+  review_date    DateTime?
+  result         String    @db.NVarChar(30)
+  comment        String?   @db.NVarChar(Max)
+  created_at     DateTime  @default(now())
+
+  certification_applications certification_applications @relation(fields: [application_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  users users? @relation(fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([application_id])
+  @@index([reviewer_id])
+}
+
+model experts {
+  id                 String                @id(map: "PK__experts__3213E83FBB7B989B") @default(dbgenerated("newid()"), map: "DF__experts__id__08B54D69") @db.UniqueIdentifier
+  full_name          String                @db.NVarChar(100)
+  email              String?               @unique(map: "UQ__experts__AB6E616461F69670") @db.NVarChar(255)
+  phone              String?               @db.NVarChar(20)
+  status             String?               @default("active", map: "DF__experts__status__09A971A2") @db.NVarChar(20)
+  audit_team_members audit_team_members[]
+  competencies       expert_competencies[]
+}
+
+model manday_calculations {
+  id                                String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  project_id                        String    @db.UniqueIdentifier
+  calculation_code                  String    @unique @db.NVarChar(50)
+  version_no                        Int       @default(1)
+  audit_type                        String    @db.NVarChar(30)
+  standard_type                     String    @db.NVarChar(30)
+  effective_personnel               Int
+  total_sites                       Int       @default(1)
+  sampled_sites                     Int       @default(1)
+  complexity_level                  String?   @db.NVarChar(30)
+  base_mandays                      Decimal   @db.Decimal(10, 2)
+  stage1_mandays                    Decimal?  @db.Decimal(10, 2)
+  stage2_mandays                    Decimal?  @db.Decimal(10, 2)
+  onsite_mandays                    Decimal?  @db.Decimal(10, 2)
+  offsite_mandays                   Decimal?  @db.Decimal(10, 2)
+  increase_percent                  Decimal   @default(0) @db.Decimal(5, 2)
+  reduction_percent                 Decimal   @default(0) @db.Decimal(5, 2)
+  ims_integration_percent           Decimal   @default(0) @db.Decimal(5, 2)
+  combined_audit_capability_percent Decimal   @default(0) @db.Decimal(5, 2)
+  ims_reduction_percent             Decimal   @default(0) @db.Decimal(5, 2)
+  final_mandays                     Decimal   @db.Decimal(10, 2)
+  calculation_basis                 String?   @db.NVarChar(Max)
+  status                            String    @default("draft") @db.NVarChar(30)
+  calculated_by                     String?   @db.UniqueIdentifier
+  approved_by                       String?   @db.UniqueIdentifier
+  calculated_at                     DateTime  @default(now())
+  approved_at                       DateTime?
+  created_at                        DateTime  @default(now())
+  updated_at                        DateTime  @default(now()) @updatedAt
+
+  certification_projects certification_projects @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  calculator users? @relation("MandayCalculatedBy", fields: [calculated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  approver users? @relation("MandayApprovedBy", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  adjustments manday_adjustments[]
+
+  @@unique([project_id, version_no])
+  @@index([project_id])
+  @@index([status])
+  @@index([calculated_by])
+  @@index([approved_by])
+}
+
+model manday_adjustments {
+  id              String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  calculation_id  String   @db.UniqueIdentifier
+  adjustment_type String   @db.NVarChar(30)
+  factor_code     String   @db.NVarChar(50)
+  percentage      Decimal  @db.Decimal(5, 2)
+  reason          String   @db.NVarChar(Max)
+  created_at      DateTime @default(now())
+
+  manday_calculations manday_calculations @relation(fields: [calculation_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([calculation_id])
+  @@index([adjustment_type])
+}
+
+model permissions {
+  id               String             @id(map: "PK__permissi__3213E83FC52946FB") @default(dbgenerated("newid()"), map: "DF__permissions__id__628FA481") @db.UniqueIdentifier
+  permission_name  String             @unique(map: "UQ__permissi__81C0F5A2F5DBCA85") @db.NVarChar(100)
+  role_permissions role_permissions[]
+}
+
+model audit_programs {
+  id                     String  @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  project_id             String  @db.UniqueIdentifier
+  copied_from_program_id String? @db.UniqueIdentifier
+
+  program_code String @unique @db.NVarChar(50)
+  program_year Int    @default(dbgenerated("datepart(year,getdate())"))
+  version_no   Int    @default(1)
+
+  customer_code     String? @db.NVarChar(50)
+  organization_name String  @map("organization_name_vi") @db.NVarChar(255)
+  address           String? @map("address_vi") @db.NVarChar(Max)
+
+  standard_name       String @map("certification_criteria") @db.NVarChar(100)
+  certification_scope String @db.NVarChar(Max)
+  effective_personnel Int?
+  certification_type  String @db.NVarChar(50)
+  cycle_number        Int    @default(1)
+
+  status String @default("draft") @db.NVarChar(30)
+
+  /// Chuỗi JSON chứa thông tin liên hệ, ca làm việc, địa điểm,
+  /// yếu tố thay đổi và các nội dung linh hoạt của biểu mẫu.
+  form_data String? @db.NVarChar(Max)
+
+  prepared_by String?  @db.UniqueIdentifier
+  prepared_at DateTime @default(now())
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now()) @updatedAt
+
+  certification_projects certification_projects @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  preparer users? @relation("AuditProgramPreparedBy", fields: [prepared_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  copied_from     audit_programs?  @relation("AuditProgramCopy", fields: [copied_from_program_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  copied_programs audit_programs[] @relation("AuditProgramCopy")
+
+  events audit_program_events[]
+
+  @@unique([project_id, program_year, version_no])
+  @@index([project_id])
+  @@index([program_year])
+  @@index([status])
+  @@index([prepared_by])
+  @@index([copied_from_program_id])
+}
+
+model audit_program_events {
+  id          String @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  program_id  String @db.UniqueIdentifier
+  sequence_no Int
+  event_type  String @db.NVarChar(30)
+
+  planned_start_date DateTime? @db.Date
+  planned_end_date   DateTime? @db.Date
+  actual_start_date  DateTime? @db.Date
+  actual_end_date    DateTime? @db.Date
+
+  planned_mandays Decimal? @db.Decimal(10, 2)
+  actual_mandays  Decimal? @db.Decimal(10, 2)
+
+  status String @default("planned") @db.NVarChar(30)
+
+  /// Chuỗi JSON chứa đoàn đánh giá, nội dung đánh giá,
+  /// phát hiện, hành động khắc phục và ghi chú khác.
+  form_data String? @db.NVarChar(Max)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  audit_programs audit_programs @relation(fields: [program_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  audit_plans    audit_plans[]
+
+  @@unique([program_id, sequence_no])
+  @@index([program_id])
+  @@index([event_type])
+  @@index([status])
+  @@index([planned_start_date])
+}
+
+model reports {
+  id            String  @id(map: "PK__reports__3213E83FCE3D7FB9") @default(dbgenerated("newid()"), map: "DF__reports__id__114A936A") @db.UniqueIdentifier
+  audit_plan_id String  @db.UniqueIdentifier
+  report_code   String? @unique @db.NVarChar(50)
+  version_no    Int     @default(1)
+
+  report_date      DateTime? @db.Date
+  audit_start_date DateTime? @db.Date
+  audit_end_date   DateTime? @db.Date
+
+  audit_result String? @db.NVarChar(30)
+  conclusion   String? @db.NVarChar(Max)
+  status       String  @default("draft") @db.NVarChar(30)
+
+  /// Chuỗi JSON chứa nội dung biểu báo cáo, bằng chứng,
+  /// phát hiện, điểm không phù hợp, OFI và ghi chú.
+  form_data String? @map("content") @db.NVarChar(Max)
+
+  prepared_by String?  @db.UniqueIdentifier
+  prepared_at DateTime @default(now())
+  created_at  DateTime @default(now(), map: "DF__reports__created__1332DBDC")
+  updated_at  DateTime @default(now(), map: "DF__reports__updated__14270015") @updatedAt
+
+  audit_plans       audit_plans         @relation(fields: [audit_plan_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK__reports__audit_p__123EB7A3")
+  preparer          users?              @relation("AuditReportPreparedBy", fields: [prepared_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  technical_reviews technical_reviews[]
+  audit_findings    audit_findings[]
+
+  @@unique([audit_plan_id, version_no])
+  @@index([audit_plan_id])
+  @@index([status])
+  @@index([report_date])
+  @@index([prepared_by])
+}
+
+model audit_findings {
+  id        String @id @default(uuid()) @db.UniqueIdentifier
+  report_id String @db.UniqueIdentifier
+
+  finding_code String @unique @db.NVarChar(50)
+  finding_type String @db.NVarChar(30)
+
+  clause             String? @db.NVarChar(100)
+  requirement        String? @db.NVarChar(Max)
+  description        String  @db.NVarChar(Max)
+  objective_evidence String  @db.NVarChar(Max)
+
+  detected_date DateTime  @db.Date
+  due_date      DateTime? @db.Date
+
+  status String @default("open") @db.NVarChar(30)
+
+  created_by String? @db.UniqueIdentifier
+
+  closed_by     String?   @db.UniqueIdentifier
+  closed_at     DateTime? @db.DateTime2
+  close_comment String?   @db.NVarChar(Max)
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  reports            reports              @relation(fields: [report_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  corrective_actions corrective_actions[]
+
+  @@index([report_id])
+  @@index([finding_type])
+  @@index([status])
+  @@index([due_date])
+}
+
+model corrective_actions {
+  id         String @id @default(uuid()) @db.UniqueIdentifier
+  finding_id String @db.UniqueIdentifier
+  version_no Int
+
+  root_cause             String @db.NVarChar(Max)
+  correction             String @db.NVarChar(Max)
+  corrective_action_plan String @db.NVarChar(Max)
+
+  responsible_person String?   @db.NVarChar(255)
+  target_date        DateTime? @db.Date
+
+  status String @default("submitted") @db.NVarChar(30)
+
+  submitted_by String?  @db.UniqueIdentifier
+  submitted_at DateTime @default(now()) @db.DateTime2
+
+  reviewed_by    String?   @db.UniqueIdentifier
+  reviewed_at    DateTime? @db.DateTime2
+  review_comment String?   @db.NVarChar(Max)
+
+  form_data String? @map("content") @db.NVarChar(Max)
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  audit_findings audit_findings @relation(fields: [finding_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([finding_id, version_no])
+  @@index([finding_id])
+  @@index([status])
+}
+
+model role_permissions {
+  role_id       String      @db.UniqueIdentifier
+  permission_id String      @db.UniqueIdentifier
+  permissions   permissions @relation(fields: [permission_id], references: [id], onUpdate: NoAction, map: "FK__role_perm__permi__66603565")
+  roles         roles       @relation(fields: [role_id], references: [id], onUpdate: NoAction, map: "FK__role_perm__role___656C112C")
+
+  @@id([role_id, permission_id], map: "PK__role_per__C85A5463C37A4B61")
+}
+
+model roles {
+  id               String             @id(map: "PK__roles__3213E83F59BF27F7") @default(dbgenerated("newid()"), map: "DF__roles__id__5EBF139D") @db.UniqueIdentifier
+  role_name        String             @unique(map: "UQ__roles__783254B1DC60BF76") @db.NVarChar(50)
+  description      String?            @db.NVarChar(255)
+  role_permissions role_permissions[]
+  user_roles       user_roles[]
+}
+
+model sysdiagrams {
+  name         String @db.NVarChar(128)
+  principal_id Int
+  diagram_id   Int    @id(map: "PK__sysdiagr__C2B05B61FBAB7930") @default(autoincrement())
+  version      Int?
+  definition   Bytes?
+
+  @@unique([principal_id, name], map: "UK_principal_name")
+}
+
+model technical_reviews {
+  id          String @id @default(uuid()) @db.UniqueIdentifier
+  report_id   String @db.UniqueIdentifier
+  reviewer_id String @db.UniqueIdentifier
+
+  status          String  @default("pending") @db.NVarChar(50)
+  general_comment String? @db.NVarChar(Max)
+
+  form_data String? @map("content") @db.NVarChar(Max)
+
+  completed_at DateTime? @db.DateTime2
+  created_at   DateTime  @default(now()) @db.DateTime2
+  updated_at   DateTime  @updatedAt @db.DateTime2
+
+  reports reports @relation(fields: [report_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  reviewer                  users                       @relation("TechnicalReviewReviewer", fields: [reviewer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  certificates              certificates?
+  certification_decision    certification_decisions?
+  audit_result_notification audit_result_notifications?
+
+  @@index([report_id])
+  @@index([reviewer_id])
+}
+
+model certification_decisions {
+  id                  String @id @default(uuid()) @db.UniqueIdentifier
+  technical_review_id String @unique @db.UniqueIdentifier
+
+  decision_number String   @unique @db.NVarChar(50)
+  decision_date   DateTime @db.Date
+  decision_result String   @db.NVarChar(30)
+
+  organization_name    String  @db.NVarChar(255)
+  organization_address String? @db.NVarChar(Max)
+
+  management_system   String? @db.NVarChar(100)
+  standard_name       String  @db.NVarChar(100)
+  certification_scope String  @db.NVarChar(Max)
+
+  effective_date DateTime? @db.Date
+  expiry_date    DateTime? @db.Date
+
+  surveillance_interval_months Int @default(12)
+
+  signatory_name  String @db.NVarChar(150)
+  signatory_title String @db.NVarChar(150)
+
+  status String  @default("issued") @db.NVarChar(30)
+  note   String? @db.NVarChar(Max)
+
+  /// Nội dung thay đổi theo từng tổ chức:
+  /// căn cứ pháp lý, điều khoản song ngữ, nơi nhận và nội dung bổ sung.
+  form_data String? @map("content") @db.NVarChar(Max)
+
+  created_by String?  @db.UniqueIdentifier
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  technical_reviews         technical_reviews           @relation(fields: [technical_review_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  audit_result_notification audit_result_notifications?
+
+  @@index([decision_date])
+  @@index([decision_result])
+  @@index([status])
+}
+
+model audit_result_notifications {
+  id                        String  @id @default(uuid()) @db.UniqueIdentifier
+  technical_review_id       String  @unique @db.UniqueIdentifier
+  certification_decision_id String? @unique @db.UniqueIdentifier
+
+  notification_number String   @unique @db.NVarChar(50)
+  notification_date   DateTime @db.Date
+
+  audit_type String @db.NVarChar(30)
+
+  audit_start_date DateTime? @db.Date
+  audit_end_date   DateTime? @db.Date
+
+  notification_result       String  @db.NVarChar(50)
+  has_certification_changes Boolean @default(false)
+
+  organization_name    String  @db.NVarChar(255)
+  organization_address String? @db.NVarChar(Max)
+
+  recipient_name  String? @db.NVarChar(255)
+  recipient_email String? @db.NVarChar(255)
+
+  management_system   String? @db.NVarChar(100)
+  standard_name       String  @db.NVarChar(100)
+  certification_scope String  @db.NVarChar(Max)
+
+  next_audit_due_date DateTime? @db.Date
+
+  signatory_name  String @db.NVarChar(150)
+  signatory_title String @db.NVarChar(150)
+
+  status  String    @default("issued") @db.NVarChar(30)
+  sent_at DateTime? @db.DateTime2
+
+  note      String? @db.NVarChar(Max)
+  form_data String? @map("content") @db.NVarChar(Max)
+
+  created_by String?  @db.UniqueIdentifier
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  technical_reviews technical_reviews @relation(fields: [technical_review_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  certification_decisions certification_decisions? @relation(fields: [certification_decision_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([notification_date])
+  @@index([notification_result])
+  @@index([audit_type])
+  @@index([status])
+}
+
+model user_roles {
+  user_id String @db.UniqueIdentifier
+  role_id String @db.UniqueIdentifier
+  roles   roles  @relation(fields: [role_id], references: [id], onUpdate: NoAction, map: "FK__user_role__role___6A30C649")
+  users   users  @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "FK__user_role__user___693CA210")
+
+  @@id([user_id, role_id], map: "PK__user_rol__6EDEA153197A151C")
+}
+
+model user_sessions {
+  id                 String   @id(map: "PK__user_ses__3213E83F73F3D137") @default(dbgenerated("newid()"), map: "DF__user_session__id__534D60F1") @db.UniqueIdentifier
+  user_id            String   @db.UniqueIdentifier
+  refresh_token_hash String   @db.NVarChar(255)
+  expires_at         DateTime
+  revoked            Boolean? @default(false, map: "DF__user_sess__revok__5535A963")
+  created_at         DateTime @default(now(), map: "DF__user_sess__creat__5629CD9C")
+  users              users    @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "FK__user_sess__user___5441852A")
+
+  @@index([user_id], map: "IX_user_sessions_user")
+}
+
+model users {
+  id                               String                         @id(map: "PK__users__3213E83F8D4CA29E") @default(dbgenerated("newid()"), map: "DF__users__id__4CA06362") @db.UniqueIdentifier
+  username                         String                         @unique(map: "UQ__users__F3DBC5724174C9D2") @db.NVarChar(50)
+  email                            String                         @unique(map: "UQ__users__AB6E6164C6D53E65") @db.NVarChar(255)
+  password_hash                    String                         @db.NVarChar(255)
+  full_name                        String?                        @db.NVarChar(100)
+  status                           String?                        @default("active", map: "DF__users__status__4D94879B") @db.NVarChar(20)
+  failed_login_count               Int?                           @default(0, map: "DF__users__failed_lo__4F7CD00D")
+  locked_until                     DateTime?
+  created_at                       DateTime                       @default(now(), map: "DF__users__created_a__5070F446")
+  audit_logs                       audit_logs[]
+  user_roles                       user_roles[]
+  user_sessions                    user_sessions[]
+  workflow_approvals               workflow_approvals[]
+  application_reviews              application_reviews[]
+  manday_calculations_calculated   manday_calculations[]          @relation("MandayCalculatedBy")
+  manday_calculations_approved     manday_calculations[]          @relation("MandayApprovedBy")
+  audit_programs_prepared          audit_programs[]               @relation("AuditProgramPreparedBy")
+  audit_reports_prepared           reports[]                      @relation("AuditReportPreparedBy")
+  technical_reviews_reviewed       technical_reviews[]            @relation("TechnicalReviewReviewer")
+  certificate_status_histories     certificate_status_histories[] @relation("CertificateStatusChangedBy")
+  notifications                    notifications[]
+  audit_team_appointments_prepared audit_team_appointments[]      @relation("AuditTeamAppointmentPreparedBy")
+  audit_team_appointments_approved audit_team_appointments[]      @relation("AuditTeamAppointmentApprovedBy")
+  expert_competencies_approved     expert_competencies[]          @relation("ExpertCompetencyApprovedBy")
+  industry_code_mappings_approved  industry_code_mappings[]       @relation("IndustryCodeMappingApprovedBy")
+  nace_iaf_mappings_approved       nace_iaf_mappings[]            @relation("NaceIafMappingApprovedBy")
+  project_scopes_selected          certification_project_scopes[] @relation("ProjectScopeSelectedBy")
+  project_scopes_approved          certification_project_scopes[] @relation("ProjectScopeApprovedBy")
+}
+
+model notifications {
+  id                String    @id @default(uuid()) @db.UniqueIdentifier
+  user_id           String    @db.UniqueIdentifier
+  source_key        String    @unique @db.NVarChar(255)
+  notification_type String    @db.NVarChar(50)
+  title             String    @db.NVarChar(255)
+  message           String    @db.NVarChar(Max)
+  severity          String    @default("info") @db.NVarChar(20)
+  entity_type       String?   @db.NVarChar(50)
+  entity_id         String?   @db.UniqueIdentifier
+  due_date          DateTime? @db.DateTime2
+  status            String    @default("unread") @db.NVarChar(20)
+  read_at           DateTime? @db.DateTime2
+  created_at        DateTime  @default(now()) @db.DateTime2
+  updated_at        DateTime  @default(now()) @updatedAt @db.DateTime2
+
+  users users @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([severity])
+  @@index([due_date])
+  @@index([entity_type, entity_id])
+}
+
+model workflow_approvals {
+  id          String    @id(map: "PK__workflow__3213E83FF3AD032C") @default(dbgenerated("newid()"), map: "DF__workflow_app__id__2739D489") @db.UniqueIdentifier
+  entity_type String    @db.NVarChar(50)
+  entity_id   String    @db.UniqueIdentifier
+  step_no     Int
+  approver_id String    @db.UniqueIdentifier
+  status      String?   @default("pending", map: "DF__workflow___statu__29221CFB") @db.NVarChar(20)
+  approved_at DateTime?
+  comment     String?   @db.NVarChar(Max)
+  users       users     @relation(fields: [approver_id], references: [id], onUpdate: NoAction, map: "FK__workflow___appro__282DF8C2")
+}
+
+model DocumentFile {
+  id String @id @default(uuid()) @db.UniqueIdentifier
+
+  entity_type   String @db.NVarChar(100)
+  entity_id     String @db.UniqueIdentifier
+  document_type String @db.NVarChar(100)
+
+  file_kind String @db.NVarChar(50)
+
+  original_name String @db.NVarChar(255)
+  stored_name   String @db.NVarChar(255)
+  file_url      String @db.NVarChar(1000)
+
+  mime_type String @db.NVarChar(150)
+  file_size Int
+
+  version_no Int     @default(1)
+  is_current Boolean @default(true)
+
+  note        String? @db.NVarChar(1000)
+  uploaded_by String? @db.UniqueIdentifier
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([entity_type, entity_id, document_type, file_kind, version_no], map: "UQ_document_files_version")
+  @@index([entity_type, entity_id], map: "IX_document_files_entity")
+  @@index([document_type, file_kind, is_current], map: "IX_document_files_current")
+  @@map("document_files")
+}
+
+model audit_team_appointments {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  audit_plan_id      String   @unique @db.UniqueIdentifier
+  appointment_number String   @unique @db.NVarChar(50)
+  appointment_date   DateTime @db.Date
+  status             String   @default("draft") @db.NVarChar(30)
+  note               String?  @db.NVarChar(Max)
+
+  prepared_by String    @db.UniqueIdentifier
+  approved_by String?   @db.UniqueIdentifier
+  approved_at DateTime? @db.DateTime2
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  audit_plans audit_plans @relation(fields: [audit_plan_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  prepared_by_user users @relation("AuditTeamAppointmentPreparedBy", fields: [prepared_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  approved_by_user users? @relation("AuditTeamAppointmentApprovedBy", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  members audit_team_members[]
+
+  @@index([appointment_date])
+  @@index([status])
+  @@index([prepared_by])
+  @@index([approved_by])
+}
+
+model audit_team_members {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  appointment_id String @db.UniqueIdentifier
+  expert_id      String @db.UniqueIdentifier
+
+  team_role String @db.NVarChar(40)
+
+  planned_start_date DateTime @db.Date
+  planned_end_date   DateTime @db.Date
+  planned_mandays    Decimal? @db.Decimal(10, 2)
+
+  actual_start_date DateTime? @db.Date
+  actual_end_date   DateTime? @db.Date
+  actual_mandays    Decimal?  @db.Decimal(10, 2)
+
+  assignment_status String @default("assigned") @db.NVarChar(30)
+
+  competency_status String  @default("not_checked") @db.NVarChar(30)
+  competency_note   String? @db.NVarChar(Max)
+
+  confirmed_at DateTime? @db.DateTime2
+  created_at   DateTime  @default(now()) @db.DateTime2
+  updated_at   DateTime  @default(now()) @updatedAt @db.DateTime2
+
+  audit_team_appointments audit_team_appointments @relation(fields: [appointment_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  experts experts @relation(fields: [expert_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  scopes audit_team_member_scopes[]
+
+  @@unique([appointment_id, expert_id])
+  @@index([expert_id])
+  @@index([planned_start_date, planned_end_date])
+  @@index([assignment_status])
+  @@index([team_role])
+}
+
+model audit_team_member_scopes {
+  id        String @id @default(uuid()) @db.UniqueIdentifier
+  member_id String @db.UniqueIdentifier
+
+  iaf_code  String? @db.NVarChar(20)
+  nace_code String? @db.NVarChar(30)
+
+  activity_description String?  @db.NVarChar(Max)
+  coverage_type        String   @default("full") @db.NVarChar(40)
+  planned_mandays      Decimal? @db.Decimal(10, 2)
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  audit_team_members audit_team_members            @relation(fields: [member_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  project_scope_id   String?                       @db.UniqueIdentifier
+  project_scope      certification_project_scopes? @relation(fields: [project_scope_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([member_id])
+  @@index([iaf_code])
+  @@index([nace_code])
+  @@index([project_scope_id])
+}
+
+model expert_competencies {
+  id        String @id @default(uuid()) @db.UniqueIdentifier
+  expert_id String @db.UniqueIdentifier
+
+  management_system String @db.NVarChar(30)
+  standard_code     String @db.NVarChar(100)
+  competency_role   String @db.NVarChar(50)
+
+  scope_level   String  @default("IAF") @db.NVarChar(20)
+  iaf_code      String  @db.NVarChar(20)
+  nace_revision String? @db.NVarChar(30)
+  nace_code     String? @db.NVarChar(30)
+
+  competency_level String @default("QUALIFIED") @db.NVarChar(30)
+  approval_status  String @default("DRAFT") @db.NVarChar(30)
+
+  effective_date DateTime  @db.Date
+  expiry_date    DateTime? @db.Date
+
+  restriction      String? @db.NVarChar(Max)
+  approval_basis   String? @db.NVarChar(Max)
+  evidence_summary String? @db.NVarChar(Max)
+  notes            String? @db.NVarChar(Max)
+
+  approved_by String?   @db.UniqueIdentifier
+  approved_at DateTime? @db.DateTime2
+
+  suspended_at      DateTime? @db.DateTime2
+  suspension_reason String?   @db.NVarChar(Max)
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  experts experts @relation(fields: [expert_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  approved_by_user users? @relation("ExpertCompetencyApprovedBy", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([expert_id, management_system, standard_code, competency_role, iaf_code, nace_code])
+  @@index([expert_id])
+  @@index([management_system])
+  @@index([standard_code])
+  @@index([competency_role])
+  @@index([iaf_code])
+  @@index([nace_code])
+  @@index([approval_status])
+  @@index([expiry_date])
+}
+
+model industry_classifications {
+  id                  String  @id @default(uuid()) @db.UniqueIdentifier
+  classification_type String  @db.NVarChar(20)
+  revision            String  @db.NVarChar(30)
+  code                String  @db.NVarChar(30)
+  title_en            String  @db.NVarChar(500)
+  title_vi            String? @db.NVarChar(500)
+  parent_code         String? @db.NVarChar(30)
+  level               Int
+
+  valid_from DateTime? @db.Date
+  valid_to   DateTime? @db.Date
+  is_active  Boolean   @default(true)
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  source_mappings industry_code_mappings[] @relation("IndustryMappingSource")
+  target_mappings industry_code_mappings[] @relation("IndustryMappingTarget")
+
+  nace_iaf_mappings nace_iaf_mappings[]
+
+  @@unique([classification_type, revision, code])
+  @@index([classification_type])
+  @@index([revision])
+  @@index([code])
+  @@index([parent_code])
+  @@index([is_active])
+}
+
+model industry_code_mappings {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  source_code_id String @db.UniqueIdentifier
+  target_code_id String @db.UniqueIdentifier
+
+  mapping_type   String  @db.NVarChar(30)
+  mapping_status String  @default("DRAFT") @db.NVarChar(30)
+  note           String? @db.NVarChar(Max)
+
+  valid_from DateTime? @db.Date
+  valid_to   DateTime? @db.Date
+
+  approved_by String?   @db.UniqueIdentifier
+  approved_at DateTime? @db.DateTime2
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  project_scopes certification_project_scopes[] @relation("ProjectScopeIsicNaceMapping")
+
+  source_code industry_classifications @relation("IndustryMappingSource", fields: [source_code_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  target_code industry_classifications @relation("IndustryMappingTarget", fields: [target_code_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  approved_by_user users? @relation("IndustryCodeMappingApprovedBy", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([source_code_id, target_code_id])
+  @@index([source_code_id])
+  @@index([target_code_id])
+  @@index([mapping_status])
+}
+
+model iaf_scopes {
+  id          String  @id @default(uuid()) @db.UniqueIdentifier
+  iaf_code    String  @unique @db.NVarChar(20)
+  iaf_name    String  @db.NVarChar(500)
+  description String? @db.NVarChar(Max)
+  is_active   Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  nace_iaf_mappings nace_iaf_mappings[]
+
+  @@index([is_active])
+}
+
+model nace_iaf_mappings {
+  id           String @id @default(uuid()) @db.UniqueIdentifier
+  nace_code_id String @db.UniqueIdentifier
+  iaf_scope_id String @db.UniqueIdentifier
+
+  management_system String @db.NVarChar(30)
+  mapping_status    String @default("DRAFT") @db.NVarChar(30)
+
+  source_document String? @db.NVarChar(500)
+  note            String? @db.NVarChar(Max)
+
+  valid_from DateTime? @db.Date
+  valid_to   DateTime? @db.Date
+
+  approved_by String?   @db.UniqueIdentifier
+  approved_at DateTime? @db.DateTime2
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  nace_code industry_classifications @relation(fields: [nace_code_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  iaf_scope iaf_scopes @relation(fields: [iaf_scope_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  approved_by_user users?                         @relation("NaceIafMappingApprovedBy", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  project_scopes   certification_project_scopes[] @relation("ProjectScopeNaceIafMapping")
+
+  @@unique([nace_code_id, iaf_scope_id, management_system])
+  @@index([nace_code_id])
+  @@index([iaf_scope_id])
+  @@index([management_system])
+  @@index([mapping_status])
+}
+
+model certification_project_scopes {
+  id         String @id @default(uuid()) @db.UniqueIdentifier
+  project_id String @db.UniqueIdentifier
+
+  isic_nace_mapping_id String @db.UniqueIdentifier
+  nace_iaf_mapping_id  String @db.UniqueIdentifier
+
+  management_system String @db.NVarChar(30)
+  standard_code     String @db.NVarChar(100)
+  scope_description String @db.NVarChar(Max)
+
+  status String  @default("DRAFT") @db.NVarChar(30)
+  notes  String? @db.NVarChar(Max)
+
+  selected_by String   @db.UniqueIdentifier
+  selected_at DateTime @default(now()) @db.DateTime2
+
+  approved_by String?   @db.UniqueIdentifier
+  approved_at DateTime? @db.DateTime2
+
+  created_at DateTime @default(now()) @db.DateTime2
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime2
+
+  project certification_projects @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  isic_nace_mapping industry_code_mappings @relation("ProjectScopeIsicNaceMapping", fields: [isic_nace_mapping_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  nace_iaf_mapping nace_iaf_mappings @relation("ProjectScopeNaceIafMapping", fields: [nace_iaf_mapping_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  selected_by_user users @relation("ProjectScopeSelectedBy", fields: [selected_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  approved_by_user         users?                     @relation("ProjectScopeApprovedBy", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  audit_team_member_scopes audit_team_member_scopes[]
+
+  @@unique([project_id, isic_nace_mapping_id, nace_iaf_mapping_id])
+  @@index([project_id])
+  @@index([isic_nace_mapping_id])
+  @@index([nace_iaf_mapping_id])
+  @@index([management_system])
+  @@index([standard_code])
+  @@index([status])
+  @@index([selected_by])
+  @@index([approved_by])
+}
