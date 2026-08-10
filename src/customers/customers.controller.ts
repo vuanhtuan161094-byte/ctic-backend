@@ -4,8 +4,12 @@ import {
     Delete,
     Get,
     Param,
+    ParseUUIDPipe,
     Patch,
     Post,
+    Put,
+    Req,
+    UnauthorizedException,
     UseGuards,
 } from '@nestjs/common';
 import {
@@ -26,6 +30,8 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { getActorUserId } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -44,6 +50,21 @@ export class CustomersController {
         private readonly customersService:
             CustomersService,
     ) { }
+
+    private actorUserId(
+        request: SecurityRequest,
+    ) {
+        const userId =
+            getActorUserId(request);
+
+        if (!userId) {
+            throw new UnauthorizedException(
+                'Authenticated user id is required',
+            );
+        }
+
+        return userId;
+    }
 
     @Get()
     @Roles(
@@ -67,6 +88,106 @@ export class CustomersController {
     })
     findAll() {
         return this.customersService.findAll();
+    }
+
+    @Get(':id/user-access')
+    @Roles('ADMIN')
+    @Permissions('customers.manage')
+    @ApiOperation({
+        summary: 'List customer user access mappings',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'Customer UUID',
+    })
+    @ApiOkResponse({
+        description: 'Customer user access mappings',
+    })
+    @ApiNotFoundResponse({
+        description: 'Customer not found',
+    })
+    findUserAccess(
+        @Param('id', ParseUUIDPipe)
+        id: string,
+    ) {
+        return this.customersService
+            .findUserAccess(id);
+    }
+
+    @Put(':id/user-access/:userId')
+    @Roles('ADMIN')
+    @Permissions('customers.manage')
+    @ApiOperation({
+        summary: 'Assign or reactivate customer user access',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'Customer UUID',
+    })
+    @ApiParam({
+        name: 'userId',
+        description: 'Target CUSTOMER user UUID',
+    })
+    @ApiOkResponse({
+        description: 'Customer user access is active',
+    })
+    @ApiBadRequestResponse({
+        description: 'Customer or target user is inactive, or target user lacks CUSTOMER role',
+    })
+    @ApiNotFoundResponse({
+        description: 'Customer or target user not found',
+    })
+    assignUserAccess(
+        @Param('id', ParseUUIDPipe)
+        id: string,
+
+        @Param('userId', ParseUUIDPipe)
+        userId: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        return this.customersService
+            .assignUserAccess(
+                id,
+                userId,
+                this.actorUserId(request),
+            );
+    }
+
+    @Delete(':id/user-access/:userId')
+    @Roles('ADMIN')
+    @Permissions('customers.manage')
+    @ApiOperation({
+        summary: 'Revoke customer user access',
+        description: 'Soft-revokes the mapping; no row is physically deleted.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'Customer UUID',
+    })
+    @ApiParam({
+        name: 'userId',
+        description: 'Target CUSTOMER user UUID',
+    })
+    @ApiOkResponse({
+        description: 'Customer user access is revoked',
+    })
+    @ApiNotFoundResponse({
+        description: 'Customer or customer user access mapping not found',
+    })
+    revokeUserAccess(
+        @Param('id', ParseUUIDPipe)
+        id: string,
+
+        @Param('userId', ParseUUIDPipe)
+        userId: string,
+    ) {
+        return this.customersService
+            .revokeUserAccess(
+                id,
+                userId,
+            );
     }
 
     @Get(':id')

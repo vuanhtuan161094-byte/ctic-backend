@@ -3,6 +3,10 @@ import {
     Injectable,
 } from '@nestjs/common';
 
+import type {
+    Prisma,
+} from '@prisma/client';
+
 import {
     PrismaService,
 } from '../prisma/prisma.service';
@@ -19,6 +23,15 @@ export interface ResourceEntityRef {
     entity_type: string;
     entity_id: string;
 }
+
+type CustomerResourceDatabaseClient =
+    Pick<
+        Prisma.TransactionClient,
+        | 'customer_user_access'
+        | 'audit_plans'
+        | 'audit_findings'
+        | 'corrective_actions'
+    >;
 
 const ORGANIZATION_WIDE_ROLES =
     new Set([
@@ -66,6 +79,301 @@ export class ResourceAccessService {
                 role,
             ),
         );
+    }
+
+    private activeCustomerAccessWhere(
+        userId: string,
+        customerId?: string,
+    ): Prisma.customer_user_accessWhereInput {
+        return {
+            user_id:
+                userId,
+
+            ...(customerId
+                ? {
+                    customer_id:
+                        customerId,
+                }
+                : {}),
+
+            status:
+                'active',
+
+            customer: {
+                is: {
+                    status:
+                        'active',
+                },
+            },
+        };
+    }
+
+    private customerAccessDenied(): never {
+        throw new ForbiddenException(
+            'Báº¡n khÃ´ng cÃ³ quyá»n truy cáº­p dá»¯ liá»‡u cá»§a khÃ¡ch hÃ ng nÃ y',
+        );
+    }
+
+    async getAccessibleCustomerIds(
+        actor: ResourceActor,
+        database:
+            CustomerResourceDatabaseClient =
+            this.prisma,
+    ): Promise<Set<string>> {
+        const userId =
+            actor.userId?.trim();
+
+        const isCustomer =
+            normalizeRoles(
+                actor.roles,
+            ).includes(
+                'CUSTOMER',
+            );
+
+        if (
+            !userId ||
+            !isCustomer
+        ) {
+            return new Set();
+        }
+
+        const mappings =
+            await database.customer_user_access.findMany({
+                where:
+                    this.activeCustomerAccessWhere(
+                        userId,
+                    ),
+
+                select: {
+                    customer_id:
+                        true,
+                },
+            });
+
+        return new Set(
+            mappings.map(
+                (mapping) =>
+                    mapping.customer_id,
+            ),
+        );
+    }
+
+    async assertCustomerAccess(
+        customerId: string,
+        actor: ResourceActor,
+        database:
+            CustomerResourceDatabaseClient =
+            this.prisma,
+    ) {
+        const userId =
+            actor.userId?.trim();
+
+        const isCustomer =
+            normalizeRoles(
+                actor.roles,
+            ).includes(
+                'CUSTOMER',
+            );
+
+        if (
+            !userId ||
+            !isCustomer
+        ) {
+            this.customerAccessDenied();
+        }
+
+        const mapping =
+            await database.customer_user_access.findFirst({
+                where:
+                    this.activeCustomerAccessWhere(
+                        userId,
+                        customerId,
+                    ),
+
+                select: {
+                    id:
+                        true,
+                },
+            });
+
+        if (!mapping) {
+            this.customerAccessDenied();
+        }
+
+        return customerId;
+    }
+
+    async resolveCustomerIdForEntity(
+        ref: ResourceEntityRef,
+        database:
+            CustomerResourceDatabaseClient =
+            this.prisma,
+    ): Promise<string | null> {
+        const entityType =
+            this.normalizeEntityType(
+                ref.entity_type,
+            );
+
+        if (
+            [
+                'audit_plan',
+                'audit_plans',
+            ].includes(
+                entityType,
+            )
+        ) {
+            const plan =
+                await database.audit_plans.findUnique({
+                    where: {
+                        id:
+                            ref.entity_id,
+                    },
+
+                    select: {
+                        certification_projects: {
+                            select: {
+                                certification_applications: {
+                                    select: {
+                                        customer_id:
+                                            true,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                });
+
+            return plan
+                ?.certification_projects
+                .certification_applications
+                .customer_id ??
+                null;
+        }
+
+        if (
+            [
+                'audit_finding',
+                'audit_findings',
+            ].includes(
+                entityType,
+            )
+        ) {
+            const finding =
+                await database.audit_findings.findUnique({
+                    where: {
+                        id:
+                            ref.entity_id,
+                    },
+
+                    select: {
+                        reports: {
+                            select: {
+                                audit_plans: {
+                                    select: {
+                                        certification_projects: {
+                                            select: {
+                                                certification_applications: {
+                                                    select: {
+                                                        customer_id:
+                                                            true,
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                });
+
+            return finding
+                ?.reports
+                .audit_plans
+                .certification_projects
+                .certification_applications
+                .customer_id ??
+                null;
+        }
+
+        if (
+            [
+                'corrective_action',
+                'corrective_actions',
+            ].includes(
+                entityType,
+            )
+        ) {
+            const action =
+                await database.corrective_actions.findUnique({
+                    where: {
+                        id:
+                            ref.entity_id,
+                    },
+
+                    select: {
+                        audit_findings: {
+                            select: {
+                                reports: {
+                                    select: {
+                                        audit_plans: {
+                                            select: {
+                                                certification_projects: {
+                                                    select: {
+                                                        certification_applications: {
+                                                            select: {
+                                                                customer_id:
+                                                                    true,
+                                                            },
+                                                        },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                });
+
+            return action
+                ?.audit_findings
+                .reports
+                .audit_plans
+                .certification_projects
+                .certification_applications
+                .customer_id ??
+                null;
+        }
+
+        return null;
+    }
+
+    async assertCustomerEntityAccess(
+        ref: ResourceEntityRef,
+        actor: ResourceActor,
+        database:
+            CustomerResourceDatabaseClient =
+            this.prisma,
+    ) {
+        const customerId =
+            await this.resolveCustomerIdForEntity(
+                ref,
+                database,
+            );
+
+        if (!customerId) {
+            this.customerAccessDenied();
+        }
+
+        await this.assertCustomerAccess(
+            customerId,
+            actor,
+            database,
+        );
+
+        return customerId;
     }
 
     async getAccessibleProjectIds(

@@ -181,6 +181,25 @@ model customers {
   contracts                  contracts[]
   certification_applications certification_applications[]
   certification_agreements   certification_agreements[]
+  user_access                 customer_user_access[]
+}
+
+model customer_user_access {
+  id          String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  customer_id String   @db.UniqueIdentifier
+  user_id     String   @db.UniqueIdentifier
+  status      String   @default("active") @db.NVarChar(20)
+  created_by  String?  @db.UniqueIdentifier
+  created_at  DateTime @default(now()) @db.DateTime2
+  updated_at  DateTime @default(now()) @updatedAt @db.DateTime2
+
+  customer customers @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_customer_user_access_customer")
+  user     users     @relation("CustomerUserAccessUser", fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_customer_user_access_user")
+  creator  users?    @relation("CustomerUserAccessCreatedBy", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_customer_user_access_created_by")
+
+  @@unique([customer_id, user_id], map: "UQ_customer_user_access_customer_user")
+  @@index([user_id, status], map: "IX_customer_user_access_user_status")
+  @@index([customer_id, status], map: "IX_customer_user_access_customer_status")
 }
 
 model certification_applications {
@@ -873,6 +892,8 @@ model users {
   project_scopes_approved          certification_project_scopes[] @relation("ProjectScopeApprovedBy")
   expert_profile                   experts?                        @relation("ExpertUserAccount")
   expert_profiles_approved         experts[]                       @relation("ExpertProfileApprovedBy")
+  customer_access                  customer_user_access[]          @relation("CustomerUserAccessUser")
+  customer_access_created          customer_user_access[]          @relation("CustomerUserAccessCreatedBy")
 }
 
 model notifications {
