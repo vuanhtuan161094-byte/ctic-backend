@@ -92,6 +92,21 @@ export class AuditLogsService {
             entity_id:
                 query.entity_id,
 
+            outcome:
+                query.outcome,
+
+            status_code:
+                query.status_code,
+
+            request_id:
+                query.request_id
+                    ?.trim()
+                    ? {
+                        contains:
+                            query.request_id.trim(),
+                    }
+                    : undefined,
+
             created_at:
                 startDate ||
                     endDate
@@ -199,6 +214,18 @@ export class AuditLogsService {
                         user_agent:
                             item.user_agent,
 
+                        request_id:
+                            item.request_id,
+
+                        outcome:
+                            item.outcome,
+
+                        status_code:
+                            item.status_code,
+
+                        duration_ms:
+                            item.duration_ms,
+
                         created_at:
                             item.created_at,
 
@@ -247,6 +274,7 @@ export class AuditLogsService {
             total,
             byAction,
             byEntityType,
+            byOutcome,
             recentItems,
         ] =
             await this.prisma.$transaction([
@@ -281,6 +309,24 @@ export class AuditLogsService {
 
                     orderBy: {
                         entity_type:
+                            'asc',
+                    },
+
+                    _count: {
+                        id:
+                            true,
+                    },
+                }),
+
+                this.prisma.audit_logs.groupBy({
+                    by: [
+                        'outcome',
+                    ],
+
+                    where,
+
+                    orderBy: {
+                        outcome:
                             'asc',
                     },
 
@@ -366,6 +412,26 @@ export class AuditLogsService {
                             left.count,
                     ),
 
+            by_outcome:
+                byOutcome
+                    .map(
+                        (item) => ({
+                            outcome:
+                                item.outcome ??
+                                'legacy',
+
+                            count:
+                                this.getGroupedCount(
+                                    item._count,
+                                ),
+                        }),
+                    )
+                    .sort(
+                        (left, right) =>
+                            right.count -
+                            left.count,
+                    ),
+
             recent_items:
                 recentItems.map(
                     (item) => ({
@@ -380,6 +446,18 @@ export class AuditLogsService {
 
                         entity_id:
                             item.entity_id,
+
+                        request_id:
+                            item.request_id,
+
+                        outcome:
+                            item.outcome,
+
+                        status_code:
+                            item.status_code,
+
+                        duration_ms:
+                            item.duration_ms,
 
                         created_at:
                             item.created_at,

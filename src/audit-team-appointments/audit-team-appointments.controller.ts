@@ -31,10 +31,17 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ResourceAccessService } from '../security/resource-access.service';
+import { getResourceActor } from '../security/security-request';
 
 import { AuditTeamAppointmentsService } from './audit-team-appointments.service';
+import { AuditMandayAllocationService } from './audit-manday-allocation.service';
 import { CreateAuditTeamAppointmentDto } from './dto/create-audit-team-appointment.dto';
 import { UpdateAuditTeamAppointmentDto } from './dto/update-audit-team-appointment.dto';
+import {
+    AutoMandayAllocationDto,
+    ManualMandayAllocationDto,
+} from './dto/manday-allocation.dto';
 
 type AuthenticatedRequest =
     Request & {
@@ -58,6 +65,12 @@ export class AuditTeamAppointmentsController {
     constructor(
         private readonly service:
             AuditTeamAppointmentsService,
+
+        private readonly mandayAllocationService:
+            AuditMandayAllocationService,
+
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
 
     @Post()
@@ -119,21 +132,59 @@ export class AuditTeamAppointmentsController {
     @ApiOkResponse({
         description: 'Danh sách chỉ định đoàn đánh giá',
     })
-    findAll(
+    async findAll(
         @Query('plan_id')
-        planId?: string,
+        planId: string | undefined,
 
         @Query('project_id')
-        projectId?: string,
+        projectId: string | undefined,
 
         @Query('status')
-        status?: string,
+        status: string | undefined,
+
+        @Req()
+        request: AuthenticatedRequest,
     ): Promise<unknown> {
-        return this.service.findAll(
-            planId,
-            projectId,
-            status,
-        );
+        if (projectId) {
+            await this.resourceAccess.assertProjectAccess(
+                projectId,
+                getResourceActor(request),
+            );
+        }
+
+        if (planId) {
+            await this.resourceAccess.assertEntityAccess(
+                { entity_type: 'audit_plan', entity_id: planId },
+                getResourceActor(request),
+            );
+        }
+
+        const appointments =
+            await this.service.findAll(
+                planId,
+                projectId,
+                status,
+            );
+
+        if (planId || projectId) {
+            return appointments;
+        }
+
+        const scoped =
+            await this.resourceAccess.filterEntities(
+                appointments.map((appointment) => ({
+                    ...appointment,
+                    entity_type: 'audit_team_appointment',
+                    entity_id: appointment.id,
+                })),
+                getResourceActor(request),
+            );
+
+        return scoped.map(({
+            entity_type: _entityType,
+            entity_id: _entityId,
+            ...appointment
+        }) => appointment);
     }
 
     @Get('availability')
@@ -195,6 +246,214 @@ export class AuditTeamAppointmentsController {
         );
     }
 
+
+    @Post('project/:projectId/ensure-context')
+    @Roles(
+        'ADMIN',
+        'COORDINATOR',
+    )
+    @Permissions('audit_teams.manage')
+    @ApiOperation({
+        summary: 'Khởi tạo ngữ cảnh chỉ định đoàn theo hồ sơ chứng nhận',
+    })
+    @ApiParam({
+        name: 'projectId',
+        description: 'UUID hồ sơ chứng nhận',
+    })
+    @ApiCreatedResponse({
+        description: 'Đã sẵn sàng ngữ cảnh chỉ định đoàn cho hồ sơ',
+    })
+    ensureProjectContext(
+        @Param(
+            'projectId',
+            ParseUUIDPipe,
+        )
+        projectId: string,
+    ): Promise<unknown> {
+        return this.service.ensureProjectContext(
+            projectId,
+        );
+    }
+
+    @Get('project/:projectId')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('audit_teams.read')
+    @ApiOperation({
+        summary: 'Lấy chỉ định đoàn theo mã hồ sơ chứng nhận',
+    })
+    @ApiParam({
+        name: 'projectId',
+        description: 'UUID hồ sơ chứng nhận',
+    })
+    @ApiOkResponse({
+        description: 'Chỉ định đoàn cấp hồ sơ chứng nhận',
+    })
+    async findByProject(
+        @Param(
+            'projectId',
+            ParseUUIDPipe,
+        )
+        projectId: string,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        await this.resourceAccess.assertProjectAccess(
+            projectId,
+            getResourceActor(request),
+        );
+
+        return this.service.findByProject(
+            projectId,
+        );
+    }
+
+    @Get('project/:projectId/available-scopes')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('audit_teams.read')
+    @ApiOperation({
+        summary: 'Lấy phạm vi IAF/NACE đã duyệt theo hồ sơ chứng nhận',
+    })
+    @ApiParam({
+        name: 'projectId',
+        description: 'UUID hồ sơ chứng nhận',
+    })
+    @ApiOkResponse({
+        description: 'Danh sách phạm vi có thể phân công cho đoàn',
+    })
+    async getAvailableProjectScopesByProject(
+        @Param(
+            'projectId',
+            ParseUUIDPipe,
+        )
+        projectId: string,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        await this.resourceAccess.assertProjectAccess(
+            projectId,
+            getResourceActor(request),
+        );
+
+        return this.service.getAvailableProjectScopesByProject(
+            projectId,
+        );
+    }
+
+    @Get('project/:projectId/expert-suitability')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('audit_teams.read')
+    @ApiOperation({
+        summary: 'Đề xuất chuyên gia phù hợp với tiêu chuẩn và phạm vi hồ sơ',
+    })
+    @ApiParam({
+        name: 'projectId',
+        description: 'UUID hồ sơ chứng nhận',
+    })
+    @ApiOkResponse({
+        description: 'Ma trận chuyên gia và phạm vi có thể đáp ứng',
+    })
+    async getProjectExpertSuitability(
+        @Param(
+            'projectId',
+            ParseUUIDPipe,
+        )
+        projectId: string,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        await this.resourceAccess.assertProjectAccess(
+            projectId,
+            getResourceActor(request),
+        );
+
+        return this.service.getProjectExpertSuitability(
+            projectId,
+        );
+    }
+
+    @Get('expert/:expertId/busy-dates')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('audit_teams.read')
+    @ApiOperation({
+        summary: 'Lấy các ngày chuyên gia đã có lịch đánh giá',
+    })
+    @ApiParam({
+        name: 'expertId',
+        description: 'UUID chuyên gia',
+    })
+    @ApiQuery({
+        name: 'start_date',
+        required: true,
+        example: '2026-01-01',
+    })
+    @ApiQuery({
+        name: 'end_date',
+        required: true,
+        example: '2026-12-31',
+    })
+    @ApiQuery({
+        name: 'exclude_appointment_id',
+        required: false,
+        description: 'Loại trừ chỉ định đang sửa',
+    })
+    @ApiOkResponse({
+        description: 'Danh sách ngày bận và các kế hoạch liên quan',
+    })
+    getBusyDates(
+        @Param(
+            'expertId',
+            ParseUUIDPipe,
+        )
+        expertId: string,
+
+        @Query('start_date')
+        startDate: string,
+
+        @Query('end_date')
+        endDate: string,
+
+        @Query('exclude_appointment_id')
+        excludeAppointmentId?: string,
+    ): Promise<unknown> {
+        return this.service.getBusyDates(
+            expertId,
+            startDate,
+            endDate,
+            excludeAppointmentId,
+        );
+    }
+
     @Get('plan/:planId')
     @Roles(
         'ADMIN',
@@ -216,13 +475,21 @@ export class AuditTeamAppointmentsController {
     @ApiOkResponse({
         description: 'Chỉ định đoàn của kế hoạch',
     })
-    findByPlan(
+    async findByPlan(
         @Param(
             'planId',
             ParseUUIDPipe,
         )
         planId: string,
+
+        @Req()
+        request: AuthenticatedRequest,
     ): Promise<unknown> {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_plan', entity_id: planId },
+            getResourceActor(request),
+        );
+
         return this.service.findByPlan(planId);
     }
 
@@ -246,15 +513,103 @@ export class AuditTeamAppointmentsController {
     @ApiOkResponse({
         description: 'Danh sách phạm vi IAF/NACE của dự án',
     })
-    getAvailableProjectScopes(
+    async getAvailableProjectScopes(
         @Param(
             'planId',
             ParseUUIDPipe,
         )
         planId: string,
+
+        @Req()
+        request: AuthenticatedRequest,
     ): Promise<unknown> {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_plan', entity_id: planId },
+            getResourceActor(request),
+        );
+
         return this.service.getAvailableProjectScopes(
             planId,
+        );
+    }
+
+
+    @Get(':id/manday-allocation')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('audit_teams.read')
+    @ApiOperation({
+        summary: 'Lấy ma trận man-day theo thành viên và chương trình',
+    })
+    async getMandayAllocation(
+        @Param('id', ParseUUIDPipe) id: string,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_team_appointment', entity_id: id },
+            getResourceActor(request),
+        );
+
+        return this.mandayAllocationService.getCurrent(id);
+    }
+
+    @Post(':id/manday-allocation/auto')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_teams.manage')
+    @ApiOperation({
+        summary: 'Tự động phân bổ man-day theo thành viên và chương trình',
+    })
+    autoAllocateMandays(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: AutoMandayAllocationDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.mandayAllocationService.autoAllocate(
+            id,
+            dto,
+            request.user.userId,
+        );
+    }
+
+    @Patch(':id/manday-allocation/manual')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_teams.manage')
+    @ApiOperation({
+        summary: 'Điều chỉnh thủ công ma trận man-day',
+    })
+    manualOverrideMandays(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: ManualMandayAllocationDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.mandayAllocationService.manualOverride(
+            id,
+            dto,
+            request.user.userId,
+        );
+    }
+
+    @Post(':id/manday-allocation/restore-auto')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_teams.manage')
+    @ApiOperation({
+        summary: 'Khôi phục đề xuất tự động gần nhất',
+    })
+    restoreAutoMandays(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.mandayAllocationService.restoreAutoProposal(
+            id,
+            request.user.userId,
         );
     }
 
@@ -282,13 +637,21 @@ export class AuditTeamAppointmentsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy chỉ định đoàn',
     })
-    findOne(
+    async findOne(
         @Param(
             'id',
             ParseUUIDPipe,
         )
         id: string,
+
+        @Req()
+        request: AuthenticatedRequest,
     ): Promise<unknown> {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_team_appointment', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.service.findOne(id);
     }
 
@@ -380,13 +743,21 @@ export class AuditTeamAppointmentsController {
     @ApiOkResponse({
         description: 'Kết quả đối chiếu năng lực và phạm vi',
     })
-    checkCompetency(
+    async checkCompetency(
         @Param(
             'id',
             ParseUUIDPipe,
         )
         id: string,
+
+        @Req()
+        request: AuthenticatedRequest,
     ): Promise<unknown> {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_team_appointment', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.service.checkCompetency(id);
     }
 

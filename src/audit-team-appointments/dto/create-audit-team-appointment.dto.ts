@@ -123,21 +123,23 @@ export class AuditTeamMemberDto {
     ])
     team_role!: string;
 
-    @ApiProperty({
+    @ApiPropertyOptional({
         example: '2028-06-01',
-        description: 'Ngày bắt đầu phân công',
+        description: 'Ngày bắt đầu tham gia đợt đánh giá. Không bắt buộc đối với chỉ định đoàn cấp hồ sơ.',
         format: 'date',
     })
+    @IsOptional()
     @IsDateString()
-    planned_start_date!: string;
+    planned_start_date?: string;
 
-    @ApiProperty({
+    @ApiPropertyOptional({
         example: '2028-06-01',
-        description: 'Ngày kết thúc phân công',
+        description: 'Ngày kết thúc tham gia đợt đánh giá. Không bắt buộc đối với chỉ định đoàn cấp hồ sơ.',
         format: 'date',
     })
+    @IsOptional()
     @IsDateString()
-    planned_end_date!: string;
+    planned_end_date?: string;
 
     @ApiPropertyOptional({
         example: 1,
@@ -147,7 +149,7 @@ export class AuditTeamMemberDto {
     @IsOptional()
     @Type(() => Number)
     @IsNumber({
-        maxDecimalPlaces: 2,
+        maxDecimalPlaces: 1,
     })
     @Min(0)
     planned_mandays?: number;

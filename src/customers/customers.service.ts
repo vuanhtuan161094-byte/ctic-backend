@@ -103,4 +103,24 @@ export class CustomersService {
             },
         });
     }
+
+    // Khôi phục hoạt động trên chính hồ sơ khách hàng cũ
+    async reactivate(id: string) {
+        const customer = await this.findOne(id);
+
+        if (customer.status === 'active') {
+            throw new BadRequestException(
+                'Khách hàng đang hoạt động',
+            );
+        }
+
+        return this.prisma.customers.update({
+            where: {
+                id,
+            },
+            data: {
+                status: 'active',
+            },
+        });
+    }
 }

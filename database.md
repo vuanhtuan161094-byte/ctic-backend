@@ -140,4 +140,4 @@ UserStatus: active | locked | inactive
 - Hiện tại các trường status đang dùng NVARCHAR.
 - Có thể chuyển sang enum trong Prisma ở phiên bản tiếp theo.
 - Cấu trúc đã hỗ trợ cả chứng nhận ISO và chứng nhận sản phẩm.
-- workflow_approvals đủ để xây dựng quy trình ký số và phê duyệt nhiều cấp.
+- workflow_approvals đủ để xây dựng quy trình ký số và phê duyệt nhiều cấp.n

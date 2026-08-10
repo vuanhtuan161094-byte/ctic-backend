@@ -900,12 +900,42 @@ export class UsersService {
         );
 
         const data: {
+            username?: string;
             email?: string;
             full_name?: string | null;
             status?: string;
             locked_until?: Date | null;
             failed_login_count?: number;
         } = {};
+
+        if (
+            dto.username !==
+            undefined
+        ) {
+            const username =
+                dto.username.trim();
+
+            const existingUsername =
+                await this.prisma.users.findFirst({
+                    where: {
+                        username,
+
+                        id: {
+                            not:
+                                id,
+                        },
+                    },
+                });
+
+            if (existingUsername) {
+                throw new ConflictException(
+                    'Username đã được sử dụng',
+                );
+            }
+
+            data.username =
+                username;
+        }
 
         if (
             dto.email !==
@@ -930,7 +960,7 @@ export class UsersService {
 
             if (existingEmail) {
                 throw new ConflictException(
-                    'Email đã được sử dụng',
+                    'Username hoặc email đã được sử dụng',
                 );
             }
 
@@ -1020,6 +1050,47 @@ export class UsersService {
                         data,
                     });
 
+                    const expertData: {
+                        full_name?: string;
+                        email?: string;
+                    } = {};
+
+                    if (
+                        dto.full_name !==
+                        undefined &&
+                        dto.full_name.trim()
+                    ) {
+                        expertData.full_name =
+                            dto.full_name.trim();
+                    }
+
+                    if (
+                        data.email !==
+                        undefined
+                    ) {
+                        expertData.email =
+                            data.email;
+                    }
+
+                    if (
+                        Object.keys(
+                            expertData,
+                        ).length > 0
+                    ) {
+                        await transaction.experts.updateMany({
+                            where: {
+                                user_id:
+                                    id,
+                            },
+
+                            data: {
+                                ...expertData,
+                                updated_at:
+                                    new Date(),
+                            },
+                        });
+                    }
+
                     await transaction.audit_logs.create({
                         data: {
                             user_id:
@@ -1045,7 +1116,7 @@ export class UsersService {
                 )
             ) {
                 throw new ConflictException(
-                    'Email đã được sử dụng',
+                    'Username hoặc email đã được sử dụng',
                 );
             }
 

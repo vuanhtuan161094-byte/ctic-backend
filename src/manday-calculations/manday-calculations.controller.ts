@@ -29,6 +29,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { MandayCalculationsService } from './manday-calculations.service';
 import { CreateMandayCalculationDto } from './dto/create-manday-calculation.dto';
 import { UpdateMandayCalculationDto } from './dto/update-manday-calculation.dto';
+import { SuggestMandayDto } from './dto/suggest-manday.dto';
+import { MandayRulesService } from './manday-rules.service';
 
 @Controller('manday-calculations')
 @ApiTags('08. Tính man-day')
@@ -42,6 +44,7 @@ export class MandayCalculationsController {
     constructor(
         private readonly mandayCalculationsService:
             MandayCalculationsService,
+        private readonly mandayRulesService: MandayRulesService,
     ) { }
 
     private getUserId(
@@ -58,6 +61,40 @@ export class MandayCalculationsController {
             request.user?.userId ??
             request.user?.sub
         );
+    }
+
+    @Get('reference-tables')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('mandays.read')
+    @ApiOperation({
+        summary: 'Lấy các bảng tra cứu man-day',
+        description: 'Trả về bảng QMS, EMS, ISO 45001, ma trận IMS và quy tắc nhiều địa điểm để giao diện cho phép người dùng chọn trực tiếp.',
+    })
+    @ApiOkResponse({ description: 'Các bảng tra cứu và quy tắc đang áp dụng' })
+    referenceTables() {
+        return this.mandayRulesService.getReferenceTables();
+    }
+
+    @Post('suggest')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('mandays.read')
+    @ApiOperation({
+        summary: 'Đề xuất man-day tự động',
+        description: 'Tính đề xuất cho QMS, EMS, ISO 45001, IMS và tổ chức nhiều địa điểm theo cấu hình IAF/R.01.',
+    })
+    @ApiOkResponse({ description: 'Kết quả đề xuất và các cảnh báo cần xem xét' })
+    suggest(@Body() dto: SuggestMandayDto) {
+        return this.mandayRulesService.suggest(dto);
     }
 
     @Post()
@@ -114,6 +151,43 @@ export class MandayCalculationsController {
     })
     findAll() {
         return this.mandayCalculationsService.findAll();
+    }
+
+    @Post('project/:projectId/sync-from-review')
+    @Roles(
+        'ADMIN',
+        'COORDINATOR',
+    )
+    @Permissions('mandays.manage')
+    @ApiOperation({
+        summary: 'Đồng bộ bản tính man-day từ bản xem xét đăng ký',
+        description:
+            'Tạo bản tính man-day cấp dự án từ bản xem xét đăng ký đã được đánh giá viên xác nhận. Thao tác chạy lặp an toàn.',
+    })
+    @ApiParam({
+        name: 'projectId',
+        description: 'UUID dự án chứng nhận',
+    })
+    @ApiOkResponse({
+        description: 'Bản tính hiện có hoặc bản tính vừa được đồng bộ',
+    })
+    syncFromReview(
+        @Param('projectId')
+        projectId: string,
+
+        @Req()
+        request: {
+            user?: {
+                id?: string;
+                userId?: string;
+                sub?: string;
+            };
+        },
+    ) {
+        return this.mandayCalculationsService.syncFromApplicationReview(
+            projectId,
+            this.getUserId(request),
+        );
     }
 
     @Get('project/:projectId')

@@ -24,7 +24,7 @@ export class CreateContractDto {
     customer_id!: string;
 
     @ApiProperty({
-        example: 'CTIC-2026-002',
+        example: 'CB-2026-0002',
         description: 'Số hợp đồng duy nhất',
         maxLength: 50,
     })

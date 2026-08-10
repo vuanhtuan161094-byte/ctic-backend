@@ -66,12 +66,140 @@ export class MandayCalculationsService {
         return Math.round((value + Number.EPSILON) * 100) / 100;
     }
 
+    private roundToHalf(value: number): number {
+        return Math.round((value + Number.EPSILON) * 2) / 2;
+    }
+
+    private isHalfDay(value: number): boolean {
+        return Math.abs(value * 2 - Math.round(value * 2)) < 0.0001;
+    }
+
+    private normalizeInitialStageSplit(
+        finalMandays: number,
+        stage1Mandays?: number,
+        stage2Mandays?: number,
+    ): {
+        stage1Mandays: number;
+        stage2Mandays: number;
+        normalized: boolean;
+    } {
+        if (finalMandays < 1.5) {
+            throw new BadRequestException(
+                'Ngày công chứng nhận lần đầu phải tối thiểu 1,5 MD để bảo đảm Stage 1 tối thiểu 0,5 MD và Stage 2 tối thiểu 1 MD',
+            );
+        }
+
+        const suppliedIsValid =
+            stage1Mandays !== undefined &&
+            stage2Mandays !== undefined &&
+            stage1Mandays >= 0.5 &&
+            stage2Mandays >= 1 &&
+            this.isHalfDay(stage1Mandays) &&
+            this.isHalfDay(stage2Mandays) &&
+            Math.abs(stage1Mandays + stage2Mandays - finalMandays) <= 0.01;
+
+        if (suppliedIsValid) {
+            return {
+                stage1Mandays: this.roundMandays(stage1Mandays),
+                stage2Mandays: this.roundMandays(stage2Mandays),
+                normalized: false,
+            };
+        }
+
+        let normalizedStage1 = Math.max(
+            0.5,
+            this.roundToHalf(finalMandays * 0.2),
+        );
+
+        if (finalMandays - normalizedStage1 < 1) {
+            normalizedStage1 = this.roundToHalf(finalMandays - 1);
+        }
+
+        const normalizedStage2 = this.roundToHalf(
+            finalMandays - normalizedStage1,
+        );
+
+        if (normalizedStage1 < 0.5 || normalizedStage2 < 1) {
+            throw new BadRequestException(
+                'Không thể phân bổ Stage 1/Stage 2 theo giới hạn tối thiểu. Hãy kiểm tra lại MD lần đầu.',
+            );
+        }
+
+        return {
+            stage1Mandays: normalizedStage1,
+            stage2Mandays: normalizedStage2,
+            normalized: true,
+        };
+    }
+
     private decimalToNumber(value: unknown): number | undefined {
         if (value === null || value === undefined) {
             return undefined;
         }
 
         return Number(value);
+    }
+
+    private compactStandardType(value?: string | null): string {
+        const source = (value ?? '').trim();
+        const normalized = source.toUpperCase();
+        const systems: string[] = [];
+
+        if (/ISO\s*9001|\bQMS\b/.test(normalized)) systems.push('QMS');
+        if (/ISO\s*14001|\bEMS\b/.test(normalized)) systems.push('EMS');
+        if (/ISO\s*45001|\bOHSMS\b|\bOH&S\b/.test(normalized)) systems.push('OHSMS');
+
+        if (systems.length > 1) {
+            return `IMS-${systems.join('-')}`.slice(0, 30);
+        }
+        if (systems[0] === 'QMS') return 'ISO 9001';
+        if (systems[0] === 'EMS') return 'ISO 14001';
+        if (systems[0] === 'OHSMS') return 'ISO 45001';
+
+        return source.slice(0, 30) || 'MANAGEMENT_SYSTEM';
+    }
+
+
+    private parseReviewAdjustments(
+        value: string | null | undefined,
+        adjustmentType: 'increase' | 'reduction' | 'ims_reduction',
+    ): Array<{
+        adjustment_type: string;
+        factor_code: string;
+        percentage: number;
+        reason: string;
+    }> {
+        if (!value?.trim()) return [];
+
+        try {
+            const parsed = JSON.parse(value) as unknown;
+            const rows = Array.isArray(parsed) ? parsed : [parsed];
+
+            return rows.flatMap((row, index) => {
+                if (!row || typeof row !== 'object') return [];
+                const item = row as Record<string, unknown>;
+                const percentage = Number(
+                    item.percentage ?? item.percent ?? item.rate ?? 0,
+                );
+                if (!Number.isFinite(percentage) || percentage <= 0) return [];
+
+                const factorCode = String(
+                    item.factor_code ?? item.factorCode ?? item.code ?? item.factor ?? `${adjustmentType}_${index + 1}`,
+                ).trim();
+                const reason = String(
+                    item.reason ?? item.basis ?? item.description ?? item.label ?? 'Đồng bộ từ bản xem xét đăng ký',
+                ).trim();
+
+                return [{
+                    adjustment_type: adjustmentType,
+                    factor_code: factorCode || `${adjustmentType}_${index + 1}`,
+                    percentage,
+                    reason: reason || 'Đồng bộ từ bản xem xét đăng ký',
+                }];
+            });
+        } catch {
+            return [];
+        }
     }
 
     private sumAdjustment(
@@ -138,14 +266,20 @@ export class MandayCalculationsService {
             );
         }
 
-        const adjustmentFactor =
+        const generalAdjustmentFactor =
             1 +
             increasePercent / 100 -
-            reductionPercent / 100 -
-            imsReductionPercent / 100;
+            reductionPercent / 100;
 
-        const finalMandays = this.roundMandays(
-            dto.base_mandays * adjustmentFactor,
+        const imsAdjustmentFactor =
+            1 - imsReductionPercent / 100;
+
+        // Làm tròn về 0,5 MD gần nhất tại điểm bắt đầu, sau đó áp dụng
+        // tăng/giảm chung và giảm IMS theo thứ tự tuần tự.
+        const roundedBaseMandays = Math.max(0.5, this.roundToHalf(dto.base_mandays));
+        const preImsMandays = roundedBaseMandays * generalAdjustmentFactor;
+        const finalMandays = this.roundToHalf(
+            preImsMandays * imsAdjustmentFactor,
         );
 
         if (finalMandays <= 0) {
@@ -157,15 +291,30 @@ export class MandayCalculationsService {
         const stage1Mandays = dto.stage1_mandays;
         const stage2Mandays = dto.stage2_mandays;
 
-        if (
-            stage1Mandays !== undefined &&
-            stage2Mandays !== undefined &&
-            Math.abs(stage1Mandays + stage2Mandays - finalMandays) > 0.01
-        ) {
+        if (stage1Mandays !== undefined && stage1Mandays < 0.5) {
             throw new BadRequestException(
-                'Tổng ngày công giai đoạn 1 và giai đoạn 2 phải bằng ngày công cuối cùng',
+                'Ngày công Stage 1 không được nhỏ hơn 0,5 MD',
             );
         }
+
+        if (stage2Mandays !== undefined && stage2Mandays < 1) {
+            throw new BadRequestException(
+                'Ngày công Stage 2 không được nhỏ hơn 1 MD',
+            );
+        }
+
+        if (stage1Mandays !== undefined && !this.isHalfDay(stage1Mandays)) {
+            throw new BadRequestException('Ngày công Stage 1 phải là bội số của 0,5 MD');
+        }
+        if (stage2Mandays !== undefined && !this.isHalfDay(stage2Mandays)) {
+            throw new BadRequestException('Ngày công Stage 2 phải là bội số của 0,5 MD');
+        }
+
+        const normalizedSplit = this.normalizeInitialStageSplit(
+            finalMandays,
+            stage1Mandays,
+            stage2Mandays,
+        );
 
         let onsiteMandays: number;
         let offsiteMandays: number;
@@ -185,6 +334,12 @@ export class MandayCalculationsService {
             offsiteMandays = dto.offsite_mandays ?? 0;
             onsiteMandays = this.roundMandays(
                 finalMandays - offsiteMandays,
+            );
+        }
+
+        if (!this.isHalfDay(onsiteMandays) || !this.isHalfDay(offsiteMandays)) {
+            throw new BadRequestException(
+                'Ngày công tại chỗ và ngoài hiện trường phải là bội số của 0,5 MD',
             );
         }
 
@@ -217,9 +372,13 @@ export class MandayCalculationsService {
             reductionPercent: this.roundMandays(reductionPercent),
             imsReductionPercent:
                 this.roundMandays(imsReductionPercent),
+            roundedBaseMandays,
+            preImsMandays: this.roundMandays(preImsMandays),
             finalMandays,
-            onsiteMandays: this.roundMandays(onsiteMandays),
-            offsiteMandays: this.roundMandays(offsiteMandays),
+            stage1Mandays: normalizedSplit.stage1Mandays,
+            stage2Mandays: normalizedSplit.stage2Mandays,
+            onsiteMandays: this.roundToHalf(onsiteMandays),
+            offsiteMandays: this.roundToHalf(offsiteMandays),
         };
     }
 
@@ -303,14 +462,14 @@ export class MandayCalculationsService {
                 calculation_code: calculationCode,
                 version_no: versionNo,
                 audit_type: dto.audit_type,
-                standard_type: dto.standard_type,
+                standard_type: this.compactStandardType(dto.standard_type),
                 effective_personnel: dto.effective_personnel,
                 total_sites: result.totalSites,
                 sampled_sites: result.sampledSites,
                 complexity_level: dto.complexity_level,
-                base_mandays: dto.base_mandays,
-                stage1_mandays: dto.stage1_mandays,
-                stage2_mandays: dto.stage2_mandays,
+                base_mandays: result.roundedBaseMandays,
+                stage1_mandays: result.stage1Mandays,
+                stage2_mandays: result.stage2Mandays,
                 onsite_mandays: result.onsiteMandays,
                 offsite_mandays: result.offsiteMandays,
                 increase_percent: result.increasePercent,
@@ -380,6 +539,168 @@ export class MandayCalculationsService {
             },
             include: this.includeRelations,
         });
+    }
+
+
+    async syncFromApplicationReview(
+        projectId: string,
+        calculatedBy?: string,
+    ) {
+        const existing = await this.prisma.manday_calculations.findFirst({
+            where: { project_id: projectId },
+            orderBy: { version_no: 'desc' },
+            include: this.includeRelations,
+        });
+
+        if (existing) {
+            return {
+                created: false,
+                message: 'Hồ sơ đã có bản tính man-day.',
+                calculation: existing,
+            };
+        }
+
+        const project = await this.prisma.certification_projects.findUnique({
+            where: { id: projectId },
+            include: {
+                certification_applications: {
+                    include: {
+                        sites: { orderBy: { site_no: 'asc' } },
+                        application_reviews: {
+                            where: {
+                                workflow_status: 'APPROVED',
+                            },
+                            orderBy: { created_at: 'desc' },
+                            take: 1,
+                        },
+                    },
+                },
+            },
+        });
+
+        if (!project) {
+            throw new NotFoundException('Không tìm thấy dự án chứng nhận');
+        }
+
+        const application = project.certification_applications;
+        const review = application.application_reviews[0];
+
+        if (!review) {
+            throw new BadRequestException(
+                'Hồ sơ chưa có bản xem xét đăng ký đã được đánh giá viên xác nhận.',
+            );
+        }
+
+        if (!['ACCEPTED', 'APPROVED'].includes((review.result ?? '').trim().toUpperCase())) {
+            throw new BadRequestException(
+                'Bản xem xét gần nhất không có kết quả chấp nhận nên không thể đồng bộ man-day.',
+            );
+        }
+
+        const baseMandays = this.decimalToNumber(review.base_mandays);
+        const finalMandays = this.decimalToNumber(review.final_mandays);
+        const sourceStage1Mandays = this.decimalToNumber(review.stage1_mandays);
+        const sourceStage2Mandays = this.decimalToNumber(review.stage2_mandays);
+        const effectivePersonnel = review.effective_personnel
+            ?? application.employee_count
+            ?? application.total_employee_count;
+
+        if (!baseMandays || !finalMandays || !effectivePersonnel) {
+            throw new BadRequestException(
+                'Bản xem xét chưa có đủ nhân sự hiệu dụng, MD cơ sở hoặc MD lần đầu để đồng bộ.',
+            );
+        }
+
+        const normalizedFinalMandays = this.roundToHalf(finalMandays);
+        const normalizedSplit = this.normalizeInitialStageSplit(
+            normalizedFinalMandays,
+            sourceStage1Mandays,
+            sourceStage2Mandays,
+        );
+        const stage1Mandays = normalizedSplit.stage1Mandays;
+        const stage2Mandays = normalizedSplit.stage2Mandays;
+
+        const adjustments = [
+            ...this.parseReviewAdjustments(review.increase_factors, 'increase'),
+            ...this.parseReviewAdjustments(review.reduction_factors, 'reduction'),
+        ];
+
+        const integrationReduction = Number(review.integration_reduction_percent ?? 0);
+        if (integrationReduction > 0) {
+            adjustments.push({
+                adjustment_type: 'ims_reduction',
+                factor_code: 'IMS_MD11',
+                percentage: integrationReduction,
+                reason: 'Giảm thời lượng đánh giá tích hợp đã được xác nhận trong bản xem xét đăng ký.',
+            });
+        }
+
+        const calculationCode = await this.generateCalculationCode();
+        const now = new Date();
+        const standardType = this.compactStandardType(application.standard_name);
+        const totalSites = Math.max(
+            1,
+            application.site_count ?? application.sites.length ?? 1,
+        );
+
+        const calculation = await this.prisma.manday_calculations.create({
+            data: {
+                project_id: projectId,
+                calculation_code: calculationCode,
+                version_no: 1,
+                audit_type: 'initial',
+                standard_type: standardType,
+                effective_personnel: effectivePersonnel,
+                total_sites: totalSites,
+                sampled_sites: totalSites,
+                complexity_level: review.risk_level,
+                base_mandays: baseMandays,
+                stage1_mandays: stage1Mandays,
+                stage2_mandays: stage2Mandays,
+                onsite_mandays: normalizedFinalMandays,
+                offsite_mandays: 0,
+                increase_percent: Number(review.increase_percent ?? 0),
+                reduction_percent: Number(review.reduction_percent ?? 0),
+                ims_integration_percent: Number(review.ims_integration_percent ?? 0),
+                combined_audit_capability_percent: Number(review.combined_audit_capability_percent ?? 0),
+                ims_reduction_percent: integrationReduction,
+                final_mandays: normalizedFinalMandays,
+                calculation_basis: [
+                    `Đồng bộ từ bản xem xét đăng ký ${application.application_code}.`,
+                    `Tiêu chuẩn áp dụng: ${application.standard_name}.`,
+                    `Review ID: ${review.id}.`,
+                    Math.abs(normalizedFinalMandays - finalMandays) > 0.001
+                        ? `MD lần đầu được chuẩn hóa từ ${finalMandays} thành ${normalizedFinalMandays} MD theo bước 0,5 MD.`
+                        : null,
+                    normalizedSplit.normalized
+                        ? `Hệ thống đã chuẩn hóa phân bổ từ ${sourceStage1Mandays ?? '-'} / ${sourceStage2Mandays ?? '-'} thành Stage 1 = ${stage1Mandays} MD và Stage 2 = ${stage2Mandays} MD theo giới hạn tối thiểu.`
+                        : null,
+                    review.conclusion ? `Kết luận: ${review.conclusion}` : null,
+                ].filter(Boolean).join(' '),
+                status: 'approved',
+                calculated_by: calculatedBy ?? review.prepared_by_id ?? review.reviewer_id,
+                approved_by: review.checker_id ?? review.approver_id ?? calculatedBy,
+                calculated_at: review.created_at,
+                approved_at: review.approved_at ?? review.checked_at ?? now,
+                adjustments: adjustments.length
+                    ? {
+                        create: adjustments.map((adjustment) => ({
+                            adjustment_type: adjustment.adjustment_type,
+                            factor_code: adjustment.factor_code,
+                            percentage: adjustment.percentage,
+                            reason: adjustment.reason,
+                        })),
+                    }
+                    : undefined,
+            },
+            include: this.includeRelations,
+        });
+
+        return {
+            created: true,
+            message: 'Đã đồng bộ bản tính man-day từ bản xem xét đăng ký.',
+            calculation,
+        };
     }
 
     async findOne(id: string) {
@@ -520,18 +841,18 @@ export class MandayCalculationsService {
                 },
                 data: {
                     audit_type: mergedDto.audit_type,
-                    standard_type: mergedDto.standard_type,
+                    standard_type: this.compactStandardType(mergedDto.standard_type),
                     effective_personnel:
                         mergedDto.effective_personnel,
                     total_sites: result.totalSites,
                     sampled_sites: result.sampledSites,
                     complexity_level:
                         mergedDto.complexity_level,
-                    base_mandays: mergedDto.base_mandays,
+                    base_mandays: result.roundedBaseMandays,
                     stage1_mandays:
-                        mergedDto.stage1_mandays,
+                        result.stage1Mandays,
                     stage2_mandays:
-                        mergedDto.stage2_mandays,
+                        result.stage2Mandays,
                     onsite_mandays:
                         result.onsiteMandays,
                     offsite_mandays:

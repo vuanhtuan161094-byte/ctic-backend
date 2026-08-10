@@ -12,6 +12,7 @@ import {
 } from '@nestjs/jwt';
 
 import { PrismaModule } from '../prisma/prisma.module';
+import { SecurityModule } from '../security/security.module';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -22,6 +23,7 @@ import { RolesGuard } from './roles.guard';
 @Module({
   imports: [
     PrismaModule,
+    SecurityModule,
     ConfigModule,
 
     JwtModule.registerAsync({
@@ -36,17 +38,35 @@ import { RolesGuard } from './roles.guard';
       useFactory: (
         configService:
           ConfigService,
-      ) => ({
-        secret:
-          configService.get<string>(
-            'JWT_SECRET',
-          ),
+      ) => {
+        const configuredTtl =
+          Number(
+            configService.get<string>(
+              'JWT_ACCESS_TTL_SECONDS',
+            ) ??
+            '28800',
+          );
 
-        signOptions: {
-          expiresIn:
-            '8h',
-        },
-      }),
+        const expiresIn =
+          Number.isInteger(
+            configuredTtl,
+          ) &&
+          configuredTtl >= 300 &&
+          configuredTtl <= 86400
+            ? configuredTtl
+            : 28800;
+
+        return {
+          secret:
+            configService.get<string>(
+              'JWT_SECRET',
+            ),
+
+          signOptions: {
+            expiresIn,
+          },
+        };
+      },
     }),
   ],
 

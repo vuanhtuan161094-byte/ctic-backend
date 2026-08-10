@@ -11,6 +11,7 @@ import {
 } from '@nestjs/schedule';
 
 import { ApplicationReviewsModule } from './application-reviews/application-reviews.module';
+import { AuditDocumentsModule } from './audit-documents/audit-documents.module';
 import { AuditFindingsModule } from './audit-findings/audit-findings.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AuditPlansModule } from './audit-plans/audit-plans.module';
@@ -23,6 +24,7 @@ import { CertificationAgreementsModule } from './certification-agreements/certif
 import { CertificationApplicationsModule } from './certification-applications/certification-applications.module';
 import { CertificationDecisionsModule } from './certification-decisions/certification-decisions.module';
 import { CertificationProjectScopesModule } from './certification-project-scopes/certification-project-scopes.module';
+import { CertificationResultsModule } from './certification-results/certification-results.module';
 import { CertificationProjectsModule } from './certification-projects/certification-projects.module';
 import { ContractsModule } from './contracts/contracts.module';
 import { CustomersModule } from './customers/customers.module';
@@ -36,6 +38,7 @@ import { MandayCalculationsModule } from './manday-calculations/manday-calculati
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReportsModule } from './reports/reports.module';
+import { SecurityModule } from './security/security.module';
 import { TechnicalReviewsModule } from './technical-reviews/technical-reviews.module';
 import { UsersModule } from './users/users.module';
 
@@ -48,6 +51,7 @@ import { UsersModule } from './users/users.module';
         ScheduleModule.forRoot(),
 
         PrismaModule,
+        SecurityModule,
         HealthModule,
         AuthModule,
         UsersModule,
@@ -60,6 +64,7 @@ import { UsersModule } from './users/users.module';
         CertificationProjectScopesModule,
         MandayCalculationsModule,
         AuditProgramsModule,
+        AuditDocumentsModule,
         AuditPlansModule,
         AuditTeamAppointmentsModule,
         ReportsModule,
@@ -67,6 +72,7 @@ import { UsersModule } from './users/users.module';
         TechnicalReviewsModule,
         DocumentFilesModule,
         CertificationDecisionsModule,
+        CertificationResultsModule,
         AuditResultNotificationsModule,
         CertificatesModule,
         DashboardModule,

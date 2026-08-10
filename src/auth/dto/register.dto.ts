@@ -10,7 +10,7 @@ export class RegisterDto {
     username!: string;
 
     @ApiProperty({
-        example: 'staff01@ctic.vn',
+        example: 'staff01@example.com',
         description: 'Địa chỉ email',
         format: 'email',
     })

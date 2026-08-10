@@ -114,6 +114,33 @@ export class CertificationProjectScopesController {
         );
     }
 
+    @Post('project/:projectId/sync-from-review')
+    @ApiOperation({ summary: 'Đồng bộ phạm vi dự án từ bản xem xét đơn đã hoàn tất' })
+    @ApiParam({ name: 'projectId', format: 'uuid' })
+    @ApiOkResponse({ description: 'Đã đồng bộ và phê duyệt phạm vi ngành của dự án' })
+    @ApiBadRequestResponse({ description: 'Bản xem xét chưa có phạm vi ngành hợp lệ' })
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+    )
+    @Permissions('projects.manage')
+    syncFromReview(
+        @Param(
+            'projectId',
+            ParseUUIDPipe,
+        )
+        projectId: string,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.service.syncFromReview(
+            projectId,
+            request.user.userId,
+        );
+    }
+
     @Get(':id')
     @ApiOperation({ summary: 'Lấy chi tiết phạm vi ngành của dự án' })
     @ApiParam({ name: 'id', format: 'uuid' })

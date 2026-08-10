@@ -25,6 +25,9 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ResourceAccessService } from '../security/resource-access.service';
+import { getResourceActor } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { AuditProgramsService } from './audit-programs.service';
 import {
@@ -47,6 +50,8 @@ export class AuditProgramsController {
     constructor(
         private readonly auditProgramsService:
             AuditProgramsService,
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
 
     private getUserId(
@@ -154,8 +159,27 @@ export class AuditProgramsController {
     @ApiOkResponse({
         description: 'Danh sách chương trình đánh giá',
     })
-    findAll() {
-        return this.auditProgramsService.findAll();
+    async findAll(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const programs =
+            await this.auditProgramsService.findAll();
+
+        return this.resourceAccess.filterEntities(
+            programs.map((program) => ({
+                ...program,
+                entity_type: 'audit_program',
+                entity_id: program.id,
+            })),
+            getResourceActor(request),
+        ).then((items) =>
+            items.map(({
+                entity_type: _entityType,
+                entity_id: _entityId,
+                ...program
+            }) => program),
+        );
     }
 
     @Get('project/:projectId')
@@ -179,10 +203,18 @@ export class AuditProgramsController {
     @ApiOkResponse({
         description: 'Các chương trình thuộc dự án',
     })
-    findByProject(
+    async findByProject(
         @Param('projectId')
         projectId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertProjectAccess(
+            projectId,
+            getResourceActor(request),
+        );
+
         return this.auditProgramsService.findByProject(
             projectId,
         );
@@ -211,10 +243,21 @@ export class AuditProgramsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy chương trình',
     })
-    findOne(
+    async findOne(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            {
+                entity_type: 'audit_program',
+                entity_id: id,
+            },
+            getResourceActor(request),
+        );
+
         return this.auditProgramsService.findOne(id);
     }
 

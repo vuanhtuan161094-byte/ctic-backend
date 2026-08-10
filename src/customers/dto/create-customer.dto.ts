@@ -16,7 +16,7 @@ export class CreateCustomerDto {
   customer_code!: string;
 
   @ApiProperty({
-    example: 'Công ty TNHH CTIC Test',
+    example: 'Công ty TNHH ABC',
     description: 'Tên đầy đủ của tổ chức',
     maxLength: 255,
   })
@@ -34,6 +34,16 @@ export class CreateCustomerDto {
   @IsString()
   @MaxLength(20)
   tax_code?: string;
+
+  @ApiPropertyOptional({
+    example: 'Số 123, đường Nguyễn Trãi, Hà Nội',
+    description: 'Địa chỉ trụ sở hoặc địa điểm liên hệ',
+    maxLength: 1000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  address?: string;
 
   @ApiPropertyOptional({
     example: 'contact@example.com',

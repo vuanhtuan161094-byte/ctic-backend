@@ -7,9 +7,12 @@ import {
 } from '@nestjs/common';
 
 import type {
-    Request,
     Response,
 } from 'express';
+
+import type {
+    SecurityRequest,
+} from '../../security/security-request';
 
 interface ErrorResponse {
     statusCode: number;
@@ -17,6 +20,7 @@ interface ErrorResponse {
     message: string | string[];
     path: string;
     timestamp: string;
+    request_id?: string;
 }
 
 interface MappedError {
@@ -39,7 +43,7 @@ export class GlobalExceptionFilter
             context.getResponse<Response>();
 
         const request =
-            context.getRequest<Request>();
+            context.getRequest<SecurityRequest>();
 
         const path =
             request.originalUrl ??
@@ -53,6 +57,7 @@ export class GlobalExceptionFilter
                 exception,
                 response,
                 path,
+                request.requestId,
             );
 
             return;
@@ -88,6 +93,9 @@ export class GlobalExceptionFilter
                     timestamp:
                         new Date()
                             .toISOString(),
+
+                    request_id:
+                        request.requestId,
                 } satisfies ErrorResponse);
 
             return;
@@ -118,6 +126,9 @@ export class GlobalExceptionFilter
                 timestamp:
                     new Date()
                         .toISOString(),
+
+                request_id:
+                    request.requestId,
             } satisfies ErrorResponse);
     }
 
@@ -125,6 +136,7 @@ export class GlobalExceptionFilter
         exception: HttpException,
         response: Response,
         path: string,
+        requestId?: string,
     ): void {
         const status =
             exception.getStatus();
@@ -189,6 +201,9 @@ export class GlobalExceptionFilter
                 timestamp:
                     new Date()
                         .toISOString(),
+
+                request_id:
+                    requestId,
             } satisfies ErrorResponse);
     }
 
@@ -249,6 +264,33 @@ export class GlobalExceptionFilter
                     'Thao tác làm vi phạm quan hệ dữ liệu',
             },
 
+            P2021: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Cơ sở dữ liệu chưa đồng bộ với phiên bản phần mềm',
+            },
+
+            P2022: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Cơ sở dữ liệu chưa đồng bộ với phiên bản phần mềm',
+            },
+
+            P2024: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Hệ thống đang bận hoặc hết kết nối cơ sở dữ liệu; vui lòng thử lại',
+            },
+
             P2025: {
                 status:
                     HttpStatus.NOT_FOUND,
@@ -256,6 +298,35 @@ export class GlobalExceptionFilter
                     'Not Found',
                 message:
                     'Không tìm thấy dữ liệu cần xử lý',
+            },
+
+            P2034: {
+                status:
+                    HttpStatus.CONFLICT,
+                error:
+                    'Conflict',
+                message:
+                    'Dữ liệu vừa được thay đổi bởi thao tác khác; vui lòng tải lại và thử lại',
+            },
+
+            DB_UNAVAILABLE: {
+                status:
+                    HttpStatus
+                        .SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Cơ sở dữ liệu hiện không sẵn sàng; hệ thống đang thử khôi phục kết nối',
+            },
+
+            DB_AUTHENTICATION_FAILED: {
+                status:
+                    HttpStatus
+                        .SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Không thể xác thực kết nối cơ sở dữ liệu',
             },
 
             P1000: {
@@ -316,6 +387,42 @@ export class GlobalExceptionFilter
                     'Service Unavailable',
                 message:
                     'Cơ sở dữ liệu hiện không sẵn sàng',
+            },
+
+            ECONNRESET: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Kết nối cơ sở dữ liệu vừa bị gián đoạn; vui lòng thử lại',
+            },
+
+            ECONNCLOSED: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Kết nối cơ sở dữ liệu đã đóng; vui lòng thử lại',
+            },
+
+            EINVALIDSTATE: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Kết nối cơ sở dữ liệu đang được khôi phục; vui lòng thử lại',
+            },
+
+            ESOCKET: {
+                status:
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                error:
+                    'Service Unavailable',
+                message:
+                    'Kết nối mạng tới cơ sở dữ liệu bị gián đoạn; vui lòng thử lại',
             },
         };
 

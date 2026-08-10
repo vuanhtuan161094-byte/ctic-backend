@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
@@ -265,6 +266,44 @@ export class ReportsService {
         ).padStart(4, '0')}`;
     }
 
+    private reportStageForPlan(plan: any): 'stage1' | 'stage2' {
+        const normalize = (value: unknown) =>
+            String(value ?? '')
+                .trim()
+                .toLowerCase()
+                .replace(/[\s_-]+/g, '');
+
+        const auditType = normalize(
+            plan?.audit_type ??
+            plan?.audit_event?.event_type,
+        );
+
+        return ['stage1', 'initialstage1', 'gd1', 'gđ1'].includes(auditType)
+            ? 'stage1'
+            : 'stage2';
+    }
+
+    private stage1AuditContentDefaults() {
+        return [
+            'Hồ sơ pháp lý của Tổ chức',
+            'Các quy định liên quan (Giấy phép con, chứng nhận năng lực hoạt động,…)',
+            'Địa chỉ trụ sở văn phòng và địa chỉ nhà máy sản xuất',
+            'Phạm vi chứng nhận',
+            'Hệ thống thống tin dạng văn bản',
+            'Hồ sơ đánh giá nội bộ',
+            'Hồ sơ xem xét của  lãnh đạo',
+            'Sơ đồ tổ chức',
+            'Lưu đồ sản xuất',
+            'Sơ đồ nhà xưởng; Danh mục máy móc thiết bị; Hồ sơ Kiểm định máy móc thiết bị yêu cầu nghiêm ngặt',
+            'Mức độ kiểm soát được thiết lập (đặc biệt là trong trường hợp khách hàng có nhiều địa điểm)',
+        ].map((content, index) => ({
+            no: index + 1,
+            content,
+            audit_note: null,
+            comment: null,
+        }));
+    }
+
     private buildDefaultFormData(
         plan: any,
     ): JsonObject {
@@ -297,6 +336,20 @@ export class ReportsService {
                 version_no: plan.version_no,
                 audit_type: plan.audit_type,
                 location: plan.location,
+            },
+
+            report_identity: {
+                stage: this.reportStageForPlan(plan),
+            },
+
+            stage1_report: {
+                audit_content: this.stage1AuditContentDefaults(),
+                readiness_result: null,
+            },
+
+            stage2_report: {
+                audit_team_recommendation: null,
+                client_recommendation: null,
             },
 
             organization: {
@@ -406,6 +459,18 @@ export class ReportsService {
                 significant_changes: null,
             },
 
+            management_system: {
+                implementation_summary: null,
+                effectiveness_summary: null,
+                internal_audit_summary: null,
+                management_review_summary: null,
+            },
+
+            recommendation: {
+                result: null,
+                rationale: null,
+            },
+
             clause_results: [],
 
             audit_evidence: [],
@@ -426,6 +491,210 @@ export class ReportsService {
             attachments: [],
 
             notes: [],
+        };
+    }
+
+    private normalizeText(value: string | null | undefined) {
+        return (value ?? '').trim().toLowerCase();
+    }
+
+    private getNestedText(
+        object: JsonObject,
+        path: string[],
+    ): string {
+        let current: unknown = object;
+
+        for (const key of path) {
+            if (!this.isPlainObject(current)) {
+                return '';
+            }
+            current = current[key];
+        }
+
+        return typeof current === 'string' ? current.trim() : '';
+    }
+
+    private async assertReportAccess(
+        userId: string | undefined,
+        auditPlanId: string,
+    ) {
+        if (!userId) {
+            throw new ForbiddenException(
+                'Không xác định được người thực hiện báo cáo',
+            );
+        }
+
+        const user = await this.prisma.users.findUnique({
+            where: { id: userId },
+            include: {
+                user_roles: {
+                    include: {
+                        roles: true,
+                    },
+                },
+                expert_profile: {
+                    select: {
+                        id: true,
+                    },
+                },
+            },
+        });
+
+        if (!user) {
+            throw new ForbiddenException(
+                'Không tìm thấy tài khoản người thực hiện',
+            );
+        }
+
+        const roleNames = user.user_roles.map((item) =>
+            this.normalizeText(item.roles.role_name),
+        );
+
+        if (
+            roleNames.some((role) =>
+                ['admin', 'staff'].includes(role),
+            )
+        ) {
+            return;
+        }
+
+        const appointment =
+            await this.prisma.audit_team_appointments.findUnique({
+                where: {
+                    audit_plan_id: auditPlanId,
+                },
+                include: {
+                    members: {
+                        select: {
+                            expert_id: true,
+                        },
+                    },
+                },
+            });
+
+        if (!appointment || appointment.status !== 'issued') {
+            throw new ForbiddenException(
+                'Kế hoạch chưa có quyết định chỉ định đoàn đã ban hành',
+            );
+        }
+
+        const expertId = user.expert_profile?.id;
+        const isAssigned = Boolean(
+            expertId &&
+            appointment.members.some(
+                (member) => member.expert_id === expertId,
+            ),
+        );
+
+        if (!isAssigned) {
+            throw new ForbiddenException(
+                'Chỉ thành viên được phân công trong đoàn đánh giá mới được tạo hoặc sửa báo cáo',
+            );
+        }
+    }
+
+    private validateSubmissionForm(report: any) {
+        if (!report.audit_start_date || !report.audit_end_date) {
+            throw new BadRequestException(
+                'Phải nhập đầy đủ ngày đánh giá thực tế',
+            );
+        }
+
+        const parsedFormData = this.parseFormData(report.form_data);
+        const formData = this.isPlainObject(parsedFormData)
+            ? parsedFormData
+            : {};
+
+        const stage = this.reportStageForPlan(report.audit_plans);
+
+        if (stage === 'stage1') {
+            if (!report.conclusion?.trim()) {
+                throw new BadRequestException(
+                    'Phải nhập kết luận Giai đoạn 1',
+                );
+            }
+
+            const stage1Report = this.isPlainObject(formData.stage1_report)
+                ? formData.stage1_report
+                : {};
+            const contentRows = Array.isArray(stage1Report.audit_content)
+                ? stage1Report.audit_content
+                : [];
+
+            if (contentRows.length < this.stage1AuditContentDefaults().length) {
+                throw new BadRequestException(
+                    'Báo cáo Giai đoạn 1 chưa đủ các nội dung đánh giá theo F.09-P.09-01',
+                );
+            }
+
+            const incompleteRows = contentRows
+                .map((item, index) => ({
+                    index,
+                    item: this.isPlainObject(item) ? item : {},
+                }))
+                .filter(({ item }) =>
+                    !String(item.audit_note ?? '').trim() ||
+                    !String(item.comment ?? '').trim(),
+                )
+                .map(({ index }) => index + 1);
+
+            if (incompleteRows.length) {
+                throw new BadRequestException(
+                    `Báo cáo Giai đoạn 1 còn thiếu ghi chép/nhận xét tại dòng: ${incompleteRows.join(', ')}`,
+                );
+            }
+
+            const readiness = this.normalizeText(
+                String(stage1Report.readiness_result ?? ''),
+            );
+
+            if (!['ready_for_stage2', 'not_ready_for_stage2'].includes(readiness)) {
+                throw new BadRequestException(
+                    'Phải xác định mức độ sẵn sàng cho đánh giá Giai đoạn 2',
+                );
+            }
+
+            return {
+                formData,
+                stage,
+                recommendation: readiness,
+            };
+        }
+
+        const recommendation = this.normalizeText(
+            this.getNestedText(
+                formData,
+                ['recommendation', 'result'],
+            ),
+        );
+        const stage2Report = this.isPlainObject(formData.stage2_report)
+            ? formData.stage2_report
+            : {};
+        const teamRecommendation = String(
+            stage2Report.audit_team_recommendation ?? '',
+        ).trim();
+
+        if (
+            ![
+                'certification_recommended',
+                'certification_not_recommended',
+            ].includes(recommendation)
+        ) {
+            throw new BadRequestException(
+                'Kết quả đề nghị của đoàn đánh giá không hợp lệ',
+            );
+        }
+
+        if (!teamRecommendation) {
+            throw new BadRequestException(
+                'Phải nhập kiến nghị của đoàn đánh giá theo F.09-P.09-02',
+            );
+        }
+
+        return {
+            formData,
+            stage,
+            recommendation,
         };
     }
 
@@ -482,6 +751,47 @@ export class ReportsService {
             );
         }
 
+        await this.assertReportAccess(
+            preparedBy,
+            dto.audit_plan_id,
+        );
+
+        if (plan.status === 'completed') {
+            const existingReport = await this.prisma.reports.findFirst({
+                where: {
+                    audit_plan_id: dto.audit_plan_id,
+                },
+                select: {
+                    id: true,
+                },
+            });
+
+            if (existingReport) {
+                throw new BadRequestException(
+                    'Cuộc đánh giá đã hoàn thành; hãy mở báo cáo hiện có thay vì tạo báo cáo mới',
+                );
+            }
+
+            // Khôi phục an toàn dữ liệu cũ bị đánh dấu hoàn thành nhưng chưa có báo cáo.
+            // Luồng hoàn thành hiện tại luôn yêu cầu báo cáo đã nộp, vì vậy trạng thái này
+            // chỉ có thể phát sinh từ dữ liệu trước Patch 34 hoặc chỉnh sửa lịch sử.
+            await this.prisma.audit_plans.update({
+                where: {
+                    id: plan.id,
+                },
+                data: {
+                    status: 'in_progress',
+                },
+            });
+            plan.status = 'in_progress';
+        }
+
+        if (plan.status !== 'in_progress') {
+            throw new BadRequestException(
+                'Chỉ được tạo báo cáo sau khi cuộc đánh giá đã bắt đầu',
+            );
+        }
+
         const auditStartDate =
             dto.audit_start_date ===
                 undefined
@@ -524,7 +834,9 @@ export class ReportsService {
             dto.report_date !== undefined &&
                 dto.report_date !== null
                 ? new Date(dto.report_date)
-                : new Date();
+                : this.reportStageForPlan(plan) === 'stage2' && auditEndDate
+                    ? new Date(auditEndDate)
+                    : new Date();
 
         const reportYear =
             auditStartDate
@@ -572,8 +884,8 @@ export class ReportsService {
                     conclusion:
                         dto.conclusion,
 
-                    status:
-                        dto.status ?? 'draft',
+                    // Trạng thái workflow chỉ được thay đổi qua các API nghiệp vụ.
+                    status: 'draft',
 
                     form_data:
                         this.serializeFormData(
@@ -654,16 +966,44 @@ export class ReportsService {
     async update(
         id: string,
         dto: UpdateReportDto,
+        userId?: string,
     ) {
         const current =
             await this.findRawReport(id);
 
+        await this.assertReportAccess(
+            userId,
+            current.audit_plan_id,
+        );
+
         if (
-            current.status === 'approved' ||
-            current.status === 'completed'
+            dto.status !== undefined &&
+            !['draft', 'corrective_action_required'].includes(dto.status)
         ) {
             throw new BadRequestException(
-                'Không thể sửa báo cáo đã được phê duyệt hoặc hoàn thành',
+                'Không được thay đổi trực tiếp trạng thái workflow của báo cáo',
+            );
+        }
+
+        const currentFormDataForWorkflow =
+            this.parseFormData(current.form_data);
+        const workflow = this.isPlainObject(
+            currentFormDataForWorkflow,
+        )
+            ? currentFormDataForWorkflow.workflow
+            : null;
+        const submittedAt = this.isPlainObject(workflow)
+            ? workflow.submitted_at
+            : null;
+
+        if (
+            submittedAt ||
+            current.status === 'approved' ||
+            current.status === 'completed' ||
+            current.status === 'technical_review_completed'
+        ) {
+            throw new BadRequestException(
+                'Không thể sửa báo cáo đã nộp, hoàn thành hoặc được thẩm xét',
             );
         }
 
@@ -754,6 +1094,121 @@ export class ReportsService {
 
                 include: this.detailInclude,
             });
+
+        return this.normalizeReport(updated);
+    }
+
+    async submit(
+        id: string,
+        userId?: string,
+    ) {
+        const report = await this.prisma.reports.findUnique({
+            where: { id },
+            include: {
+                audit_plans: true,
+                audit_findings: true,
+                technical_reviews: {
+                    select: {
+                        id: true,
+                    },
+                },
+            },
+        });
+
+        if (!report) {
+            throw new NotFoundException(
+                'Không tìm thấy báo cáo đánh giá',
+            );
+        }
+
+        await this.assertReportAccess(
+            userId,
+            report.audit_plan_id,
+        );
+
+        if (report.audit_plans.status !== 'in_progress') {
+            throw new BadRequestException(
+                'Kế hoạch phải ở trạng thái đang thực hiện khi nộp báo cáo',
+            );
+        }
+
+        if (report.technical_reviews.length > 0) {
+            throw new BadRequestException(
+                'Báo cáo đã được chuyển thẩm xét kỹ thuật',
+            );
+        }
+
+        if (
+            [
+                'approved',
+                'completed',
+                'technical_review_completed',
+            ].includes(report.status)
+        ) {
+            throw new BadRequestException(
+                'Báo cáo đã hoàn thành và không thể nộp lại',
+            );
+        }
+
+        const existingFormData = this.parseFormData(report.form_data);
+        const existingWorkflow = this.isPlainObject(existingFormData)
+            ? existingFormData.workflow
+            : null;
+        const existingSubmittedAt = this.isPlainObject(existingWorkflow)
+            ? existingWorkflow.submitted_at
+            : null;
+
+        if (existingSubmittedAt) {
+            return this.findOne(id);
+        }
+
+        const {
+            formData,
+            stage,
+            recommendation,
+        } = this.validateSubmissionForm(report);
+
+        const unresolvedNc = report.audit_findings.filter(
+            (finding) =>
+                ['major_nc', 'minor_nc'].includes(
+                    finding.finding_type,
+                ) &&
+                finding.status !== 'closed',
+        );
+
+        const nextStatus = stage === 'stage1'
+            ? 'stage1_completed'
+            : unresolvedNc.length
+                ? 'corrective_action_required'
+                : 'ready_for_technical_review';
+
+        const auditResult = stage === 'stage1'
+            ? recommendation
+            : unresolvedNc.length
+                ? 'nonconformities_found'
+                : recommendation;
+
+        const submittedAt = new Date();
+        const submittedFormData = this.deepMerge(
+            formData,
+            {
+                workflow: {
+                    submitted_at: submittedAt.toISOString(),
+                    submitted_by: userId ?? null,
+                },
+            },
+        );
+
+        const updated = await this.prisma.reports.update({
+            where: { id },
+            data: {
+                audit_result: auditResult,
+                status: nextStatus,
+                report_date: report.report_date ?? submittedAt,
+                form_data: JSON.stringify(submittedFormData),
+            },
+            include: this.detailInclude,
+        });
 
         return this.normalizeReport(updated);
     }

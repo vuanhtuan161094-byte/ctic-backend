@@ -1,12 +1,15 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
 
+import { CompleteAuditPlanDto } from './dto/complete-audit-plan.dto';
 import { CreateAuditPlanDto } from './dto/create-audit-plan.dto';
+import { StartAuditPlanDto } from './dto/start-audit-plan.dto';
 import { UpdateAuditPlanDto } from './dto/update-audit-plan.dto';
 
 type JsonObject = Record<string, unknown>;
@@ -740,6 +743,597 @@ export class AuditPlansService {
             });
 
         return this.normalizePlan(updated);
+    }
+
+    private readonly countedMandayRoles = new Set([
+        'team_leader',
+        'lead_auditor',
+        'auditor',
+        'technical_expert',
+    ]);
+
+    private normalizeText(value: string | null | undefined) {
+        return (value ?? '').trim().toLowerCase();
+    }
+
+    private decimalValue(value: unknown): number {
+        if (
+            value &&
+            typeof value === 'object' &&
+            'toNumber' in value &&
+            typeof (value as { toNumber?: unknown }).toNumber === 'function'
+        ) {
+            return (value as { toNumber: () => number }).toNumber();
+        }
+
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    private isHalfManday(value: number) {
+        return Math.abs(value * 2 - Math.round(value * 2)) < 0.000001;
+    }
+
+    private calendarDays(startDate: Date, endDate: Date) {
+        const start = Date.UTC(
+            startDate.getUTCFullYear(),
+            startDate.getUTCMonth(),
+            startDate.getUTCDate(),
+        );
+        const end = Date.UTC(
+            endDate.getUTCFullYear(),
+            endDate.getUTCMonth(),
+            endDate.getUTCDate(),
+        );
+
+        return Math.floor((end - start) / 86400000) + 1;
+    }
+
+    private parseExecutionDate(value: string, fieldName: string) {
+        const parsed = new Date(value);
+
+        if (Number.isNaN(parsed.getTime())) {
+            throw new BadRequestException(`${fieldName} không hợp lệ`);
+        }
+
+        return parsed;
+    }
+
+    private isDateWithin(value: Date, start: Date, end: Date) {
+        const time = value.getTime();
+        return time >= start.getTime() && time <= end.getTime();
+    }
+
+    private async assertExecutionAccess(
+        userId: string | undefined,
+        members: Array<{ expert_id: string }>,
+    ) {
+        if (!userId) {
+            throw new ForbiddenException(
+                'Không xác định được người thực hiện nghiệp vụ đánh giá',
+            );
+        }
+
+        const user = await this.prisma.users.findUnique({
+            where: { id: userId },
+            include: {
+                user_roles: {
+                    include: {
+                        roles: true,
+                    },
+                },
+                expert_profile: {
+                    select: {
+                        id: true,
+                    },
+                },
+            },
+        });
+
+        if (!user) {
+            throw new ForbiddenException(
+                'Không tìm thấy tài khoản người thực hiện',
+            );
+        }
+
+        const roleNames = user.user_roles.map((item) =>
+            this.normalizeText(item.roles.role_name),
+        );
+
+        if (
+            roleNames.some((role) =>
+                ['admin', 'staff', 'coordinator'].includes(role),
+            )
+        ) {
+            return;
+        }
+
+        const expertId = user.expert_profile?.id;
+        const isAssigned = Boolean(
+            expertId &&
+            members.some((member) => member.expert_id === expertId),
+        );
+
+        if (!isAssigned) {
+            throw new ForbiddenException(
+                'Chỉ thành viên được phân công trong đoàn đánh giá mới được thực hiện nghiệp vụ này',
+            );
+        }
+    }
+
+    async start(
+        id: string,
+        dto: StartAuditPlanDto,
+        userId?: string,
+    ) {
+        const plan = await this.prisma.audit_plans.findUnique({
+            where: { id },
+            include: {
+                audit_event: true,
+                audit_team_appointment: {
+                    include: {
+                        members: true,
+                    },
+                },
+            },
+        });
+
+        if (!plan) {
+            throw new NotFoundException(
+                'Không tìm thấy kế hoạch đánh giá',
+            );
+        }
+
+        const appointment = plan.audit_team_appointment;
+
+        if (!appointment || appointment.status !== 'issued') {
+            throw new BadRequestException(
+                'Chỉ được bắt đầu khi quyết định chỉ định đoàn đã được ban hành',
+            );
+        }
+
+        if (!appointment.members.length) {
+            throw new BadRequestException(
+                'Quyết định chỉ định đoàn chưa có thành viên',
+            );
+        }
+
+        await this.assertExecutionAccess(
+            userId,
+            appointment.members,
+        );
+
+        if (plan.status === 'in_progress') {
+            return this.findOne(id);
+        }
+
+        if (plan.status === 'completed') {
+            throw new BadRequestException(
+                'Cuộc đánh giá đã hoàn thành',
+            );
+        }
+
+        if (plan.status === 'cancelled') {
+            throw new BadRequestException(
+                'Không thể bắt đầu kế hoạch đã hủy',
+            );
+        }
+
+        if (
+            !plan.planned_start_date ||
+            !plan.planned_end_date ||
+            !plan.location?.trim() ||
+            !plan.audit_scope?.trim() ||
+            !plan.audit_criteria?.trim() ||
+            !plan.audit_objectives?.trim()
+        ) {
+            throw new BadRequestException(
+                'Kế hoạch chưa hoàn thiện thời gian, địa điểm, phạm vi, tiêu chí hoặc mục tiêu đánh giá',
+            );
+        }
+
+        const leaderCount = appointment.members.filter((member) =>
+            ['team_leader', 'lead_auditor'].includes(
+                this.normalizeText(member.team_role),
+            ),
+        ).length;
+
+        if (leaderCount !== 1) {
+            throw new BadRequestException(
+                'Đoàn đánh giá phải có đúng một trưởng đoàn',
+            );
+        }
+
+        const requiredMandays = this.decimalValue(
+            plan.audit_event?.planned_mandays,
+        );
+        const allocatedMandays = appointment.members
+            .filter((member) =>
+                this.countedMandayRoles.has(
+                    this.normalizeText(member.team_role),
+                ),
+            )
+            .reduce(
+                (sum, member) =>
+                    sum + this.decimalValue(member.planned_mandays),
+                0,
+            );
+
+        if (
+            requiredMandays > 0 &&
+            Math.abs(requiredMandays - allocatedMandays) >= 0.01
+        ) {
+            throw new BadRequestException(
+                `Tổng man-day đã phân ${allocatedMandays.toFixed(1)} MD chưa khớp ${requiredMandays.toFixed(1)} MD của kỳ đánh giá`,
+            );
+        }
+
+        const actualStartDate = dto.actual_start_date
+            ? this.parseExecutionDate(
+                dto.actual_start_date,
+                'Ngày bắt đầu thực tế',
+            )
+            : plan.planned_start_date;
+
+        if (
+            !this.isDateWithin(
+                actualStartDate,
+                plan.planned_start_date,
+                plan.planned_end_date,
+            )
+        ) {
+            throw new BadRequestException(
+                'Ngày bắt đầu thực tế phải nằm trong khoảng thời gian của kế hoạch. Hãy cập nhật kế hoạch trước nếu lịch đánh giá thay đổi.',
+            );
+        }
+
+        const currentFormData = this.parseFormData(plan.form_data);
+        const nextFormData = this.deepMerge(
+            this.isPlainObject(currentFormData) ? currentFormData : {},
+            {
+                execution_control: {
+                    started_at: new Date().toISOString(),
+                    actual_start_date: actualStartDate.toISOString(),
+                    started_by: userId ?? null,
+                    start_note: dto.start_note?.trim() || null,
+                },
+            },
+        );
+
+        await this.prisma.$transaction(async (transaction) => {
+            await transaction.audit_plans.update({
+                where: { id },
+                data: {
+                    status: 'in_progress',
+                    form_data: JSON.stringify(nextFormData),
+                },
+            });
+
+            if (plan.audit_event_id) {
+                await transaction.audit_program_events.update({
+                    where: { id: plan.audit_event_id },
+                    data: {
+                        status: 'in_progress',
+                        actual_start_date: actualStartDate,
+                    },
+                });
+            }
+
+            await transaction.audit_team_members.updateMany({
+                where: {
+                    appointment_id: appointment.id,
+                },
+                data: {
+                    assignment_status: 'in_progress',
+                },
+            });
+        });
+
+        return this.findOne(id);
+    }
+
+    async complete(
+        id: string,
+        dto: CompleteAuditPlanDto,
+        userId?: string,
+    ) {
+        const plan = await this.prisma.audit_plans.findUnique({
+            where: { id },
+            include: {
+                audit_event: true,
+                audit_team_appointment: {
+                    include: {
+                        members: true,
+                    },
+                },
+                reports: {
+                    orderBy: {
+                        version_no: 'desc',
+                    },
+                    include: {
+                        audit_findings: true,
+                    },
+                },
+            },
+        });
+
+        if (!plan) {
+            throw new NotFoundException(
+                'Không tìm thấy kế hoạch đánh giá',
+            );
+        }
+
+        const appointment = plan.audit_team_appointment;
+
+        if (!appointment || appointment.status !== 'issued') {
+            throw new BadRequestException(
+                'Không tìm thấy quyết định chỉ định đoàn đã ban hành',
+            );
+        }
+
+        await this.assertExecutionAccess(
+            userId,
+            appointment.members,
+        );
+
+        if (plan.status === 'completed') {
+            return this.findOne(id);
+        }
+
+        if (plan.status !== 'in_progress') {
+            throw new BadRequestException(
+                'Kế hoạch phải ở trạng thái đang thực hiện trước khi hoàn thành',
+            );
+        }
+
+        const report = plan.reports[0];
+
+        if (!report) {
+            throw new BadRequestException(
+                'Chưa có báo cáo đánh giá',
+            );
+        }
+
+        if (
+            ![
+                'stage1_completed',
+                'ready_for_technical_review',
+                'corrective_action_required',
+            ].includes(report.status)
+        ) {
+            throw new BadRequestException(
+                'Báo cáo phải được nộp trước khi hoàn thành cuộc đánh giá',
+            );
+        }
+
+        const reportFormData = this.parseFormData(report.form_data);
+        const reportWorkflow = this.isPlainObject(reportFormData)
+            ? reportFormData.workflow
+            : null;
+        const submittedAt = this.isPlainObject(reportWorkflow)
+            ? reportWorkflow.submitted_at
+            : null;
+
+        if (!submittedAt) {
+            throw new BadRequestException(
+                'Báo cáo chưa được nộp chính thức. Hãy sử dụng chức năng Nộp báo cáo trước khi hoàn thành cuộc đánh giá',
+            );
+        }
+
+        if (!report.audit_start_date || !report.audit_end_date) {
+            throw new BadRequestException(
+                'Báo cáo chưa có đầy đủ ngày đánh giá thực tế',
+            );
+        }
+
+        const unresolvedNc = report.audit_findings.filter((finding) =>
+            ['major_nc', 'minor_nc'].includes(finding.finding_type) &&
+            finding.status !== 'closed',
+        );
+
+        if (
+            unresolvedNc.length > 0 &&
+            report.status !== 'corrective_action_required'
+        ) {
+            throw new BadRequestException(
+                'Báo cáo có NC chưa đóng nhưng trạng thái chưa chuyển sang chờ hành động khắc phục',
+            );
+        }
+
+        const actualMap = new Map(
+            dto.member_actuals.map((item) => [item.member_id, item]),
+        );
+
+        if (actualMap.size !== dto.member_actuals.length) {
+            throw new BadRequestException(
+                'Danh sách ngày công thực tế có thành viên bị trùng',
+            );
+        }
+
+        const unknownMember = dto.member_actuals.find(
+            (item) =>
+                !appointment.members.some(
+                    (member) => member.id === item.member_id,
+                ),
+        );
+
+        if (unknownMember) {
+            throw new BadRequestException(
+                'Có thành viên thực tế không thuộc quyết định chỉ định đoàn',
+            );
+        }
+
+        const missingMember = appointment.members.find(
+            (member) => !actualMap.has(member.id),
+        );
+
+        if (missingMember) {
+            throw new BadRequestException(
+                'Phải xác nhận ngày tham gia thực tế cho toàn bộ thành viên đoàn',
+            );
+        }
+
+        let totalActualMandays = 0;
+        const normalizedActuals = appointment.members.map((member) => {
+            const actual = actualMap.get(member.id)!;
+            const actualStartDate = this.parseExecutionDate(
+                actual.actual_start_date,
+                'Ngày bắt đầu thực tế của thành viên',
+            );
+            const actualEndDate = this.parseExecutionDate(
+                actual.actual_end_date,
+                'Ngày kết thúc thực tế của thành viên',
+            );
+
+            if (actualStartDate > actualEndDate) {
+                throw new BadRequestException(
+                    'Ngày kết thúc thực tế của thành viên phải sau hoặc bằng ngày bắt đầu',
+                );
+            }
+
+            if (
+                !this.isDateWithin(
+                    actualStartDate,
+                    report.audit_start_date!,
+                    report.audit_end_date!,
+                ) ||
+                !this.isDateWithin(
+                    actualEndDate,
+                    report.audit_start_date!,
+                    report.audit_end_date!,
+                )
+            ) {
+                throw new BadRequestException(
+                    'Ngày tham gia thực tế của thành viên phải nằm trong khoảng ngày đánh giá thực tế của báo cáo',
+                );
+            }
+
+            const actualMandays = Number(actual.actual_mandays);
+
+            if (!Number.isFinite(actualMandays) || actualMandays < 0) {
+                throw new BadRequestException(
+                    'Man-day thực tế của thành viên không hợp lệ',
+                );
+            }
+
+            if (!this.isHalfManday(actualMandays)) {
+                throw new BadRequestException(
+                    'Man-day thực tế chỉ được nhập theo bước 0,5 MD',
+                );
+            }
+
+            const role = this.normalizeText(member.team_role);
+            const isCounted = this.countedMandayRoles.has(role);
+
+            if (!isCounted && actualMandays !== 0) {
+                throw new BadRequestException(
+                    'Quan sát viên, chuyên gia tập sự và vai trò không tính man-day phải có man-day thực tế bằng 0',
+                );
+            }
+
+            const availableDays = this.calendarDays(
+                actualStartDate,
+                actualEndDate,
+            );
+
+            if (actualMandays > availableDays) {
+                throw new BadRequestException(
+                    `Man-day thực tế ${actualMandays.toFixed(1)} MD vượt quá ${availableDays} ngày tham gia của thành viên`,
+                );
+            }
+
+            if (isCounted) {
+                totalActualMandays += actualMandays;
+            }
+
+            return {
+                member,
+                actualStartDate,
+                actualEndDate,
+                actualMandays,
+            };
+        });
+
+        if (totalActualMandays <= 0) {
+            throw new BadRequestException(
+                'Tổng man-day thực tế phải lớn hơn 0',
+            );
+        }
+
+        if (!this.isHalfManday(totalActualMandays)) {
+            throw new BadRequestException(
+                'Tổng man-day thực tế phải theo bước 0,5 MD',
+            );
+        }
+
+        const requiredMandays = this.decimalValue(
+            plan.audit_event?.planned_mandays,
+        );
+        const completionNote = dto.completion_note?.trim() || null;
+
+        if (
+            requiredMandays > 0 &&
+            Math.abs(totalActualMandays - requiredMandays) >= 0.01 &&
+            !completionNote
+        ) {
+            throw new BadRequestException(
+                `Tổng man-day thực tế ${totalActualMandays.toFixed(1)} MD khác ${requiredMandays.toFixed(1)} MD kế hoạch; phải nhập lý do chênh lệch`,
+            );
+        }
+
+        const currentFormData = this.parseFormData(plan.form_data);
+        const nextFormData = this.deepMerge(
+            this.isPlainObject(currentFormData) ? currentFormData : {},
+            {
+                execution_control: {
+                    completed_at: new Date().toISOString(),
+                    completed_by: userId ?? null,
+                    actual_start_date:
+                        report.audit_start_date.toISOString(),
+                    actual_end_date:
+                        report.audit_end_date.toISOString(),
+                    actual_mandays: totalActualMandays,
+                    completion_note: completionNote,
+                    report_id: report.id,
+                },
+            },
+        );
+
+        await this.prisma.$transaction(async (transaction) => {
+            for (const item of normalizedActuals) {
+                await transaction.audit_team_members.update({
+                    where: { id: item.member.id },
+                    data: {
+                        actual_start_date: item.actualStartDate,
+                        actual_end_date: item.actualEndDate,
+                        actual_mandays: item.actualMandays,
+                        assignment_status: 'completed',
+                    },
+                });
+            }
+
+            if (plan.audit_event_id) {
+                await transaction.audit_program_events.update({
+                    where: { id: plan.audit_event_id },
+                    data: {
+                        actual_start_date: report.audit_start_date,
+                        actual_end_date: report.audit_end_date,
+                        actual_mandays: totalActualMandays,
+                        status: 'completed',
+                    },
+                });
+            }
+
+            await transaction.audit_plans.update({
+                where: { id },
+                data: {
+                    status: 'completed',
+                    form_data: JSON.stringify(nextFormData),
+                },
+            });
+        });
+
+        return this.findOne(id);
     }
 
     async remove(id: string) {

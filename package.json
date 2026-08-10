@@ -11,7 +11,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/src/main.js",
+    "start:prod": "node scripts/copy-report-assets.cjs && node dist/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
@@ -20,9 +20,31 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/p09-smoke-test.ps1",
+    "test:regression": "node scripts/tests/run-current-regressions-patch36c0.mjs",
     "prisma:validate": "prisma validate",
     "db:seed": "prisma db seed",
-    "db:migrate:deploy": "prisma migrate deploy"
+    "db:migrate:deploy": "npm run db:migrate:retry && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:contract",
+    "postbuild": "node scripts/copy-report-assets.cjs",
+    "prisma:generate": "prisma generate && node scripts/verify-prisma-client-patch35a4.cjs",
+    "prebuild": "node scripts/runtime-compatibility-check-patch36c0.cjs && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs",
+    "prestart:dev": "node scripts/runtime-compatibility-check-patch36c0.cjs && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:preflight && npm run db:contract",
+    "prisma:verify": "node scripts/verify-prisma-client-patch35a4.cjs",
+    "runtime:check": "node scripts/runtime-compatibility-check-patch36c0.cjs",
+    "runtime:check:strict": "node scripts/runtime-compatibility-check-patch36c0.cjs --strict",
+    "db:doctor": "node scripts/database-schema-contract-patch36c1.cjs",
+    "db:repair": "node scripts/repair-critical-schema-patch36c0.cjs",
+    "db:stabilize": "node scripts/database-stabilize-patch36c1a.cjs",
+    "env:lan": "node scripts/configure-lan-patch36c0.cjs",
+    "stabilize": "npm run stabilize:commercial",
+    "prestart:prod": "node scripts/runtime-compatibility-check-patch36c0.cjs --strict && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:preflight && npm run db:contract && npm run db:runtime-permissions -- --strict",
+    "db:preflight": "node scripts/database-preflight-patch36c0a.cjs",
+    "db:recover:local": "node scripts/database-preflight-patch36c0a.cjs --auto-start-local-sql",
+    "db:adopt-existing": "node scripts/adopt-existing-database-patch36c1a.cjs",
+    "db:migrate:retry": "node scripts/migrate-with-retry-patch36c1a.cjs",
+    "db:contract": "node scripts/database-schema-contract-patch36c1.cjs",
+    "stabilize:commercial": "node scripts/commercial-stabilize-patch36c1a.cjs",
+    "db:migration-permissions": "node scripts/migration-credentials-preflight-patch36c1a.cjs",
+    "db:runtime-permissions": "node scripts/runtime-database-permissions-patch36c1a.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -44,7 +66,8 @@
     "passport-jwt": "^4.0.1",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -92,5 +115,8 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0"
   }
 }

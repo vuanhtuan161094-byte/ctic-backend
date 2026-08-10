@@ -28,7 +28,7 @@ export class CreateCertificationDecisionDto {
     technical_review_id!: string;
 
     @ApiProperty({
-        example: '01/QD-CTIC/2026',
+        example: '01/QD-CB/2026',
         description: 'Số quyết định chứng nhận duy nhất',
         maxLength: 50,
     })

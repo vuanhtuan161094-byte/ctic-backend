@@ -7,6 +7,8 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditTeamCompetencyService } from './audit-team-competency.service';
+import { AuditMandayAllocationService } from './audit-manday-allocation.service';
+import { countsTowardAuditMandays } from './integrated-manday-allocation.engine';
 
 import {
     AuditTeamMemberDto,
@@ -27,6 +29,11 @@ interface PlanDateRange {
 
     planned_end_date:
     Date | null;
+
+    audit_event?: {
+        planned_mandays:
+        unknown;
+    } | null;
 }
 interface ProjectScopeMemberInput {
     team_role: string;
@@ -39,10 +46,25 @@ interface ProjectScopeMemberInput {
 interface MemberDateInput {
     expert_id: string;
     team_role: string;
-    planned_start_date:
-    string | Date;
-    planned_end_date:
-    string | Date;
+    planned_start_date?: string | Date;
+    planned_end_date?: string | Date;
+    planned_mandays?: number | string | null;
+}
+
+interface ProgramAssignmentMemberInput {
+    member_id?: string;
+    expert_id: string;
+    team_role: string;
+    scopes: Array<{
+        project_scope_id?: string | null;
+    }>;
+}
+
+interface ApprovedProjectProgram {
+    key: string;
+    standard_code: string;
+    management_system: string;
+    project_scope_ids: string[];
 }
 
 @Injectable()
@@ -56,6 +78,14 @@ export class AuditTeamAppointmentsService {
                         project_code: true,
                         standard_name: true,
                         status: true,
+                    },
+                },
+
+                audit_event: {
+                    select: {
+                        id: true,
+                        event_type: true,
+                        planned_mandays: true,
                     },
                 },
             },
@@ -131,6 +161,9 @@ export class AuditTeamAppointmentsService {
 
         private readonly competencyService:
             AuditTeamCompetencyService,
+
+        private readonly mandayAllocationService:
+            AuditMandayAllocationService,
     ) { }
     private parseDate(
         value: string | Date,
@@ -228,6 +261,12 @@ export class AuditTeamAppointmentsService {
                     planned_start_date: true,
                     planned_end_date: true,
                     status: true,
+                    audit_event: {
+                        select: {
+                            event_type: true,
+                            planned_mandays: true,
+                        },
+                    },
                 },
             });
 
@@ -238,6 +277,790 @@ export class AuditTeamAppointmentsService {
         }
 
         return plan;
+    }
+
+
+    private readonly projectTeamAuditType =
+        'project_team';
+
+
+    private isStage1Plan(
+        plan: { audit_type?: string | null; audit_event?: { event_type?: string | null } | null },
+    ): boolean {
+        const value = `${plan.audit_type ?? ''} ${plan.audit_event?.event_type ?? ''}`.toLowerCase();
+        return /stage\s*1|stage1|giai[_\s-]*doan[_\s-]*1|gđ1/.test(value);
+    }
+
+    private countsTowardMandays(teamRole?: string | null): boolean {
+        return countsTowardAuditMandays(teamRole ?? '');
+    }
+
+    private async validateStage1TeamMembership(
+        projectId: string,
+        members: Array<{ expert_id: string; team_role: string }>,
+    ): Promise<void> {
+        const projectAppointment = await this.prisma.audit_team_appointments.findFirst({
+            where: {
+                status: 'issued',
+                audit_plans: {
+                    project_id: projectId,
+                    audit_type: this.projectTeamAuditType,
+                },
+            },
+            include: { members: true },
+            orderBy: { approved_at: 'desc' },
+        });
+        if (!projectAppointment) {
+            throw new BadRequestException(
+                'Hồ sơ chưa có quyết định chỉ định đoàn cấp hồ sơ đã ban hành',
+            );
+        }
+        const allowedExpertIds = new Set(projectAppointment.members.map((member) => member.expert_id));
+        const invalid = members.find((member) => !allowedExpertIds.has(member.expert_id));
+        if (invalid) {
+            throw new BadRequestException(
+                'Có chuyên gia Giai đoạn 1 không thuộc đoàn đã được chỉ định ở cấp hồ sơ',
+            );
+        }
+        const leaders = members.filter((member) =>
+            this.normalizeCompetencyValue(member.team_role) === 'TEAM_LEADER',
+        );
+        if (leaders.length !== 1) {
+            throw new BadRequestException('Giai đoạn 1 phải có đúng 01 trưởng đoàn đánh giá');
+        }
+    }
+
+    private normalizeCompetencyValue(
+        value?: string | null,
+    ): string {
+        return value
+            ?.trim()
+            .toUpperCase() ?? '';
+    }
+
+    private normalizeStandardCode(
+        value?: string | null,
+    ): string {
+        return this.normalizeCompetencyValue(value)
+            .replace(/[^A-Z0-9]/g, '');
+    }
+
+    private projectProgramKey(
+        managementSystem?: string | null,
+        standardCode?: string | null,
+    ): string {
+        return `${this.normalizeCompetencyValue(managementSystem)}::${this.normalizeStandardCode(standardCode)}`;
+    }
+
+    private acceptedProgramCompetencyRoles(
+        teamRole: string,
+    ): string[] {
+        const role = this.normalizeCompetencyValue(teamRole);
+        const roleMap: Record<string, string[]> = {
+            TEAM_LEADER: ['LEAD_AUDITOR', 'AUDITOR'],
+            AUDITOR: ['AUDITOR', 'LEAD_AUDITOR'],
+            TECHNICAL_EXPERT: ['TECHNICAL_EXPERT'],
+            WITNESS_EVALUATOR: ['WITNESS_EVALUATOR', 'LEAD_AUDITOR', 'AUDITOR'],
+        };
+        return roleMap[role] ?? [];
+    }
+
+    private async getApprovedProjectPrograms(
+        projectId: string,
+    ): Promise<ApprovedProjectProgram[]> {
+        const scopes = await this.prisma.certification_project_scopes.findMany({
+            where: {
+                project_id: projectId,
+                status: 'APPROVED',
+            },
+            select: {
+                id: true,
+                standard_code: true,
+                management_system: true,
+            },
+            orderBy: {
+                created_at: 'asc',
+            },
+        });
+
+        if (!scopes.length) {
+            throw new BadRequestException(
+                'Hồ sơ chưa có tiêu chuẩn/chương trình chứng nhận được phê duyệt',
+            );
+        }
+
+        const programMap = new Map<string, ApprovedProjectProgram>();
+        for (const scope of scopes) {
+            const key = this.projectProgramKey(
+                scope.management_system,
+                scope.standard_code,
+            );
+            const current = programMap.get(key);
+            if (current) {
+                current.project_scope_ids.push(scope.id);
+                continue;
+            }
+            programMap.set(key, {
+                key,
+                standard_code: scope.standard_code,
+                management_system: scope.management_system,
+                project_scope_ids: [scope.id],
+            });
+        }
+        return [...programMap.values()];
+    }
+
+    private async evaluatePlanProgramAllocation(
+        projectId: string,
+        competenceDate: Date,
+        members: ProgramAssignmentMemberInput[],
+        updateMemberStatus = false,
+    ) {
+        const programs = await this.getApprovedProjectPrograms(projectId);
+        const projectAppointment = await this.prisma.audit_team_appointments.findFirst({
+            where: {
+                status: 'issued',
+                audit_plans: {
+                    project_id: projectId,
+                    audit_type: this.projectTeamAuditType,
+                },
+            },
+            include: {
+                members: {
+                    select: {
+                        expert_id: true,
+                        team_role: true,
+                    },
+                },
+            },
+            orderBy: {
+                approved_at: 'desc',
+            },
+        });
+
+        if (!projectAppointment) {
+            throw new BadRequestException(
+                'Hồ sơ chưa có quyết định chỉ định đoàn cấp hồ sơ đã ban hành',
+            );
+        }
+
+        const projectTeamExpertIds = new Set(
+            projectAppointment.members.map((member) => member.expert_id),
+        );
+        const expertIds = Array.from(new Set(members.map((member) => member.expert_id)));
+        const competencies = await this.prisma.expert_competencies.findMany({
+            where: {
+                expert_id: { in: expertIds },
+                approval_status: 'APPROVED',
+                effective_date: { lte: competenceDate },
+                OR: [
+                    { expiry_date: null },
+                    { expiry_date: { gte: competenceDate } },
+                ],
+            },
+        });
+
+        const programByScopeId = new Map<string, ApprovedProjectProgram>();
+        for (const program of programs) {
+            for (const scopeId of program.project_scope_ids) {
+                programByScopeId.set(scopeId, program);
+            }
+        }
+
+        const coveredProgramKeys = new Set<string>();
+        const errors: string[] = [];
+        let leaderQualified = false;
+        const memberResults: Array<{
+            member_id?: string;
+            expert_id: string;
+            status: string;
+            note: string;
+            qualified_program_keys: string[];
+        }> = [];
+
+        for (const member of members) {
+            if (!projectTeamExpertIds.has(member.expert_id)) {
+                errors.push('Có chuyên gia không thuộc đoàn đã được chỉ định ở cấp hồ sơ');
+                memberResults.push({
+                    member_id: member.member_id,
+                    expert_id: member.expert_id,
+                    status: 'not_qualified',
+                    note: 'Chuyên gia không thuộc quyết định chỉ định đoàn cấp hồ sơ',
+                    qualified_program_keys: [],
+                });
+                continue;
+            }
+
+            const acceptedRoles = this.acceptedProgramCompetencyRoles(member.team_role);
+            if (!acceptedRoles.length) {
+                memberResults.push({
+                    member_id: member.member_id,
+                    expert_id: member.expert_id,
+                    status: 'not_required',
+                    note: 'Vai trò hỗ trợ, không yêu cầu phân công chương trình đánh giá',
+                    qualified_program_keys: [],
+                });
+                continue;
+            }
+
+            const assignedPrograms = Array.from(
+                new Map(
+                    member.scopes
+                        .map((scope) => scope.project_scope_id ? programByScopeId.get(scope.project_scope_id) : undefined)
+                        .filter((program): program is ApprovedProjectProgram => Boolean(program))
+                        .map((program) => [program.key, program]),
+                ).values(),
+            );
+
+            if (!assignedPrograms.length) {
+                errors.push('Có thành viên chưa được phân công chương trình/tiêu chuẩn đánh giá');
+                memberResults.push({
+                    member_id: member.member_id,
+                    expert_id: member.expert_id,
+                    status: 'not_assigned',
+                    note: 'Chưa được phân công chương trình/tiêu chuẩn đánh giá',
+                    qualified_program_keys: [],
+                });
+                continue;
+            }
+
+            const expertCompetencies = competencies.filter(
+                (competency) => competency.expert_id === member.expert_id,
+            );
+            const qualifiedProgramKeys: string[] = [];
+            const failedPrograms: string[] = [];
+
+            for (const program of assignedPrograms) {
+                const matched = expertCompetencies.find((competency) =>
+                    acceptedRoles.includes(this.normalizeCompetencyValue(competency.competency_role)) &&
+                    this.normalizeCompetencyValue(competency.management_system) ===
+                        this.normalizeCompetencyValue(program.management_system) &&
+                    this.normalizeStandardCode(competency.standard_code) ===
+                        this.normalizeStandardCode(program.standard_code),
+                );
+
+                if (matched) {
+                    qualifiedProgramKeys.push(program.key);
+                    if (this.countsTowardMandays(member.team_role)) {
+                        coveredProgramKeys.add(program.key);
+                    }
+                    if (
+                        this.normalizeCompetencyValue(member.team_role) === 'TEAM_LEADER' &&
+                        this.normalizeCompetencyValue(matched.competency_role) === 'LEAD_AUDITOR'
+                    ) {
+                        leaderQualified = true;
+                    }
+                } else {
+                    failedPrograms.push(program.standard_code);
+                }
+            }
+
+            const status = failedPrograms.length
+                ? qualifiedProgramKeys.length ? 'partially_qualified' : 'not_qualified'
+                : 'qualified';
+            const note = failedPrograms.length
+                ? `Chưa có năng lực chương trình phù hợp: ${failedPrograms.join('; ')}`
+                : `Đủ năng lực cho ${qualifiedProgramKeys.length} chương trình/tiêu chuẩn được giao`;
+
+            if (failedPrograms.length) {
+                errors.push(note);
+            }
+            memberResults.push({
+                member_id: member.member_id,
+                expert_id: member.expert_id,
+                status,
+                note,
+                qualified_program_keys: qualifiedProgramKeys,
+            });
+        }
+
+        const missingPrograms = programs.filter(
+            (program) => !coveredProgramKeys.has(program.key),
+        );
+        if (missingPrograms.length) {
+            errors.push(
+                `Chưa phân công đủ chương trình: ${missingPrograms.map((program) => program.standard_code).join('; ')}`,
+            );
+        }
+        if (!leaderQualified) {
+            errors.push(
+                'Trưởng đoàn phải có năng lực LEAD_AUDITOR phù hợp với ít nhất một chương trình/tiêu chuẩn được giao',
+            );
+        }
+
+        if (updateMemberStatus) {
+            await Promise.all(
+                memberResults
+                    .filter((result) => result.member_id)
+                    .map((result) => this.prisma.audit_team_members.update({
+                        where: { id: result.member_id! },
+                        data: {
+                            competency_status: result.status,
+                            competency_note: result.note,
+                        },
+                    })),
+            );
+        }
+
+        if (errors.length) {
+            throw new BadRequestException(Array.from(new Set(errors)).join('. '));
+        }
+
+        return {
+            validation_level: 'program',
+            is_sufficient: true,
+            leader_qualified: leaderQualified,
+            required_programs: programs.length,
+            covered_programs: coveredProgramKeys.size,
+            missing_programs: [],
+            members: memberResults,
+        };
+    }
+
+    private async getProjectOrThrow(
+        projectId: string,
+    ) {
+        const project =
+            await this.prisma.certification_projects.findUnique({
+                where: {
+                    id:
+                        projectId,
+                },
+
+                include: {
+                    certification_applications: {
+                        include: {
+                            customers:
+                                true,
+                        },
+                    },
+                },
+            });
+
+        if (!project) {
+            throw new NotFoundException(
+                'Không tìm thấy hồ sơ chứng nhận',
+            );
+        }
+
+        return project;
+    }
+
+    private async findProjectContextPlan(
+        projectId: string,
+    ) {
+        return this.prisma.audit_plans.findFirst({
+            where: {
+                project_id:
+                    projectId,
+
+                audit_type:
+                    this.projectTeamAuditType,
+            },
+
+            orderBy: {
+                created_at:
+                    'asc',
+            },
+
+            include: {
+                certification_projects: {
+                    include: {
+                        certification_applications: {
+                            include: {
+                                customers:
+                                    true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    }
+
+    async ensureProjectContext(
+        projectId: string,
+    ) {
+        const existing =
+            await this.findProjectContextPlan(
+                projectId,
+            );
+
+        if (existing) {
+            return existing;
+        }
+
+        const project =
+            await this.getProjectOrThrow(
+                projectId,
+            );
+
+        const application =
+            project.certification_applications;
+
+        const customer =
+            application.customers;
+
+        const requestedStart =
+            application.stage1_requested_date ??
+            application.requested_audit_date ??
+            project.created_at;
+
+        const requestedEnd =
+            application.stage2_requested_date ??
+            requestedStart;
+
+        const startDate =
+            this.parseDate(
+                requestedStart,
+                'Ngày bắt đầu dự kiến',
+            );
+
+        let endDate =
+            this.parseDate(
+                requestedEnd,
+                'Ngày kết thúc dự kiến',
+            );
+
+        if (
+            endDate <
+            startDate
+        ) {
+            endDate =
+                startDate;
+        }
+
+        const technicalPlanCode =
+            `DOSSIER-${project.project_code}`.slice(
+                0,
+                50,
+            );
+
+        const existingCode =
+            await this.prisma.audit_plans.findUnique({
+                where: {
+                    plan_code:
+                        technicalPlanCode,
+                },
+            });
+
+        if (existingCode) {
+            if (
+                existingCode.project_id ===
+                projectId &&
+                existingCode.audit_type ===
+                this.projectTeamAuditType
+            ) {
+                return existingCode;
+            }
+
+            throw new ConflictException(
+                'Mã điều phối hồ sơ đã được sử dụng bởi một bản ghi khác',
+            );
+        }
+
+        return this.prisma.audit_plans.create({
+            data: {
+                project_id:
+                    projectId,
+
+                plan_code:
+                    technicalPlanCode,
+
+                audit_type:
+                    this.projectTeamAuditType,
+
+                planned_start_date:
+                    startDate,
+
+                planned_end_date:
+                    endDate,
+
+                location:
+                    application.headquarters_address ??
+                    customer.address,
+
+                audit_scope:
+                    application.certification_scope,
+
+                audit_criteria:
+                    project.standard_name ??
+                    application.standard_name,
+
+                audit_objectives:
+                    'Chỉ định đoàn đánh giá cho hồ sơ chứng nhận trước khi lập chương trình đánh giá.',
+
+                status:
+                    'draft',
+
+                form_data:
+                    JSON.stringify({
+                        source:
+                            'project_team_assignment_context',
+
+                        project_code:
+                            project.project_code,
+
+                        hidden_from_audit_plan_workflow:
+                            true,
+                    }),
+            },
+
+            include: {
+                certification_projects: {
+                    include: {
+                        certification_applications: {
+                            include: {
+                                customers:
+                                    true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    }
+
+    async findByProject(
+        projectId: string,
+    ) {
+        await this.getProjectOrThrow(
+            projectId,
+        );
+
+        const appointment =
+            await this.prisma.audit_team_appointments.findFirst({
+                where: {
+                    audit_plans: {
+                        project_id:
+                            projectId,
+
+                        audit_type:
+                            this.projectTeamAuditType,
+                    },
+
+                    status: {
+                        not:
+                            'cancelled',
+                    },
+                },
+
+                orderBy: {
+                    created_at:
+                        'desc',
+                },
+
+                include:
+                    this.detailInclude,
+            });
+
+        if (!appointment) {
+            throw new NotFoundException(
+                'Hồ sơ chưa có quyết định chỉ định đoàn đánh giá',
+            );
+        }
+
+        return appointment;
+    }
+
+    private async getAvailableProjectScopesByProjectId(
+        projectId: string,
+    ) {
+        await this.getProjectOrThrow(
+            projectId,
+        );
+
+        const scopes =
+            await this.prisma.certification_project_scopes.findMany({
+                where: {
+                    project_id:
+                        projectId,
+
+                    status:
+                        'APPROVED',
+                },
+
+                orderBy: {
+                    created_at:
+                        'asc',
+                },
+
+                include: {
+                    isic_nace_mapping: {
+                        include: {
+                            source_code:
+                                true,
+
+                            target_code:
+                                true,
+                        },
+                    },
+
+                    nace_iaf_mapping: {
+                        include: {
+                            nace_code:
+                                true,
+
+                            iaf_scope:
+                                true,
+                        },
+                    },
+                },
+            });
+
+        return scopes.map(
+            (scope) => ({
+                project_scope_id:
+                    scope.id,
+
+                management_system:
+                    scope.management_system,
+
+                standard_code:
+                    scope.standard_code,
+
+                certification_scope:
+                    scope.scope_description,
+
+                isic: {
+                    revision:
+                        scope
+                            .isic_nace_mapping
+                            .source_code
+                            .revision,
+
+                    code:
+                        scope
+                            .isic_nace_mapping
+                            .source_code
+                            .code,
+
+                    name:
+                        scope
+                            .isic_nace_mapping
+                            .source_code
+                            .title_vi ??
+                        scope
+                            .isic_nace_mapping
+                            .source_code
+                            .title_en,
+                },
+
+                nace: {
+                    revision:
+                        scope
+                            .isic_nace_mapping
+                            .target_code
+                            .revision,
+
+                    code:
+                        scope
+                            .isic_nace_mapping
+                            .target_code
+                            .code,
+
+                    name:
+                        scope
+                            .isic_nace_mapping
+                            .target_code
+                            .title_vi ??
+                        scope
+                            .isic_nace_mapping
+                            .target_code
+                            .title_en,
+                },
+
+                iaf: {
+                    code:
+                        scope
+                            .nace_iaf_mapping
+                            .iaf_scope
+                            .iaf_code,
+
+                    name:
+                        scope
+                            .nace_iaf_mapping
+                            .iaf_scope
+                            .iaf_name,
+                },
+            }),
+        );
+    }
+
+    async getAvailableProjectScopesByProject(
+        projectId: string,
+    ) {
+        return this.getAvailableProjectScopesByProjectId(
+            projectId,
+        );
+    }
+
+    async getProjectExpertSuitability(
+        projectId: string,
+    ) {
+        await this.getProjectOrThrow(projectId);
+
+        const [scopeSuitability, programs] = await Promise.all([
+            this.competencyService.getProjectExpertSuitability(projectId),
+            this.getApprovedProjectPrograms(projectId),
+        ]);
+        const expertIds = scopeSuitability.experts.map((expert) => expert.expert_id);
+        const today = new Date();
+        const competencies = await this.prisma.expert_competencies.findMany({
+            where: {
+                expert_id: { in: expertIds },
+                approval_status: 'APPROVED',
+                effective_date: { lte: today },
+                OR: [
+                    { expiry_date: null },
+                    { expiry_date: { gte: today } },
+                ],
+            },
+        });
+
+        return {
+            ...scopeSuitability,
+            required_programs: programs.map((program) => ({
+                key: program.key,
+                standard_code: program.standard_code,
+                management_system: program.management_system,
+                project_scope_ids: program.project_scope_ids,
+            })),
+            experts: scopeSuitability.experts.map((expert) => {
+                const expertCompetencies = competencies.filter(
+                    (competency) => competency.expert_id === expert.expert_id,
+                );
+                const programCapabilities = programs.flatMap((program) => {
+                    const matchingCompetencies = expertCompetencies.filter((competency) =>
+                        this.normalizeCompetencyValue(competency.management_system) ===
+                            this.normalizeCompetencyValue(program.management_system) &&
+                        this.normalizeStandardCode(competency.standard_code) ===
+                            this.normalizeStandardCode(program.standard_code),
+                    );
+                    if (!matchingCompetencies.length) return [];
+                    const competencyRoles = Array.from(new Set(
+                        matchingCompetencies.map((competency) =>
+                            this.normalizeCompetencyValue(competency.competency_role),
+                        ),
+                    ));
+                    return [{
+                        key: program.key,
+                        standard_code: program.standard_code,
+                        management_system: program.management_system,
+                        project_scope_ids: program.project_scope_ids,
+                        competency_roles: competencyRoles,
+                        can_lead: competencyRoles.includes('LEAD_AUDITOR'),
+                    }];
+                });
+                return {
+                    ...expert,
+                    program_capabilities: programCapabilities,
+                    covered_program_codes: programCapabilities.map(
+                        (program) => program.standard_code,
+                    ),
+                };
+            }),
+        };
     }
 
     private async getRawAppointment(
@@ -260,6 +1083,132 @@ export class AuditTeamAppointmentsService {
         }
 
         return appointment;
+    }
+
+    private formatDateOnly(
+        value: Date,
+    ) {
+        return `${String(value.getUTCDate()).padStart(2, '0')}/${String(value.getUTCMonth() + 1).padStart(2, '0')}/${value.getUTCFullYear()}`;
+    }
+
+    private inclusiveCalendarDays(
+        startDate: Date,
+        endDate: Date,
+    ) {
+        const millisecondsPerDay =
+            24 * 60 * 60 * 1000;
+
+        return Math.floor(
+            (endDate.getTime() - startDate.getTime()) /
+            millisecondsPerDay,
+        ) + 1;
+    }
+
+    private numericValue(
+        value: unknown,
+    ): number | null {
+        if (
+            value === null ||
+            value === undefined ||
+            value === ''
+        ) {
+            return null;
+        }
+
+        const result = Number(value);
+        return Number.isFinite(result)
+            ? result
+            : null;
+    }
+
+    private isHalfDayIncrement(
+        value: number,
+    ) {
+        return Math.abs(value * 2 - Math.round(value * 2)) < 0.0001;
+    }
+
+    private requiredPlanMandays(
+        plan: PlanDateRange,
+    ) {
+        return this.numericValue(
+            plan.audit_event?.planned_mandays,
+        );
+    }
+
+    private validateMandayAllocation(
+        members: MemberDateInput[],
+        plan: PlanDateRange & { audit_type?: string | null },
+        strictTotal = false,
+    ) {
+        const isProjectContext =
+            plan.audit_type
+                ?.trim()
+                .toLowerCase() ===
+            this.projectTeamAuditType;
+
+        if (isProjectContext) {
+            return;
+        }
+
+        let allocatedMandays = 0;
+
+        for (const member of members) {
+            const countsTowardMandays = this.countsTowardMandays(member.team_role);
+            const enteredValue = this.numericValue(member.planned_mandays);
+
+            if (!countsTowardMandays) {
+                if ((enteredValue ?? 0) > 0.001) {
+                    throw new BadRequestException(
+                        'Chuyên gia kỹ thuật, quan sát viên, chuyên gia tập sự và vai trò hỗ trợ không được tính man-day',
+                    );
+                }
+                continue;
+            }
+
+            if (!member.planned_start_date || !member.planned_end_date) {
+                continue;
+            }
+
+            const startDate = this.parseDate(
+                member.planned_start_date,
+                'Ngày bắt đầu phân công',
+            );
+            const endDate = this.parseDate(
+                member.planned_end_date,
+                'Ngày kết thúc phân công',
+            );
+            const maximumMandays = this.inclusiveCalendarDays(startDate, endDate);
+            const enteredMandays = enteredValue ?? maximumMandays;
+
+            if (enteredMandays < 0) {
+                throw new BadRequestException('Ngày công không được nhỏ hơn 0');
+            }
+            if (!this.isHalfDayIncrement(enteredMandays)) {
+                throw new BadRequestException('Ngày công phải được nhập theo bước 0,5 MD');
+            }
+            if (enteredMandays > maximumMandays) {
+                throw new BadRequestException(
+                    `Ngày công ${enteredMandays} MD vượt quá ${maximumMandays} ngày tham gia đã chọn`,
+                );
+            }
+            allocatedMandays += enteredMandays;
+        }
+
+        const requiredMandays = this.requiredPlanMandays(plan);
+        if (strictTotal && requiredMandays === null) {
+            throw new BadRequestException(
+                'Chưa thể ban hành: kỳ đánh giá chưa có man-day được phê duyệt trong chương trình',
+            );
+        }
+        if (
+            strictTotal &&
+            requiredMandays !== null &&
+            allocatedMandays + 0.001 < requiredMandays
+        ) {
+            throw new BadRequestException(
+                `Chưa thể ban hành: kế hoạch yêu cầu tối thiểu ${requiredMandays} MD nhưng đoàn mới được bố trí ${allocatedMandays} MD`,
+            );
+        }
     }
 
     private async findConflict(
@@ -296,6 +1245,13 @@ export class AuditTeamAppointmentsService {
                         ],
                     },
 
+                    audit_plans: {
+                        audit_type: {
+                            not:
+                                this.projectTeamAuditType,
+                        },
+                    },
+
                     ...(excludeAppointmentId
                         ? {
                             id: {
@@ -329,8 +1285,9 @@ export class AuditTeamAppointmentsService {
 
     private async validateMembers(
         members: MemberDateInput[],
-        plan: PlanDateRange,
+        plan: PlanDateRange & { audit_type?: string | null },
         excludeAppointmentId?: string,
+        strictMandays = false,
     ) {
         const expertIds =
             members.map(
@@ -383,6 +1340,16 @@ export class AuditTeamAppointmentsService {
             );
         }
 
+        const expertNameMap =
+            new Map(
+                experts.map(
+                    (expert) => [
+                        expert.id,
+                        expert.full_name,
+                    ],
+                ),
+            );
+
         const inactiveExpert =
             experts.find(
                 (expert) =>
@@ -396,6 +1363,18 @@ export class AuditTeamAppointmentsService {
             throw new BadRequestException(
                 `Chuyên gia ${inactiveExpert.full_name} không ở trạng thái hoạt động`,
             );
+        }
+
+        const isProjectContext =
+            plan.audit_type
+                ?.trim()
+                .toLowerCase() ===
+            this.projectTeamAuditType;
+
+        // Chỉ định đoàn cấp hồ sơ chỉ xác định thành phần đoàn cho cả chu kỳ.
+        // Ngày tham gia và ngày công được phân bổ tại từng kế hoạch đánh giá PLAN-...
+        if (isProjectContext) {
+            return;
         }
 
         const planStart =
@@ -412,12 +1391,18 @@ export class AuditTeamAppointmentsService {
                     plan.planned_end_date,
                     'Ngày kết thúc kế hoạch',
                 )
-                : null;
+                : planStart;
 
-        for (
-            const member
-            of members
-        ) {
+        for (const member of members) {
+            if (
+                !member.planned_start_date ||
+                !member.planned_end_date
+            ) {
+                throw new BadRequestException(
+                    'Phải chọn thời gian tham gia của chuyên gia cho kế hoạch đánh giá',
+                );
+            }
+
             const startDate =
                 this.parseDate(
                     member.planned_start_date,
@@ -445,7 +1430,7 @@ export class AuditTeamAppointmentsService {
                 planStart
             ) {
                 throw new BadRequestException(
-                    'Ngày bắt đầu phân công không được trước ngày bắt đầu kế hoạch',
+                    `Phân công của ${expertNameMap.get(member.expert_id) ?? 'chuyên gia'} bắt đầu ${this.formatDateOnly(startDate)}, sớm hơn ngày bắt đầu kế hoạch ${plan.plan_code ?? plan.id} là ${this.formatDateOnly(planStart)}. Hãy chọn ngày trong khoảng ${this.formatDateOnly(planStart)}–${this.formatDateOnly(planEnd ?? planStart)}.`,
                 );
             }
 
@@ -455,7 +1440,7 @@ export class AuditTeamAppointmentsService {
                 planEnd
             ) {
                 throw new BadRequestException(
-                    'Ngày kết thúc phân công không được sau ngày kết thúc kế hoạch',
+                    `Phân công của ${expertNameMap.get(member.expert_id) ?? 'chuyên gia'} kết thúc ${this.formatDateOnly(endDate)}, sau ngày kết thúc kế hoạch ${plan.plan_code ?? plan.id} là ${this.formatDateOnly(planEnd)}. Hãy chọn ngày trong khoảng ${this.formatDateOnly(planStart ?? planEnd)}–${this.formatDateOnly(planEnd)}.`,
                 );
             }
 
@@ -469,11 +1454,102 @@ export class AuditTeamAppointmentsService {
 
             if (conflict) {
                 throw new ConflictException(
-                    `Chuyên gia ${conflict.experts.full_name} đã được phân công trong kế hoạch ${conflict.audit_team_appointments.audit_plans.plan_code ?? conflict.audit_team_appointments.audit_plans.id}`,
+                    `Chuyên gia ${conflict.experts.full_name} đã có lịch tại ${conflict.audit_team_appointments.audit_plans.plan_code ?? conflict.audit_team_appointments.audit_plans.id} trong khoảng ${this.formatDateOnly(this.parseDate(conflict.planned_start_date, 'Ngày bắt đầu lịch trùng'))}–${this.formatDateOnly(this.parseDate(conflict.planned_end_date, 'Ngày kết thúc lịch trùng'))}`,
                 );
             }
         }
+
+        this.validateMandayAllocation(
+            members,
+            plan,
+            strictMandays,
+        );
     }
+    private async validateDraftCompetencyCoverage(
+        projectId: string,
+        members: AuditTeamMemberDto[],
+    ): Promise<void> {
+        const suitability =
+            await this.competencyService.getProjectExpertSuitability(
+                projectId,
+            );
+
+        const expertMap = new Map(
+            suitability.experts.map(
+                (expert) => [expert.expert_id, expert],
+            ),
+        );
+
+        const coveredScopeIds = new Set<string>();
+        const leader = members.find(
+            (member) =>
+                member.team_role?.trim().toUpperCase() ===
+                'TEAM_LEADER',
+        );
+
+        if (!leader) {
+            throw new BadRequestException(
+                'Đoàn đánh giá phải có đúng một trưởng đoàn',
+            );
+        }
+
+        const leaderSuitability = expertMap.get(
+            leader.expert_id,
+        );
+
+        if (!leaderSuitability?.can_lead) {
+            throw new BadRequestException(
+                'Trưởng đoàn phải có năng lực LEAD_AUDITOR phù hợp với ít nhất một tiêu chuẩn/phạm vi của hồ sơ',
+            );
+        }
+
+        for (const member of members) {
+            const expertSuitability = expertMap.get(
+                member.expert_id,
+            );
+            const assignedScopeIds =
+                member.scopes
+                    ?.map((scope) => scope.project_scope_id)
+                    .filter((scopeId): scopeId is string => Boolean(scopeId)) ?? [];
+
+            if (!assignedScopeIds.length) {
+                continue;
+            }
+
+            if (!expertSuitability?.is_relevant) {
+                throw new BadRequestException(
+                    'Có thành viên được giao phạm vi nhưng không có năng lực phù hợp với hồ sơ',
+                );
+            }
+
+            const unsupportedScopeIds = assignedScopeIds.filter(
+                (scopeId) =>
+                    !expertSuitability.covered_scope_ids.includes(
+                        scopeId,
+                    ),
+            );
+
+            if (unsupportedScopeIds.length) {
+                throw new BadRequestException(
+                    `Phạm vi giao cho chuyên gia ${expertSuitability.full_name} không khớp năng lực đã được phê duyệt`,
+                );
+            }
+
+            assignedScopeIds.forEach(
+                (scopeId) => coveredScopeIds.add(scopeId),
+            );
+        }
+
+        if (
+            suitability.required_scope_count > 0 &&
+            coveredScopeIds.size < suitability.required_scope_count
+        ) {
+            throw new BadRequestException(
+                `Tổng thể đoàn mới bao phủ ${coveredScopeIds.size}/${suitability.required_scope_count} phạm vi đã duyệt`,
+            );
+        }
+    }
+
     private async resolveMemberScopes(
         members: AuditTeamMemberDto[],
         projectId: string,
@@ -621,8 +1697,8 @@ export class AuditTeamAppointmentsService {
         projectId: string,
         members: ProjectScopeMemberInput[],
     ) {
-        const approvedScopeCount =
-            await this.prisma.certification_project_scopes.count({
+        const approvedScopes =
+            await this.prisma.certification_project_scopes.findMany({
                 where: {
                     project_id:
                         projectId,
@@ -630,10 +1706,26 @@ export class AuditTeamAppointmentsService {
                     status:
                         'APPROVED',
                 },
+
+                include: {
+                    isic_nace_mapping: {
+                        include: {
+                            target_code:
+                                true,
+                        },
+                    },
+
+                    nace_iaf_mapping: {
+                        include: {
+                            iaf_scope:
+                                true,
+                        },
+                    },
+                },
             });
 
         if (
-            approvedScopeCount ===
+            approvedScopes.length ===
             0
         ) {
             throw new BadRequestException(
@@ -641,119 +1733,160 @@ export class AuditTeamAppointmentsService {
             );
         }
 
-        const requiredRoles =
-            new Set([
-                'TEAM_LEADER',
-                'AUDITOR',
-                'TECHNICAL_EXPERT',
-                'WITNESS_EVALUATOR',
-            ]);
-
-        for (
-            const member
-            of members
-        ) {
-            if (
-                !requiredRoles.has(
-                    member.team_role
-                        .trim()
-                        .toUpperCase(),
-                )
-            ) {
-                continue;
-            }
-
-            if (
-                member.scopes.length ===
-                0
-            ) {
-                throw new BadRequestException(
-                    `Thành viên ${member.team_role} chưa được phân công phạm vi dự án`,
-                );
-            }
-
-            const missingProjectScope =
-                member.scopes.some(
+        const approvedScopeIds =
+            new Set(
+                approvedScopes.map(
                     (scope) =>
-                        !scope.project_scope_id,
+                        scope.id,
+                ),
+            );
+
+        const selectedScopeIds =
+            new Set(
+                members.flatMap(
+                    (member) =>
+                        member.scopes
+                            .map(
+                                (scope) =>
+                                    scope.project_scope_id,
+                            )
+                            .filter(
+                                (
+                                    scopeId,
+                                ): scopeId is string =>
+                                    Boolean(
+                                        scopeId,
+                                    ),
+                            ),
+                ),
+            );
+
+        const invalidScopeId =
+            [...selectedScopeIds].find(
+                (scopeId) =>
+                    !approvedScopeIds.has(
+                        scopeId,
+                    ),
+            );
+
+        if (invalidScopeId) {
+            throw new BadRequestException(
+                'Có phạm vi phân công không thuộc danh sách phạm vi đã duyệt của hồ sơ',
+            );
+        }
+
+        const missingScopes =
+            approvedScopes.filter(
+                (scope) =>
+                    !selectedScopeIds.has(
+                        scope.id,
+                    ),
+            );
+
+        if (missingScopes.length) {
+            const missingLabels =
+                missingScopes.map(
+                    (scope) =>
+                        `${scope.standard_code} · IAF ${scope.nace_iaf_mapping.iaf_scope.iaf_code} · NACE ${scope.isic_nace_mapping.target_code.code}`,
                 );
 
-            if (
-                missingProjectScope
-            ) {
-                throw new BadRequestException(
-                    `Phạm vi của ${member.team_role} phải được chọn từ phạm vi đã duyệt của dự án`,
-                );
-            }
+            throw new BadRequestException(
+                `Tổng thể đoàn chưa bao phủ đầy đủ phạm vi đã duyệt: ${missingLabels.join('; ')}`,
+            );
         }
     }
     private buildMemberCreateData(
         members: AuditTeamMemberDto[],
+        fallbackDate: Date,
+        isProjectContext: boolean,
     ) {
         return members.map(
-            (member) => ({
-                expert_id:
-                    member.expert_id,
+            (member) => {
+                const plannedStartDate =
+                    member.planned_start_date
+                        ? this.parseDate(
+                            member.planned_start_date,
+                            'Ngày bắt đầu phân công',
+                        )
+                        : fallbackDate;
 
-                team_role:
-                    member.team_role,
+                const plannedEndDate =
+                    member.planned_end_date
+                        ? this.parseDate(
+                            member.planned_end_date,
+                            'Ngày kết thúc phân công',
+                        )
+                        : plannedStartDate;
 
-                planned_start_date:
-                    this.parseDate(
-                        member.planned_start_date,
-                        'Ngày bắt đầu phân công',
-                    ),
+                const plannedMandays =
+                    isProjectContext
+                        ? null
+                        : this.countsTowardMandays(member.team_role)
+                            ? this.numericValue(member.planned_mandays)
+                                ?? this.inclusiveCalendarDays(plannedStartDate, plannedEndDate)
+                            : 0;
 
-                planned_end_date:
-                    this.parseDate(
-                        member.planned_end_date,
-                        'Ngày kết thúc phân công',
-                    ),
+                return {
+                    expert_id:
+                        member.expert_id,
 
-                planned_mandays:
-                    member.planned_mandays,
+                    team_role:
+                        member.team_role,
 
-                assignment_status:
-                    'assigned',
+                    // Cột ngày trong DB vẫn bắt buộc. Với chỉ định cấp hồ sơ,
+                    // lưu ngày ban hành làm mốc kỹ thuật; UI không hiển thị và
+                    // không dùng giá trị này để kiểm tra trùng lịch.
+                    planned_start_date:
+                        plannedStartDate,
 
-                competency_status:
-                    'not_checked',
+                    planned_end_date:
+                        plannedEndDate,
 
-                competency_note:
-                    'Chưa kiểm tra năng lực IAF/NACE',
+                    planned_mandays:
+                        plannedMandays,
 
-                scopes: {
-                    create:
-                        member.scopes?.map(
-                            (scope) => ({
-                                project_scope_id:
-                                    scope.project_scope_id ??
-                                    null,
-                                iaf_code:
-                                    scope.iaf_code
-                                        ?.trim() ??
-                                    null,
+                    assignment_status:
+                        'assigned',
 
-                                nace_code:
-                                    scope.nace_code
-                                        ?.trim() ??
-                                    null,
+                    competency_status:
+                        'not_checked',
 
-                                activity_description:
-                                    scope.activity_description
-                                        ?.trim() ??
-                                    null,
+                    competency_note:
+                        'Chưa kiểm tra năng lực tổng thể đoàn',
 
-                                coverage_type:
-                                    scope.coverage_type ??
-                                    'full',
+                    scopes: {
+                        create:
+                            member.scopes?.map(
+                                (scope) => ({
+                                    project_scope_id:
+                                        scope.project_scope_id ??
+                                        null,
 
-                                planned_mandays:
-                                    scope.planned_mandays,
-                            }),
-                        ) ?? [],
-                },
-            }),
+                                    iaf_code:
+                                        scope.iaf_code
+                                            ?.trim() ??
+                                        null,
+
+                                    nace_code:
+                                        scope.nace_code
+                                            ?.trim() ??
+                                        null,
+
+                                    activity_description:
+                                        scope.activity_description
+                                            ?.trim() ??
+                                        null,
+
+                                    coverage_type:
+                                        scope.coverage_type ??
+                                        'full',
+
+                                    planned_mandays: null,
+                                }),
+                            ) ?? [],
+                    },
+                };
+            },
         );
     }
 
@@ -770,6 +1903,18 @@ export class AuditTeamAppointmentsService {
                 dto.members,
                 plan.project_id,
             );
+        const appointmentDate =
+            this.parseDate(
+                dto.appointment_date,
+                'Ngày chỉ định đoàn',
+            );
+
+        const isProjectContext =
+            plan.audit_type
+                ?.trim()
+                .toLowerCase() ===
+            this.projectTeamAuditType;
+
         const existingPlanAppointment =
             await this.prisma.audit_team_appointments.findUnique({
                 where: {
@@ -806,6 +1951,41 @@ export class AuditTeamAppointmentsService {
             resolvedMembers,
             plan,
         );
+        if (isProjectContext) {
+            await this.validateProjectScopeUsage(
+                plan.project_id,
+                resolvedMembers.map((member) => ({
+                    team_role: member.team_role,
+                    scopes: (member.scopes ?? []).map((scope) => ({
+                        project_scope_id: scope.project_scope_id ?? null,
+                    })),
+                })),
+            );
+            await this.validateDraftCompetencyCoverage(
+                plan.project_id,
+                resolvedMembers,
+            );
+        } else if (this.isStage1Plan(plan)) {
+            await this.validateStage1TeamMembership(
+                plan.project_id,
+                resolvedMembers.map((member) => ({
+                    expert_id: member.expert_id,
+                    team_role: member.team_role,
+                })),
+            );
+        } else {
+            await this.evaluatePlanProgramAllocation(
+                plan.project_id,
+                plan.planned_start_date ?? appointmentDate,
+                resolvedMembers.map((member) => ({
+                    expert_id: member.expert_id,
+                    team_role: member.team_role,
+                    scopes: (member.scopes ?? []).map((scope) => ({
+                        project_scope_id: scope.project_scope_id ?? null,
+                    })),
+                })),
+            );
+        }
 
         return this.prisma.audit_team_appointments.create({
             data: {
@@ -816,10 +1996,7 @@ export class AuditTeamAppointmentsService {
                     appointmentNumber,
 
                 appointment_date:
-                    this.parseDate(
-                        dto.appointment_date,
-                        'Ngày chỉ định đoàn',
-                    ),
+                    appointmentDate,
 
                 note:
                     dto.note
@@ -836,6 +2013,8 @@ export class AuditTeamAppointmentsService {
                     create:
                         this.buildMemberCreateData(
                             resolvedMembers,
+                            appointmentDate,
+                            isProjectContext,
                         ),
                 },
             },
@@ -925,8 +2104,29 @@ export class AuditTeamAppointmentsService {
     async checkCompetency(
         id: string,
     ): Promise<unknown> {
-        return this.competencyService.checkAppointment(
-            id,
+        const appointment = await this.getRawAppointment(id);
+        const isProjectContext =
+            appointment.audit_plans.audit_type
+                ?.trim()
+                .toLowerCase() ===
+            this.projectTeamAuditType;
+
+        if (isProjectContext) {
+            return this.competencyService.checkAppointment(id);
+        }
+
+        return this.evaluatePlanProgramAllocation(
+            appointment.audit_plans.project_id,
+            appointment.audit_plans.planned_start_date ?? appointment.appointment_date,
+            appointment.members.map((member) => ({
+                member_id: member.id,
+                expert_id: member.expert_id,
+                team_role: member.team_role,
+                scopes: member.scopes.map((scope) => ({
+                    project_scope_id: scope.project_scope_id,
+                })),
+            })),
+            true,
         );
     }
     async syncProjectScopes(
@@ -1277,6 +2477,193 @@ export class AuditTeamAppointmentsService {
         };
     }
 
+    async getBusyDates(
+        expertId: string,
+        startDateValue: string,
+        endDateValue: string,
+        excludeAppointmentId?: string,
+    ) {
+        const expert =
+            await this.prisma.experts.findUnique({
+                where: {
+                    id:
+                        expertId,
+                },
+                select: {
+                    id: true,
+                    full_name: true,
+                },
+            });
+
+        if (!expert) {
+            throw new NotFoundException(
+                'Không tìm thấy chuyên gia',
+            );
+        }
+
+        const startDate =
+            this.parseDate(
+                startDateValue,
+                'Ngày bắt đầu',
+            );
+
+        const endDate =
+            this.parseDate(
+                endDateValue,
+                'Ngày kết thúc',
+            );
+
+        if (endDate < startDate) {
+            throw new BadRequestException(
+                'Ngày kết thúc phải bằng hoặc sau ngày bắt đầu',
+            );
+        }
+
+        const assignments =
+            await this.prisma.audit_team_members.findMany({
+                where: {
+                    expert_id:
+                        expertId,
+                    assignment_status: {
+                        not:
+                            'cancelled',
+                    },
+                    planned_start_date: {
+                        lte:
+                            endDate,
+                    },
+                    planned_end_date: {
+                        gte:
+                            startDate,
+                    },
+                    audit_team_appointments: {
+                        status: {
+                            in: [
+                                'draft',
+                                'issued',
+                            ],
+                        },
+                        audit_plans: {
+                            audit_type: {
+                                not:
+                                    this.projectTeamAuditType,
+                            },
+                        },
+                        ...(excludeAppointmentId
+                            ? {
+                                id: {
+                                    not:
+                                        excludeAppointmentId,
+                                },
+                            }
+                            : {}),
+                    },
+                },
+                orderBy: {
+                    planned_start_date:
+                        'asc',
+                },
+                include: {
+                    audit_team_appointments: {
+                        include: {
+                            audit_plans: {
+                                include: {
+                                    certification_projects: {
+                                        include: {
+                                            certification_applications: {
+                                                include: {
+                                                    customers:
+                                                        true,
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+
+        const busyDateSet =
+            new Set<string>();
+
+        for (const assignment of assignments) {
+            const rangeStart =
+                assignment.planned_start_date < startDate
+                    ? startDate
+                    : assignment.planned_start_date;
+            const rangeEnd =
+                assignment.planned_end_date > endDate
+                    ? endDate
+                    : assignment.planned_end_date;
+
+            const cursor =
+                new Date(
+                    rangeStart,
+                );
+
+            while (cursor <= rangeEnd) {
+                busyDateSet.add(
+                    cursor.toISOString().slice(0, 10),
+                );
+                cursor.setUTCDate(
+                    cursor.getUTCDate() + 1,
+                );
+            }
+        }
+
+        return {
+            expert,
+            requested_period: {
+                start_date:
+                    startDate,
+                end_date:
+                    endDate,
+            },
+            busy_dates:
+                [...busyDateSet].sort(),
+            assignments:
+                assignments.map(
+                    (assignment) => {
+                        const plan =
+                            assignment.audit_team_appointments.audit_plans;
+                        const project =
+                            plan.certification_projects;
+                        const customer =
+                            project.certification_applications.customers;
+
+                        return {
+                            appointment_id:
+                                assignment.appointment_id,
+                            appointment_number:
+                                assignment.audit_team_appointments.appointment_number,
+                            appointment_status:
+                                assignment.audit_team_appointments.status,
+                            plan_id:
+                                plan.id,
+                            plan_code:
+                                plan.plan_code,
+                            audit_type:
+                                plan.audit_type,
+                            plan_status:
+                                plan.status,
+                            project_id:
+                                project.id,
+                            project_code:
+                                project.project_code,
+                            customer_name:
+                                customer.company_name,
+                            start_date:
+                                assignment.planned_start_date,
+                            end_date:
+                                assignment.planned_end_date,
+                        };
+                    },
+                ),
+        };
+    }
+
     async update(
         id: string,
         dto: UpdateAuditTeamAppointmentDto,
@@ -1314,6 +2701,20 @@ export class AuditTeamAppointmentsService {
                 );
             }
         }
+        const nextAppointmentDate =
+            dto.appointment_date !== undefined
+                ? this.parseDate(
+                    dto.appointment_date,
+                    'Ngày chỉ định đoàn',
+                )
+                : appointment.appointment_date;
+
+        const isProjectContext =
+            appointment.audit_plans.audit_type
+                ?.trim()
+                .toLowerCase() ===
+            this.projectTeamAuditType;
+
         let resolvedMembers:
             AuditTeamMemberDto[] |
             undefined;
@@ -1331,6 +2732,41 @@ export class AuditTeamAppointmentsService {
                 appointment.audit_plans,
                 id,
             );
+            if (isProjectContext) {
+                await this.validateProjectScopeUsage(
+                    appointment.audit_plans.project_id,
+                    resolvedMembers.map((member) => ({
+                        team_role: member.team_role,
+                        scopes: (member.scopes ?? []).map((scope) => ({
+                            project_scope_id: scope.project_scope_id ?? null,
+                        })),
+                    })),
+                );
+                await this.validateDraftCompetencyCoverage(
+                    appointment.audit_plans.project_id,
+                    resolvedMembers,
+                );
+            } else if (this.isStage1Plan(appointment.audit_plans)) {
+                await this.validateStage1TeamMembership(
+                    appointment.audit_plans.project_id,
+                    resolvedMembers.map((member) => ({
+                        expert_id: member.expert_id,
+                        team_role: member.team_role,
+                    })),
+                );
+            } else {
+                await this.evaluatePlanProgramAllocation(
+                    appointment.audit_plans.project_id,
+                    appointment.audit_plans.planned_start_date ?? nextAppointmentDate,
+                    resolvedMembers.map((member) => ({
+                        expert_id: member.expert_id,
+                        team_role: member.team_role,
+                        scopes: (member.scopes ?? []).map((scope) => ({
+                            project_scope_id: scope.project_scope_id ?? null,
+                        })),
+                    })),
+                );
+            }
         }
 
         return this.prisma.$transaction(
@@ -1338,6 +2774,8 @@ export class AuditTeamAppointmentsService {
                 transaction,
             ) => {
                 if (dto.members) {
+                    await this.mandayAllocationService.clearCurrentAllocation(id, transaction);
+
                     await transaction.audit_team_member_scopes.deleteMany({
                         where: {
                             audit_team_members: {
@@ -1371,10 +2809,7 @@ export class AuditTeamAppointmentsService {
                         ...(dto.appointment_date !== undefined
                             ? {
                                 appointment_date:
-                                    this.parseDate(
-                                        dto.appointment_date,
-                                        'Ngày chỉ định đoàn',
-                                    ),
+                                    nextAppointmentDate,
                             }
                             : {}),
 
@@ -1391,6 +2826,8 @@ export class AuditTeamAppointmentsService {
                                     create:
                                         this.buildMemberCreateData(
                                             resolvedMembers!,
+                                            nextAppointmentDate,
+                                            isProjectContext,
                                         ),
                                 },
                             }
@@ -1443,44 +2880,88 @@ export class AuditTeamAppointmentsService {
 
                     planned_end_date:
                         member.planned_end_date,
+
+                    planned_mandays:
+                        member.planned_mandays === null
+                            ? null
+                            : member.planned_mandays.toNumber(),
                 }),
             ),
 
             appointment.audit_plans,
 
             id,
+            true,
         );
-        await this.validateProjectScopeUsage(
-            appointment
-                .audit_plans
-                .project_id,
+        const isProjectContext =
+            appointment.audit_plans.audit_type
+                ?.trim()
+                .toLowerCase() ===
+            this.projectTeamAuditType;
 
-            appointment.members.map(
-                (member) => ({
-                    team_role:
-                        member.team_role,
-
-                    scopes:
-                        member.scopes.map(
-                            (scope) => ({
-                                project_scope_id:
-                                    scope.project_scope_id,
-                            }),
-                        ),
-                }),
-            ))
-        const competencyCheck =
-            await this.competencyService.checkAppointment(
-                id,
+        if (isProjectContext) {
+            await this.validateProjectScopeUsage(
+                appointment.audit_plans.project_id,
+                appointment.members.map((member) => ({
+                    team_role: member.team_role,
+                    scopes: member.scopes.map((scope) => ({
+                        project_scope_id: scope.project_scope_id,
+                    })),
+                })),
             );
+            const competencyCheck =
+                await this.competencyService.checkAppointment(id);
 
-        if (
-            !competencyCheck.is_sufficient
-        ) {
-            throw new BadRequestException(
-                'Đoàn đánh giá chưa đáp ứng đầy đủ năng lực IAF/NACE',
+            if (!competencyCheck.is_sufficient) {
+                const reasons: string[] = [];
+                if (!competencyCheck.leader_qualified) {
+                    reasons.push(
+                        'Trưởng đoàn chưa có năng lực LEAD_AUDITOR phù hợp với ít nhất một tiêu chuẩn/phạm vi của hồ sơ',
+                    );
+                }
+                if (competencyCheck.missing_scopes.length) {
+                    reasons.push(
+                        `Tổng thể đoàn còn thiếu: ${competencyCheck.missing_scopes
+                            .map((scope) =>
+                                `${scope.standard_code} · IAF ${scope.iaf_code ?? '-'} · NACE ${scope.nace_code ?? '-'}`,
+                            )
+                            .join('; ')}`,
+                    );
+                }
+                throw new BadRequestException(
+                    reasons.join('. ') ||
+                    'Đoàn đánh giá chưa đáp ứng đầy đủ năng lực tổng thể',
+                );
+            }
+        } else if (this.isStage1Plan(appointment.audit_plans)) {
+            await this.validateStage1TeamMembership(
+                appointment.audit_plans.project_id,
+                appointment.members.map((member) => ({
+                    expert_id: member.expert_id,
+                    team_role: member.team_role,
+                })),
+            );
+        } else {
+            await this.evaluatePlanProgramAllocation(
+                appointment.audit_plans.project_id,
+                appointment.audit_plans.planned_start_date ?? appointment.appointment_date,
+                appointment.members.map((member) => ({
+                    member_id: member.id,
+                    expert_id: member.expert_id,
+                    team_role: member.team_role,
+                    scopes: member.scopes.map((scope) => ({
+                        project_scope_id: scope.project_scope_id,
+                    })),
+                })),
+                true,
             );
         }
+
+        if (!isProjectContext && !this.isStage1Plan(appointment.audit_plans)) {
+            await this.mandayAllocationService.ensureAllocationForIssue(id, userId);
+        }
+        await this.mandayAllocationService.validateForIssue(id);
+
         return this.prisma.audit_team_appointments.update({
             where: {
                 id,
@@ -1557,120 +3038,9 @@ export class AuditTeamAppointmentsService {
                 planId,
             );
 
-        const scopes =
-            await this.prisma.certification_project_scopes.findMany({
-                where: {
-                    project_id:
-                        plan.project_id,
-
-                    status:
-                        'APPROVED',
-                },
-
-                orderBy: {
-                    created_at:
-                        'asc',
-                },
-
-                include: {
-                    isic_nace_mapping: {
-                        include: {
-                            source_code:
-                                true,
-
-                            target_code:
-                                true,
-                        },
-                    },
-
-                    nace_iaf_mapping: {
-                        include: {
-                            nace_code:
-                                true,
-
-                            iaf_scope:
-                                true,
-                        },
-                    },
-                },
-            });
-
-        return scopes.map(
-            (scope) => ({
-                project_scope_id:
-                    scope.id,
-
-                management_system:
-                    scope.management_system,
-
-                standard_code:
-                    scope.standard_code,
-
-                certification_scope:
-                    scope.scope_description,
-
-                isic: {
-                    revision:
-                        scope
-                            .isic_nace_mapping
-                            .source_code
-                            .revision,
-
-                    code:
-                        scope
-                            .isic_nace_mapping
-                            .source_code
-                            .code,
-
-                    name:
-                        scope
-                            .isic_nace_mapping
-                            .source_code
-                            .title_vi ??
-                        scope
-                            .isic_nace_mapping
-                            .source_code
-                            .title_en,
-                },
-
-                nace: {
-                    revision:
-                        scope
-                            .isic_nace_mapping
-                            .target_code
-                            .revision,
-
-                    code:
-                        scope
-                            .isic_nace_mapping
-                            .target_code
-                            .code,
-
-                    name:
-                        scope
-                            .isic_nace_mapping
-                            .target_code
-                            .title_vi ??
-                        scope
-                            .isic_nace_mapping
-                            .target_code
-                            .title_en,
-                },
-
-                iaf: {
-                    code:
-                        scope
-                            .nace_iaf_mapping
-                            .iaf_scope
-                            .iaf_code,
-
-                    name:
-                        scope
-                            .nace_iaf_mapping
-                            .iaf_scope
-                            .iaf_name,
-                },
-            }),
+        return this.getAvailableProjectScopesByProjectId(
+            plan.project_id,
         );
     }
+
 }

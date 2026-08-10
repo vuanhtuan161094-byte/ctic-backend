@@ -4,6 +4,7 @@ import {
     Param,
     ParseUUIDPipe,
     Res,
+    UseGuards,
 } from '@nestjs/common';
 import {
     ApiNotFoundResponse,
@@ -17,9 +18,13 @@ import {
 import type { Response } from 'express';
 
 import { CertificatesService } from './certificates.service';
+import { SecurityRateLimit } from '../security/security-rate-limit.decorator';
+import { SecurityRateLimitGuard } from '../security/security-rate-limit.guard';
 
 @Controller('public/certificates')
 @ApiTags('19. Tra cứu chứng chỉ công khai')
+@UseGuards(SecurityRateLimitGuard)
+@SecurityRateLimit('public_certificate')
 export class PublicCertificatesController {
     constructor(
         private readonly certificatesService:

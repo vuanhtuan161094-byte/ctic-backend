@@ -34,7 +34,7 @@ export class CreateAuditResultNotificationDto {
     certification_decision_id?: string;
 
     @ApiProperty({
-        example: '02/TB-CTIC/2027',
+        example: '02/TB-CB/2027',
         description: 'Số thông báo kết quả duy nhất',
         maxLength: 50,
     })

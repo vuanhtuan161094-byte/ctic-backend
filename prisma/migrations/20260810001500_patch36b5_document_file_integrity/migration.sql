@@ -1,0 +1,16 @@
+BEGIN TRY
+    BEGIN TRANSACTION;
+
+    IF COL_LENGTH(N'dbo.document_files', N'sha256') IS NULL
+    BEGIN
+        ALTER TABLE [dbo].[document_files]
+            ADD [sha256] NVARCHAR(64) NULL;
+    END;
+
+    COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0
+        ROLLBACK TRANSACTION;
+    THROW;
+END CATCH;

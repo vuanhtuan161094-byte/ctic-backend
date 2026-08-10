@@ -6,6 +6,7 @@ import {
     Param,
     Patch,
     Post,
+    Req,
     UseGuards,
 } from '@nestjs/common';
 import {
@@ -24,9 +25,14 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ResourceAccessService } from '../security/resource-access.service';
+import { getResourceActor } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { AuditPlansService } from './audit-plans.service';
+import { CompleteAuditPlanDto } from './dto/complete-audit-plan.dto';
 import { CreateAuditPlanDto } from './dto/create-audit-plan.dto';
+import { StartAuditPlanDto } from './dto/start-audit-plan.dto';
 import { UpdateAuditPlanDto } from './dto/update-audit-plan.dto';
 
 @Controller('audit-plans')
@@ -41,7 +47,25 @@ export class AuditPlansController {
     constructor(
         private readonly auditPlansService:
             AuditPlansService,
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
+
+    private getUserId(
+        request: {
+            user?: {
+                id?: string;
+                userId?: string;
+                sub?: string;
+            };
+        },
+    ): string | undefined {
+        return (
+            request.user?.id ??
+            request.user?.userId ??
+            request.user?.sub
+        );
+    }
 
     @Post()
     @Roles(
@@ -66,6 +90,100 @@ export class AuditPlansController {
         return this.auditPlansService.create(dto);
     }
 
+    @Post(':id/start')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+    )
+    @Permissions('reports.manage')
+    @ApiOperation({
+        summary: 'Bắt đầu thực hiện cuộc đánh giá',
+        description: 'Kiểm tra kế hoạch, quyết định chỉ định đoàn, ngày và man-day trước khi chuyển sang trạng thái đang thực hiện.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID kế hoạch đánh giá',
+    })
+    @ApiOkResponse({
+        description: 'Cuộc đánh giá đã được bắt đầu',
+    })
+    @ApiBadRequestResponse({
+        description: 'Kế hoạch hoặc đoàn đánh giá chưa đủ điều kiện',
+    })
+    async start(
+        @Param('id')
+        id: string,
+
+        @Body()
+        dto: StartAuditPlanDto,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            {
+                entity_type: 'audit_plan',
+                entity_id: id,
+            },
+            getResourceActor(request),
+        );
+
+        return this.auditPlansService.start(
+            id,
+            dto,
+            this.getUserId(request),
+        );
+    }
+
+    @Post(':id/complete')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+    )
+    @Permissions('reports.manage')
+    @ApiOperation({
+        summary: 'Hoàn thành cuộc đánh giá',
+        description: 'Ghi nhận ngày, man-day thực tế của từng thành viên và khóa trạng thái thực hiện.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID kế hoạch đánh giá',
+    })
+    @ApiOkResponse({
+        description: 'Cuộc đánh giá đã hoàn thành',
+    })
+    @ApiBadRequestResponse({
+        description: 'Báo cáo chưa nộp hoặc dữ liệu thực tế không hợp lệ',
+    })
+    async complete(
+        @Param('id')
+        id: string,
+
+        @Body()
+        dto: CompleteAuditPlanDto,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            {
+                entity_type: 'audit_plan',
+                entity_id: id,
+            },
+            getResourceActor(request),
+        );
+
+        return this.auditPlansService.complete(
+            id,
+            dto,
+            this.getUserId(request),
+        );
+    }
+
     @Get()
     @Roles(
         'ADMIN',
@@ -82,8 +200,28 @@ export class AuditPlansController {
     @ApiOkResponse({
         description: 'Danh sách kế hoạch đánh giá',
     })
-    findAll() {
-        return this.auditPlansService.findAll();
+    async findAll(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const plans =
+            await this.auditPlansService.findAll();
+
+        const scoped =
+            await this.resourceAccess.filterEntities(
+                plans.map((plan) => ({
+                    ...plan,
+                    entity_type: 'audit_plan',
+                    entity_id: plan.id,
+                })),
+                getResourceActor(request),
+            );
+
+        return scoped.map(({
+            entity_type: _entityType,
+            entity_id: _entityId,
+            ...plan
+        }) => plan);
     }
 
     @Get('project/:projectId')
@@ -107,10 +245,18 @@ export class AuditPlansController {
     @ApiOkResponse({
         description: 'Các kế hoạch thuộc dự án',
     })
-    findByProject(
+    async findByProject(
         @Param('projectId')
         projectId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertProjectAccess(
+            projectId,
+            getResourceActor(request),
+        );
+
         return this.auditPlansService.findByProject(
             projectId,
         );
@@ -137,10 +283,21 @@ export class AuditPlansController {
     @ApiOkResponse({
         description: 'Kế hoạch của sự kiện đánh giá',
     })
-    findByEvent(
+    async findByEvent(
         @Param('eventId')
         eventId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            {
+                entity_type: 'audit_program_event',
+                entity_id: eventId,
+            },
+            getResourceActor(request),
+        );
+
         return this.auditPlansService.findByEvent(
             eventId,
         );
@@ -170,10 +327,21 @@ export class AuditPlansController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy kế hoạch đánh giá',
     })
-    findOne(
+    async findOne(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            {
+                entity_type: 'audit_plan',
+                entity_id: id,
+            },
+            getResourceActor(request),
+        );
+
         return this.auditPlansService.findOne(id);
     }
 

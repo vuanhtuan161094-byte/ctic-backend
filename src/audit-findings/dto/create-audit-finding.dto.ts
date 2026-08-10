@@ -24,16 +24,20 @@ export class CreateAuditFindingDto {
     @ApiProperty({
         example: 'minor_nc',
         enum: [
-            'major_nc',
-            'minor_nc',
+            'conformity',
+            'observation',
             'ofi',
+            'minor_nc',
+            'major_nc',
         ],
         description: 'Loại phát hiện đánh giá',
     })
     @IsIn([
-        'major_nc',
-        'minor_nc',
+        'conformity',
+        'observation',
         'ofi',
+        'minor_nc',
+        'major_nc',
     ])
     finding_type!: string;
 

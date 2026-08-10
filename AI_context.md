@@ -71,3 +71,28 @@ Hoàn thiện backend quản lý chứng nhận hệ thống quản lý theo P.0
 - Chỉ sửa phần liên quan; không thay schema hoặc luồng nghiệp vụ khi chưa được phép.
 - Build/test sau mỗi nhóm thay đổi.
 - Khi hướng dẫn người dùng, ưu tiên code/lệnh hoàn chỉnh để copy và test.
+
+## Patch 34 – Không gian thực hiện đánh giá
+
+Đã bổ sung trên nền Patch 33a, không thay đổi schema và không cần migration:
+
+- Bắt đầu cuộc đánh giá sau khi backend kiểm tra kế hoạch, quyết định đoàn, lịch và man-day.
+- Chỉ ADMIN/STAFF hoặc chuyên gia đã được phân công mới được thực hiện báo cáo.
+- Tạo báo cáo trực tiếp từ kế hoạch; lưu dự thảo không yêu cầu hoàn thiện toàn bộ nội dung.
+- Nộp báo cáo có kiểm tra tóm tắt thực hiện, hiệu lực hệ thống, kết luận và đề nghị của đoàn.
+- Hỗ trợ điểm phù hợp, quan sát, OFI, NC nhẹ và NC nặng.
+- Báo cáo có NC chuyển sang chờ hành động khắc phục; không có NC chuyển sẵn sàng thẩm xét.
+- Hoàn thành cuộc đánh giá bằng ngày và man-day thực tế của từng thành viên.
+- Dashboard chỉ tính major/minor NC vào chỉ số NC/CAP chưa đóng.
+- Regression test: `node scripts/tests/audit-execution-regression-patch34.mjs`.
+
+## Patch 36C.1a – Commercial DB credentials & single-organization deployment
+
+- Kiến trúc thương mại đã chốt: **1 bản cài đặt = 1 tổ chức chứng nhận**, không dùng shared-database multi-tenant.
+- `DATABASE_URL` là tài khoản runtime; production không được giữ quyền DDL/db_owner.
+- `MIGRATION_DATABASE_URL` là tài khoản cài đặt/nâng cấp riêng, lưu ngoài source trong `.env.migration` hoặc secret manager.
+- Windows development có `STABILIZE_36C1A.cmd`: nếu chưa có migration account riêng, script dùng Windows Authentication để tạm cấp `db_ddladmin` + `db_datareader` + `db_datawriter` cho runtime database user, chạy baseline/migrate rồi thu hồi trong `finally`. Không cấp `db_owner`.
+- Existing database chưa có `_prisma_migrations`: chỉ baseline `00000000000000_baseline`; 35A.3, 36B.5, 36B.6 và 36C.1 phải chạy thật.
+- Migration credential phải trỏ đúng cùng host/port/database/schema với runtime credential; script chặn cross-target.
+- Production startup kiểm runtime account không còn quyền DDL.
+- Current regression sau 36C.1a: 41/41 PASS trong source bundle đã rà ngày 10/08/2026.

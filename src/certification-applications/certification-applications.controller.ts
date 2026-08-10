@@ -1,7 +1,10 @@
 import {
     Body,
     Controller,
+    Delete,
     Get,
+    Param,
+    Patch,
     Post,
     UseGuards,
 } from '@nestjs/common';
@@ -83,5 +86,44 @@ export class CertificationApplicationsController {
         return this.certificationApplicationsService.create(
             dto,
         );
+    }
+
+    @Patch(':id')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'SALES',
+        'COORDINATOR',
+    )
+    @Permissions('applications.manage')
+    @ApiOperation({
+        summary: 'Cập nhật đơn đăng ký chứng nhận',
+    })
+    @ApiOkResponse({
+        description: 'Cập nhật đơn đăng ký thành công',
+    })
+    update(
+        @Param('id') id: string,
+        @Body() dto: CreateCertificationApplicationDto,
+    ) {
+        return this.certificationApplicationsService.update(id, dto);
+    }
+
+    @Delete(':id')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'SALES',
+        'COORDINATOR',
+    )
+    @Permissions('applications.manage')
+    @ApiOperation({
+        summary: 'Xóa đơn đăng ký chưa liên kết hồ sơ chứng nhận',
+    })
+    @ApiOkResponse({
+        description: 'Xóa đơn đăng ký thành công',
+    })
+    remove(@Param('id') id: string) {
+        return this.certificationApplicationsService.remove(id);
     }
 }

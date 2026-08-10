@@ -6,20 +6,14 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 
-import { ConfigService } from '@nestjs/config';
 import { UpdateCertificateStatusDto } from './dto/update-certificate-status.dto';
-
-import {
-    existsSync,
-} from 'fs';
-
-import {
-    join,
-} from 'path';
 
 import * as QRCode from 'qrcode';
 
 import { PrismaService } from '../prisma/prisma.service';
+
+import { getDeploymentConfig } from '../common/deployment-config';
+import { DocumentFilesService } from '../document-files/document-files.service';
 
 import { CreateCertificateDto } from './dto/create-certificate.dto';
 
@@ -27,7 +21,7 @@ import { CreateCertificateDto } from './dto/create-certificate.dto';
 export class CertificatesService {
     constructor(
         private readonly prisma: PrismaService,
-        private readonly configService: ConfigService,
+        private readonly documentFilesService: DocumentFilesService,
     ) { }
     private getTodayInVietnam(): Date {
         const parts =
@@ -273,18 +267,8 @@ export class CertificatesService {
     }
 
     private getPublicBaseUrl() {
-        const configuredUrl =
-            this.configService.get<string>(
-                'PUBLIC_BASE_URL',
-            );
-
-        return (
-            configuredUrl?.replace(
-                /\/+$/,
-                '',
-            ) ||
-            'http://localhost:3000'
-        );
+        return getDeploymentConfig()
+            .publicBaseUrl;
     }
 
     private isExpired(
@@ -322,6 +306,171 @@ export class CertificatesService {
                 'Giấy chứng nhận đã hết hạn',
             );
         }
+    }
+
+    private buildCertificateNumberProposal(
+        projectCode: string,
+        issueDate?: Date | null,
+    ) {
+        const normalized = projectCode.trim();
+        const year = (issueDate ?? this.getTodayInVietnam()).getUTCFullYear();
+        const sequence = normalized.match(/(\d{3,})$/)?.[1];
+        const candidate = sequence
+            ? `CERT-${year}-${sequence}`
+            : `CERT-${year}-${normalized}`;
+
+        return candidate.slice(0, 50);
+    }
+
+    async getPlanIssuanceWorkspace(planId: string) {
+        const plan = await this.prisma.audit_plans.findUnique({
+            where: { id: planId },
+            select: {
+                id: true,
+                plan_code: true,
+                audit_type: true,
+                project_id: true,
+                planned_start_date: true,
+                planned_end_date: true,
+                certification_projects: {
+                    select: {
+                        id: true,
+                        project_code: true,
+                        standard_name: true,
+                    },
+                },
+                reports: {
+                    orderBy: { version_no: 'desc' },
+                    select: {
+                        id: true,
+                        report_code: true,
+                        version_no: true,
+                        status: true,
+                        technical_reviews: {
+                            orderBy: { created_at: 'desc' },
+                            select: {
+                                id: true,
+                                status: true,
+                                completed_at: true,
+                                certification_decision: true,
+                                audit_result_notification: true,
+                                certificates: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        if (!plan) {
+            throw new NotFoundException('Không tìm thấy kế hoạch đánh giá');
+        }
+
+        const report = plan.reports.find((item) => item.technical_reviews.length > 0)
+            ?? plan.reports[0]
+            ?? null;
+        const technicalReview = report?.technical_reviews.find((item) => item.status === 'completed')
+            ?? report?.technical_reviews[0]
+            ?? null;
+        const decision = technicalReview?.certification_decision ?? null;
+        const notification = technicalReview?.audit_result_notification ?? null;
+        const certificate = technicalReview?.certificates ?? null;
+
+        const eligibilityErrors: string[] = [];
+        if (!report) {
+            eligibilityErrors.push('Chưa có báo cáo đánh giá Giai đoạn 2.');
+        }
+        if (!technicalReview) {
+            eligibilityErrors.push('Chưa có hồ sơ thẩm xét kỹ thuật.');
+        } else if (technicalReview.status !== 'completed') {
+            eligibilityErrors.push('Thẩm xét kỹ thuật chưa hoàn thành.');
+        }
+        if (!decision) {
+            eligibilityErrors.push('Chưa ban hành Quyết định chứng nhận F.13.');
+        } else if (decision.status !== 'issued' || decision.decision_result !== 'approved') {
+            eligibilityErrors.push('Quyết định chứng nhận chưa phê duyệt cấp chứng nhận.');
+        }
+        if (!notification) {
+            eligibilityErrors.push('Chưa lập Thông báo kết quả F.12.');
+        } else if (notification.status !== 'sent') {
+            eligibilityErrors.push('Thông báo kết quả chưa được ghi nhận đã gửi khách hàng.');
+        } else if (!['certification_granted', 'certification_maintained'].includes(notification.notification_result)) {
+            eligibilityErrors.push('Kết quả thông báo không cho phép cấp giấy chứng nhận.');
+        }
+
+        const documents = certificate
+            ? await this.prisma.documentFile.findMany({
+                where: {
+                    entity_type: 'certificate',
+                    entity_id: certificate.id,
+                },
+                orderBy: [
+                    { is_current: 'desc' },
+                    { version_no: 'desc' },
+                    { created_at: 'desc' },
+                ],
+            })
+            : [];
+
+        const history = certificate
+            ? await this.prisma.certificate_status_histories.findMany({
+                where: { certificate_id: certificate.id },
+                orderBy: { created_at: 'desc' },
+                include: {
+                    changed_by_user: {
+                        select: {
+                            id: true,
+                            username: true,
+                            full_name: true,
+                        },
+                    },
+                },
+            })
+            : [];
+
+        const issueDate = decision?.effective_date ?? decision?.decision_date ?? this.getTodayInVietnam();
+        const expiryDate = decision?.expiry_date ?? null;
+
+        return {
+            plan: {
+                id: plan.id,
+                plan_code: plan.plan_code,
+                audit_type: plan.audit_type,
+                project_id: plan.project_id,
+                project_code: plan.certification_projects.project_code,
+                standard_name: plan.certification_projects.standard_name,
+                planned_start_date: plan.planned_start_date,
+                planned_end_date: plan.planned_end_date,
+            },
+            report: report ? {
+                id: report.id,
+                report_code: report.report_code,
+                version_no: report.version_no,
+                status: report.status,
+            } : null,
+            technical_review: technicalReview ? {
+                id: technicalReview.id,
+                status: technicalReview.status,
+                completed_at: technicalReview.completed_at,
+            } : null,
+            decision,
+            notification,
+            certificate,
+            documents,
+            history,
+            can_issue_certificate: Boolean(technicalReview)
+                && !certificate
+                && eligibilityErrors.length === 0,
+            eligibility_errors: eligibilityErrors,
+            defaults: {
+                cert_number: this.buildCertificateNumberProposal(
+                    plan.certification_projects.project_code,
+                    issueDate,
+                ),
+                issue_date: issueDate,
+                expire_date: expiryDate,
+            },
+        };
     }
 
     async findAll() {
@@ -386,6 +535,7 @@ export class CertificatesService {
 
     async create(
         dto: CreateCertificateDto,
+        changedBy?: string,
     ) {
         const existingCertificate =
             await this.prisma.certificates.findFirst(
@@ -612,6 +762,17 @@ export class CertificatesService {
                             updated_at:
                                 new Date(),
                         },
+                    });
+
+                    await transaction.certificate_status_histories.createMany({
+                        data: previousCertificates.map((item) => ({
+                            certificate_id: item.id,
+                            from_status: 'active',
+                            to_status: 'replaced',
+                            reason: `Được thay thế bởi giấy chứng nhận ${certificate.cert_number}.`,
+                            effective_date: issueDate,
+                            changed_by: changedBy ?? null,
+                        })),
                     });
                 }
 
@@ -981,28 +1142,15 @@ export class CertificatesService {
             );
         }
 
-        const absolutePath =
-            join(
-                process.cwd(),
-                'uploads',
-                'documents',
-                documentFile.stored_name,
+        const download =
+            await this.documentFilesService.getDownload(
+                documentFile.id,
             );
-
-        if (
-            !existsSync(
-                absolutePath,
-            )
-        ) {
-            throw new NotFoundException(
-                'File PDF của giấy chứng nhận không tồn tại trên máy chủ',
-            );
-        }
 
         return {
             certificate,
-            documentFile,
-            absolutePath,
+            documentFile: download.documentFile,
+            absolutePath: download.absolutePath,
         };
     }
 

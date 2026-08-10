@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
@@ -104,20 +105,178 @@ export class AuditFindingsService {
         };
     }
 
+    private normalizeText(value: string | null | undefined) {
+        return (value ?? '').trim().toLowerCase();
+    }
+
+    private async normalizeFindingsWithEvidence(findings: any[]) {
+        const actionIds = findings.flatMap((finding) =>
+            (finding.corrective_actions ?? []).map((action: any) => action.id),
+        );
+        const userIds = Array.from(new Set(findings.flatMap((finding) =>
+            (finding.corrective_actions ?? []).flatMap((action: any) => [
+                action.submitted_by,
+                action.reviewed_by,
+            ].filter(Boolean)),
+        ))) as string[];
+
+        const [files, users] = await Promise.all([
+            actionIds.length
+                ? this.prisma.documentFile.findMany({
+                    where: {
+                        entity_type: 'corrective_action',
+                        entity_id: { in: actionIds },
+                        document_type: 'corrective_action_evidence',
+                    },
+                    orderBy: [
+                        { entity_id: 'asc' },
+                        { version_no: 'desc' },
+                        { created_at: 'desc' },
+                    ],
+                })
+                : Promise.resolve([]),
+            userIds.length
+                ? this.prisma.users.findMany({
+                    where: { id: { in: userIds } },
+                    select: {
+                        id: true,
+                        username: true,
+                        full_name: true,
+                        email: true,
+                    },
+                })
+                : Promise.resolve([]),
+        ]);
+
+        const filesByAction = new Map<string, any[]>();
+        for (const file of files) {
+            const current = filesByAction.get(file.entity_id) ?? [];
+            current.push({
+                ...file,
+                download_url: `/document-files/${file.id}/download`,
+            });
+            filesByAction.set(file.entity_id, current);
+        }
+        const usersById = new Map<
+            string,
+            {
+                id: string;
+                username: string;
+                full_name: string | null;
+                email: string | null;
+            }
+        >(
+            users.map((user) => [user.id, user] as const),
+        );
+
+        return findings.map((finding) => {
+            const normalized = this.normalizeFinding(finding);
+            return {
+                ...normalized,
+                corrective_actions: normalized.corrective_actions.map((action: any) => ({
+                    ...action,
+                    evidence_files: filesByAction.get(action.id) ?? [],
+                    submitted_by_user: action.submitted_by
+                        ? usersById.get(action.submitted_by) ?? null
+                        : null,
+                    reviewed_by_user: action.reviewed_by
+                        ? usersById.get(action.reviewed_by) ?? null
+                        : null,
+                })),
+            };
+        });
+    }
+
+    private async assertFindingAccess(
+        userId: string | undefined,
+        auditPlanId: string,
+    ) {
+        if (!userId) {
+            throw new ForbiddenException(
+                'Không xác định được người ghi nhận phát hiện',
+            );
+        }
+
+        const user = await this.prisma.users.findUnique({
+            where: { id: userId },
+            include: {
+                user_roles: {
+                    include: {
+                        roles: true,
+                    },
+                },
+                expert_profile: {
+                    select: {
+                        id: true,
+                    },
+                },
+            },
+        });
+
+        if (!user) {
+            throw new ForbiddenException(
+                'Không tìm thấy tài khoản người thực hiện',
+            );
+        }
+
+        const roleNames = user.user_roles.map((item) =>
+            this.normalizeText(item.roles.role_name),
+        );
+
+        if (roleNames.some((role) => ['admin', 'staff'].includes(role))) {
+            return;
+        }
+
+        const appointment =
+            await this.prisma.audit_team_appointments.findUnique({
+                where: {
+                    audit_plan_id: auditPlanId,
+                },
+                include: {
+                    members: {
+                        select: {
+                            expert_id: true,
+                        },
+                    },
+                },
+            });
+
+        const expertId = user.expert_profile?.id;
+        const isAssigned = Boolean(
+            appointment?.status === 'issued' &&
+            expertId &&
+            appointment.members.some(
+                (member) => member.expert_id === expertId,
+            ),
+        );
+
+        if (!isAssigned) {
+            throw new ForbiddenException(
+                'Chỉ thành viên được phân công trong đoàn đánh giá mới được ghi nhận phát hiện',
+            );
+        }
+    }
+
     private async generateFindingCode(
         findingType: string,
         year: number,
     ) {
         const prefixMap:
             Record<string, string> = {
-            major_nc:
-                `MAJ-${year}-`,
+            conformity:
+                `CON-${year}-`,
+
+            observation:
+                `OBS-${year}-`,
+
+            ofi:
+                `OFI-${year}-`,
 
             minor_nc:
                 `MIN-${year}-`,
 
-            ofi:
-                `OFI-${year}-`,
+            major_nc:
+                `MAJ-${year}-`,
         };
 
         const prefix =
@@ -185,12 +344,7 @@ export class AuditFindingsService {
                 },
             );
 
-        return findings.map(
-            (finding) =>
-                this.normalizeFinding(
-                    finding,
-                ),
-        );
+        return this.normalizeFindingsWithEvidence(findings);
     }
 
     async findByReport(
@@ -234,12 +388,7 @@ export class AuditFindingsService {
                 },
             );
 
-        return findings.map(
-            (finding) =>
-                this.normalizeFinding(
-                    finding,
-                ),
-        );
+        return this.normalizeFindingsWithEvidence(findings);
     }
 
     async findOne(id: string) {
@@ -261,9 +410,36 @@ export class AuditFindingsService {
             );
         }
 
-        return this.normalizeFinding(
+        const [normalized] = await this.normalizeFindingsWithEvidence([
             finding,
-        );
+        ]);
+        return normalized;
+    }
+
+    async findByPlan(auditPlanId: string) {
+        const plan = await this.prisma.audit_plans.findUnique({
+            where: { id: auditPlanId },
+            select: { id: true },
+        });
+
+        if (!plan) {
+            throw new NotFoundException('Không tìm thấy kế hoạch đánh giá');
+        }
+
+        const findings = await this.prisma.audit_findings.findMany({
+            where: {
+                reports: {
+                    audit_plan_id: auditPlanId,
+                },
+            },
+            include: this.getDetailInclude(),
+            orderBy: [
+                { detected_date: 'asc' },
+                { created_at: 'asc' },
+            ],
+        });
+
+        return this.normalizeFindingsWithEvidence(findings);
     }
 
     async create(
@@ -271,9 +447,11 @@ export class AuditFindingsService {
         createdBy?: string,
     ) {
         const allowedTypes = [
-            'major_nc',
-            'minor_nc',
+            'conformity',
+            'observation',
             'ofi',
+            'minor_nc',
+            'major_nc',
         ];
 
         if (
@@ -300,6 +478,16 @@ export class AuditFindingsService {
                                 id: true,
                             },
                         },
+                        audit_plans: {
+                            select: {
+                                audit_type: true,
+                                audit_event: {
+                                    select: {
+                                        event_type: true,
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
             );
@@ -310,6 +498,11 @@ export class AuditFindingsService {
             );
         }
 
+        await this.assertFindingAccess(
+            createdBy,
+            report.audit_plan_id,
+        );
+
         if (
             report.technical_reviews.length >
             0
@@ -319,11 +512,34 @@ export class AuditFindingsService {
             );
         }
 
+        const reportFormData = this.parseFormData(
+            report.form_data,
+        );
+        const workflow =
+            reportFormData &&
+            typeof reportFormData === 'object' &&
+            !Array.isArray(reportFormData)
+                ? (reportFormData as Record<string, unknown>).workflow
+                : null;
+        const submittedAt =
+            workflow &&
+            typeof workflow === 'object' &&
+            !Array.isArray(workflow)
+                ? (workflow as Record<string, unknown>).submitted_at
+                : null;
+
+        if (submittedAt) {
+            throw new BadRequestException(
+                'Không thể thêm phát hiện sau khi báo cáo đã được nộp',
+            );
+        }
+
         if (
             [
                 'approved',
                 'completed',
                 'technical_review_completed',
+                'ready_for_technical_review',
             ].includes(
                 report.status,
             )
@@ -357,21 +573,37 @@ export class AuditFindingsService {
             report.report_date ||
             new Date();
 
-        const dueDate =
+        const isNonconformity =
+            ['major_nc', 'minor_nc'].includes(
+                dto.finding_type,
+            );
+
+        const auditType =
+            this.normalizeText(
+                report.audit_plans?.audit_type ??
+                report.audit_plans?.audit_event?.event_type,
+            ).replace(/[\s_-]+/g, '');
+
+        const correctiveActionDays =
+            auditType.includes('surveillance') ||
+            auditType.includes('giamsat')
+                ? 30
+                : 45;
+
+        const suppliedDueDate =
             this.parseDate(
                 dto.due_date,
                 'Hạn hành động khắc phục',
             );
 
-        if (
-            dto.finding_type !==
-            'ofi' &&
-            !dueDate
-        ) {
-            throw new BadRequestException(
-                'NC phải có hạn hoàn thành hành động khắc phục',
-            );
-        }
+        const dueDate =
+            suppliedDueDate ??
+            (isNonconformity
+                ? new Date(
+                    detectedDate.getTime() +
+                    correctiveActionDays * 24 * 60 * 60 * 1000,
+                )
+                : null);
 
         if (
             dueDate &&
@@ -423,7 +655,11 @@ export class AuditFindingsService {
                                     dueDate,
 
                                 status:
-                                    'open',
+                                    ['major_nc', 'minor_nc'].includes(
+                                        dto.finding_type,
+                                    )
+                                        ? 'open'
+                                        : 'recorded',
 
                                 created_by:
                                     createdBy ??
@@ -436,8 +672,9 @@ export class AuditFindingsService {
                     );
 
                 if (
-                    dto.finding_type !==
-                    'ofi'
+                    ['major_nc', 'minor_nc'].includes(
+                        dto.finding_type,
+                    )
                 ) {
                     await transaction.reports.update(
                         {
@@ -482,6 +719,16 @@ export class AuditFindingsService {
         if (!finding) {
             throw new NotFoundException(
                 'Không tìm thấy phát hiện đánh giá',
+            );
+        }
+
+        if (
+            !['major_nc', 'minor_nc'].includes(
+                finding.finding_type,
+            )
+        ) {
+            throw new BadRequestException(
+                'Chỉ NC nhẹ hoặc NC nặng mới yêu cầu hành động khắc phục',
             );
         }
 
@@ -638,8 +885,15 @@ export class AuditFindingsService {
                     },
 
                     include: {
-                        audit_findings:
-                            true,
+                        audit_findings: {
+                            include: {
+                                reports: {
+                                    select: {
+                                        audit_plan_id: true,
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
             );
@@ -649,6 +903,11 @@ export class AuditFindingsService {
                 'Không tìm thấy hành động khắc phục',
             );
         }
+
+        await this.assertFindingAccess(
+            reviewedBy,
+            action.audit_findings.reports.audit_plan_id,
+        );
 
         if (
             action.audit_findings.status ===
@@ -778,6 +1037,13 @@ export class AuditFindingsService {
                                     'desc',
                             },
                         },
+                        reports: {
+                            select: {
+                                audit_plan_id: true,
+                                form_data: true,
+                                status: true,
+                            },
+                        },
                     },
                 },
             );
@@ -788,6 +1054,11 @@ export class AuditFindingsService {
             );
         }
 
+        await this.assertFindingAccess(
+            closedBy,
+            finding.reports.audit_plan_id,
+        );
+
         if (
             finding.status === 'closed'
         ) {
@@ -797,8 +1068,9 @@ export class AuditFindingsService {
         }
 
         if (
-            finding.finding_type !==
-            'ofi'
+            ['major_nc', 'minor_nc'].includes(
+                finding.finding_type,
+            )
         ) {
             const acceptedAction =
                 finding.corrective_actions.find(
@@ -869,6 +1141,22 @@ export class AuditFindingsService {
                 if (
                     remainingNc === 0
                 ) {
+                    const reportFormData = this.parseFormData(
+                        finding.reports.form_data,
+                    );
+                    const workflow =
+                        reportFormData &&
+                        typeof reportFormData === 'object' &&
+                        !Array.isArray(reportFormData)
+                            ? (reportFormData as Record<string, unknown>).workflow
+                            : null;
+                    const submittedAt =
+                        workflow &&
+                        typeof workflow === 'object' &&
+                        !Array.isArray(workflow)
+                            ? (workflow as Record<string, unknown>).submitted_at
+                            : null;
+
                     await transaction.reports.update(
                         {
                             where: {
@@ -880,8 +1168,10 @@ export class AuditFindingsService {
                                 audit_result:
                                     'conformity_after_ca',
 
-                                status:
-                                    'ready_for_technical_review',
+                                // Chỉ chuyển sang thẩm xét nếu báo cáo đã được nộp chính thức.
+                                status: submittedAt
+                                    ? 'ready_for_technical_review'
+                                    : 'draft',
                             },
                         },
                     );

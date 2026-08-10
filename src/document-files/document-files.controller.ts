@@ -29,41 +29,22 @@ import {
 } from '@nestjs/swagger';
 
 import { FileInterceptor } from '@nestjs/platform-express';
-import { randomUUID } from 'crypto';
-import { mkdirSync } from 'fs';
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
 
 import { JwtAuthGuard } from '../auth/jwt-auth/jwt-auth.guard';
+import { getActorUserId } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import {
+    createSecureUploadOptions,
+    TempUploadCleanupInterceptor,
+} from '../common/upload-security';
 
 import { DocumentFilesService } from './document-files.service';
 import { UploadDocumentFileDto } from './dto/upload-document-file.dto';
 
-const uploadDirectory =
-    join(
-        process.cwd(),
-        'uploads',
-        'documents',
-    );
-
-mkdirSync(
-    uploadDirectory,
-    {
-        recursive: true,
-    },
-);
-
-interface AuthenticatedRequest {
-    user?: {
-        id?: string;
-        userId?: string;
-        sub?: string;
-    };
-}
 
 @Controller('document-files')
 @ApiTags('14. Tệp hồ sơ và phiên bản')
@@ -78,6 +59,47 @@ export class DocumentFilesController {
         private readonly documentFilesService:
             DocumentFilesService,
     ) { }
+
+    private actor(
+        request: SecurityRequest,
+    ) {
+        return {
+            userId:
+                getActorUserId(
+                    request,
+                ),
+            roles:
+                request.user?.roles ??
+                [],
+        };
+    }
+
+    @Get()
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'SALES',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+        'DECISION_MAKER',
+    )
+    @Permissions('documents.read')
+    @ApiOperation({
+        summary: 'Lấy danh mục tài liệu và phiên bản trong hệ thống',
+    })
+    @ApiOkResponse({
+        description: 'Danh sách tài liệu kèm hồ sơ, khách hàng và người tải lên',
+    })
+    findAll(
+        @Req()
+        request: SecurityRequest,
+    ): Promise<unknown> {
+        return this.documentFilesService.findAll(
+            this.actor(request),
+        );
+    }
 
     @Post('upload')
     @Roles(
@@ -150,72 +172,9 @@ export class DocumentFilesController {
     @UseInterceptors(
         FileInterceptor(
             'file',
-            {
-                storage: diskStorage({
-                    destination:
-                        uploadDirectory,
-
-                    filename: (
-                        _request,
-                        file,
-                        callback,
-                    ) => {
-                        const extension =
-                            extname(
-                                file.originalname,
-                            ).toLowerCase();
-
-                        const storedName =
-                            `${randomUUID()}${extension}`;
-
-                        callback(
-                            null,
-                            storedName,
-                        );
-                    },
-                }),
-
-                limits: {
-                    fileSize:
-                        20 *
-                        1024 *
-                        1024,
-                },
-
-                fileFilter: (
-                    _request,
-                    file,
-                    callback,
-                ) => {
-                    const allowedMimeTypes =
-                        [
-                            'application/pdf',
-                            'application/msword',
-                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                            'image/jpeg',
-                            'image/png',
-                        ];
-
-                    if (
-                        !allowedMimeTypes.includes(
-                            file.mimetype,
-                        )
-                    ) {
-                        return callback(
-                            new BadRequestException(
-                                'Chỉ chấp nhận PDF, Word, JPG hoặc PNG',
-                            ),
-                            false,
-                        );
-                    }
-
-                    callback(
-                        null,
-                        true,
-                    );
-                },
-            },
+            createSecureUploadOptions(),
         ),
+        new TempUploadCleanupInterceptor(),
     )
     upload(
         @Body()
@@ -225,7 +184,7 @@ export class DocumentFilesController {
         file: Express.Multer.File,
 
         @Req()
-        request: AuthenticatedRequest,
+        request: SecurityRequest,
     ) {
         const uploadedBy =
             request.user?.id ??
@@ -235,7 +194,8 @@ export class DocumentFilesController {
         return this.documentFilesService.upload(
             dto,
             file,
-            uploadedBy,
+            uploadedBy ?? undefined,
+            this.actor(request),
         );
     }
 
@@ -275,10 +235,14 @@ export class DocumentFilesController {
             ParseUUIDPipe,
         )
         entityId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
         return this.documentFilesService.findCurrent(
             entityType,
             entityId,
+            this.actor(request),
         );
     }
 
@@ -326,12 +290,16 @@ export class DocumentFilesController {
         entityId: string,
 
         @Query('document_type')
-        documentType?: string,
+        documentType: string | undefined,
+
+        @Req()
+        request: SecurityRequest,
     ) {
         return this.documentFilesService.findByEntity(
             entityType,
             entityId,
             documentType,
+            this.actor(request),
         );
     }
 
@@ -367,12 +335,16 @@ export class DocumentFilesController {
         )
         id: string,
 
+        @Req()
+        request: SecurityRequest,
+
         @Res()
         response: Response,
     ) {
         const result =
             await this.documentFilesService.getDownload(
                 id,
+                this.actor(request),
             );
 
         response.type(
@@ -423,7 +395,13 @@ export class DocumentFilesController {
             ParseUUIDPipe,
         )
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
-        return this.documentFilesService.findOne(id);
+        return this.documentFilesService.findOne(
+            id,
+            this.actor(request),
+        );
     }
 }

@@ -116,6 +116,26 @@ export class NotificationsController {
         );
     }
 
+    @Get('me/tasks')
+    @ApiOperation({ summary: 'Lấy công việc cần xử lý của tài khoản hiện tại' })
+    @ApiQuery({ name: 'limit', required: false, type: Number, example: 200 })
+    @ApiOkResponse({ description: 'Danh sách công việc theo vai trò và phân công' })
+    @Roles(...INTERNAL_ROLES)
+    @Permissions('notifications.read')
+    getMyTasks(
+        @Req()
+        request: AuthenticatedRequest,
+
+        @Query('limit')
+        limit?: string,
+    ): Promise<unknown> {
+        return this.notificationsService.findTasksForUser(
+            request.user.userId,
+            request.user.roles,
+            Number(limit ?? 200),
+        );
+    }
+
     @Get('me/summary')
     @ApiOperation({ summary: 'Lấy số lượng thông báo chưa đọc của tài khoản hiện tại' })
     @ApiOkResponse({ description: 'Tổng số thông báo theo mức độ' })

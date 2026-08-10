@@ -4,6 +4,7 @@ import {
 
 import {
     IsDateString,
+    IsIn,
     IsInt,
     IsOptional,
     IsString,
@@ -37,6 +38,41 @@ export class AuditLogQueryDto {
     @IsOptional()
     @IsUUID()
     entity_id?: string;
+
+    @ApiPropertyOptional({
+        enum: [
+            'success',
+            'failure',
+            'blocked',
+        ],
+    })
+    @IsOptional()
+    @IsIn([
+        'success',
+        'failure',
+        'blocked',
+    ])
+    outcome?: string;
+
+    @ApiPropertyOptional({
+        example: 403,
+        minimum: 100,
+        maximum: 599,
+    })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    @Min(100)
+    @Max(599)
+    status_code?: number;
+
+    @ApiPropertyOptional({
+        example: '6ea4e8a6-0f10-41f1-b9c3-1b10eb9f65b6',
+        description: 'Correlation/request ID trả về trong header X-Request-Id',
+    })
+    @IsOptional()
+    @IsString()
+    request_id?: string;
 
     @ApiPropertyOptional({ example: '2026-07-01' })
     @IsOptional()

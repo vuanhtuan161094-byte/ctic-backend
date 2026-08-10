@@ -24,20 +24,15 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ResourceAccessService } from '../security/resource-access.service';
+import { getResourceActor } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { AuditFindingsService } from './audit-findings.service';
 import { CloseAuditFindingDto } from './dto/close-audit-finding.dto';
 import { CreateAuditFindingDto } from './dto/create-audit-finding.dto';
 import { CreateCorrectiveActionDto } from './dto/create-corrective-action.dto';
 import { ReviewCorrectiveActionDto } from './dto/review-corrective-action.dto';
-
-interface AuthenticatedRequest {
-    user?: {
-        id?: string;
-        userId?: string;
-        sub?: string;
-    };
-}
 
 @Controller('audit-findings')
 @ApiTags('13. NC và hành động khắc phục')
@@ -51,10 +46,12 @@ export class AuditFindingsController {
     constructor(
         private readonly auditFindingsService:
             AuditFindingsService,
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
 
     private getUserId(
-        request: AuthenticatedRequest,
+        request: SecurityRequest,
     ): string | undefined {
         return (
             request.user?.id ??
@@ -79,13 +76,18 @@ export class AuditFindingsController {
     @ApiBadRequestResponse({
         description: 'Dữ liệu hoặc loại phát hiện không hợp lệ',
     })
-    create(
+    async create(
         @Body()
         dto: CreateAuditFindingDto,
 
         @Req()
-        request: AuthenticatedRequest,
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'report', entity_id: dto.report_id },
+            getResourceActor(request),
+        );
+
         return this.auditFindingsService.create(
             dto,
             this.getUserId(request),
@@ -119,7 +121,7 @@ export class AuditFindingsController {
         dto: CreateCorrectiveActionDto,
 
         @Req()
-        request: AuthenticatedRequest,
+        request: SecurityRequest,
     ) {
         return this.auditFindingsService
             .createCorrectiveAction(
@@ -127,6 +129,48 @@ export class AuditFindingsController {
                 dto,
                 this.getUserId(request),
             );
+    }
+
+    @Post(':id/corrective-actions/internal')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'AUDITOR',
+        'LEAD_AUDITOR',
+    )
+    @Permissions('findings.manage')
+    @ApiOperation({
+        summary: 'Nhập phản hồi hành động khắc phục thay khách hàng',
+        description: 'Dùng khi khách hàng gửi phản hồi qua email hoặc bản giấy; vẫn tạo phiên bản CAP và lưu người nhập.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID phát hiện đánh giá',
+    })
+    @ApiCreatedResponse({
+        description: 'Đã tạo phiên bản phản hồi hành động khắc phục',
+    })
+    async createCorrectiveActionInternal(
+        @Param('id')
+        id: string,
+
+        @Body()
+        dto: CreateCorrectiveActionDto,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_finding', entity_id: id },
+            getResourceActor(request),
+        );
+
+        return this.auditFindingsService.createCorrectiveAction(
+            id,
+            dto,
+            this.getUserId(request),
+        );
     }
 
     @Patch(
@@ -152,7 +196,7 @@ export class AuditFindingsController {
     @ApiOkResponse({
         description: 'Đã ghi nhận kết quả xem xét',
     })
-    reviewCorrectiveAction(
+    async reviewCorrectiveAction(
         @Param('findingId')
         findingId: string,
 
@@ -163,8 +207,18 @@ export class AuditFindingsController {
         dto: ReviewCorrectiveActionDto,
 
         @Req()
-        request: AuthenticatedRequest,
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_finding', entity_id: findingId },
+            getResourceActor(request),
+        );
+
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'corrective_action', entity_id: actionId },
+            getResourceActor(request),
+        );
+
         return this.auditFindingsService
             .reviewCorrectiveAction(
                 findingId,
@@ -195,7 +249,7 @@ export class AuditFindingsController {
     @ApiBadRequestResponse({
         description: 'Chưa có hành động khắc phục được chấp nhận',
     })
-    close(
+    async close(
         @Param('id')
         id: string,
 
@@ -203,8 +257,13 @@ export class AuditFindingsController {
         dto: CloseAuditFindingDto,
 
         @Req()
-        request: AuthenticatedRequest,
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_finding', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.auditFindingsService.close(
             id,
             dto,
@@ -215,31 +274,55 @@ export class AuditFindingsController {
     @Get()
     @Roles(
         'ADMIN',
+        'STAFF',
+        'COORDINATOR',
         'AUDITOR',
         'LEAD_AUDITOR',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
-    @Permissions('findings.read')
+    @Permissions('projects.read')
     @ApiOperation({
         summary: 'Lấy danh sách phát hiện và NC/CAP',
     })
     @ApiOkResponse({
         description: 'Danh sách phát hiện đánh giá',
     })
-    findAll() {
-        return this.auditFindingsService.findAll();
+    async findAll(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const findings =
+            await this.auditFindingsService.findAll();
+
+        const scoped =
+            await this.resourceAccess.filterEntities(
+                findings.map((finding) => ({
+                    ...finding,
+                    entity_type: 'audit_finding',
+                    entity_id: finding.id,
+                })),
+                getResourceActor(request),
+            );
+
+        return scoped.map(({
+            entity_type: _entityType,
+            entity_id: _entityId,
+            ...finding
+        }) => finding);
     }
 
     @Get('report/:reportId')
     @Roles(
         'ADMIN',
+        'STAFF',
+        'COORDINATOR',
         'AUDITOR',
         'LEAD_AUDITOR',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
-    @Permissions('findings.read')
+    @Permissions('projects.read')
     @ApiOperation({
         summary: 'Lấy phát hiện theo báo cáo',
     })
@@ -251,24 +334,70 @@ export class AuditFindingsController {
     @ApiOkResponse({
         description: 'Các phát hiện thuộc báo cáo',
     })
-    findByReport(
+    async findByReport(
         @Param('reportId')
         reportId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'report', entity_id: reportId },
+            getResourceActor(request),
+        );
+
         return this.auditFindingsService.findByReport(
             reportId,
         );
     }
 
-    @Get(':id')
+    @Get('plan/:auditPlanId')
     @Roles(
         'ADMIN',
+        'STAFF',
+        'COORDINATOR',
         'AUDITOR',
         'LEAD_AUDITOR',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
-    @Permissions('findings.read')
+    @Permissions('projects.read')
+    @ApiOperation({
+        summary: 'Lấy toàn bộ phát hiện và CAP theo kế hoạch đánh giá',
+    })
+    @ApiParam({
+        name: 'auditPlanId',
+        description: 'UUID kế hoạch đánh giá',
+    })
+    @ApiOkResponse({
+        description: 'Danh sách phát hiện, các phiên bản CAP và tệp bằng chứng',
+    })
+    async findByPlan(
+        @Param('auditPlanId')
+        auditPlanId: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_plan', entity_id: auditPlanId },
+            getResourceActor(request),
+        );
+
+        return this.auditFindingsService.findByPlan(auditPlanId);
+    }
+
+    @Get(':id')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'AUDITOR',
+        'LEAD_AUDITOR',
+        'TECHNICAL_REVIEWER',
+        'DECISION_MAKER',
+    )
+    @Permissions('projects.read')
     @ApiOperation({
         summary: 'Lấy chi tiết phát hiện và hành động khắc phục',
     })
@@ -283,10 +412,18 @@ export class AuditFindingsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy phát hiện',
     })
-    findOne(
+    async findOne(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_finding', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.auditFindingsService.findOne(id);
     }
 }

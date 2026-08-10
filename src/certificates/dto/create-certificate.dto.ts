@@ -21,7 +21,7 @@ export class CreateCertificateDto {
     technical_review_id!: string;
 
     @ApiProperty({
-        example: 'CTIC-ISO14001-2026-0001',
+        example: 'CB-ISO14001-2026-0001',
         description: 'Số chứng chỉ duy nhất',
         maxLength: 50,
     })

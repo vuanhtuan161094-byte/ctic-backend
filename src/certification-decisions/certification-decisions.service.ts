@@ -398,20 +398,23 @@ export class CertificationDecisionsService {
                 );
             }
 
+            // Stage 1 chỉ kết luận mức độ sẵn sàng cho Stage 2 và không đi qua
+            // thẩm xét kỹ thuật F.11. Chấp nhận báo cáo Stage 1 đã nộp theo workflow mới;
+            // vẫn nhận hồ sơ cũ từng có technical review để tương thích dữ liệu lịch sử.
             const stage1Completed =
                 stage1Plans.some((plan) =>
                     plan.reports.some((report) =>
+                        report.status === 'stage1_completed' ||
                         report.technical_reviews.some(
                             (technicalReview) =>
-                                technicalReview.status ===
-                                'completed',
+                                technicalReview.status === 'completed',
                         ),
                     ),
                 );
 
             if (!stage1Completed) {
                 throw new BadRequestException(
-                    'Không thể phê duyệt chứng nhận lần đầu: Stage 1 chưa có báo cáo thẩm xét hoàn thành',
+                    'Không thể phê duyệt chứng nhận lần đầu: Stage 1 chưa có báo cáo đã nộp và hoàn thành',
                 );
             }
 

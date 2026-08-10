@@ -525,6 +525,39 @@ export class AuditProgramsService {
             );
         }
 
+
+        const issuedProjectAppointment =
+            await this.prisma.audit_team_appointments.findFirst({
+                where: {
+                    status:
+                        'issued',
+
+                    audit_plans: {
+                        project_id:
+                            dto.project_id,
+
+                        audit_type:
+                            'project_team',
+                    },
+                },
+
+                select: {
+                    id:
+                        true,
+
+                    appointment_number:
+                        true,
+                },
+            });
+
+        if (
+            !issuedProjectAppointment
+        ) {
+            throw new BadRequestException(
+                `Hồ sơ ${project.project_code} chưa có chỉ định đoàn đánh giá được ban hành. Hãy chỉ định đoàn theo mã hồ sơ trước khi lập chương trình đánh giá.`,
+            );
+        }
+
         const application =
             project.certification_applications;
 
@@ -946,6 +979,41 @@ export class AuditProgramsService {
                     this.serializeFormData(
                         mergedFormData,
                     );
+            }
+        }
+
+
+        if (
+            dto.status === 'issued' &&
+            current.status !== 'issued'
+        ) {
+            const issuedProjectAppointment =
+                await this.prisma.audit_team_appointments.findFirst({
+                    where: {
+                        status:
+                            'issued',
+
+                        audit_plans: {
+                            project_id:
+                                current.project_id,
+
+                            audit_type:
+                                'project_team',
+                        },
+                    },
+
+                    select: {
+                        id:
+                            true,
+                    },
+                });
+
+            if (
+                !issuedProjectAppointment
+            ) {
+                throw new BadRequestException(
+                    `Hồ sơ ${current.certification_projects.project_code} chưa có chỉ định đoàn đánh giá được ban hành.`,
+                );
             }
         }
 

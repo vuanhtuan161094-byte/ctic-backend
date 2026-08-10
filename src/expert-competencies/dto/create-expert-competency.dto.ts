@@ -160,6 +160,14 @@ export class CreateExpertCompetencyDto {
     expiry_date?: string;
 
     @ApiPropertyOptional({
+        example: 'Sản xuất sản phẩm nhựa và cao su',
+        description: 'Mô tả lĩnh vực/hoạt động được phê duyệt đánh giá',
+    })
+    @IsOptional()
+    @IsString()
+    scope_description?: string;
+
+    @ApiPropertyOptional({
         example: 'Chỉ thực hiện đánh giá dưới phạm vi đã phê duyệt.',
         description: 'Hạn chế năng lực',
     })

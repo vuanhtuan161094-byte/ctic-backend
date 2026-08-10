@@ -1,1 +1,2 @@
-provider = "sqlserver"
+# SQL Server migration history normalized for Prisma CLI 7.8 used by this project.
+provider = "mssql"

@@ -160,6 +160,34 @@ export class CustomersController {
         );
     }
 
+    @Patch(':id/reactivate')
+    @Roles('ADMIN')
+    @Permissions('customers.manage')
+    @ApiOperation({
+        summary: 'Khôi phục hoạt động khách hàng',
+        description:
+            'Khôi phục khách hàng đã ngừng hoạt động trên chính bản ghi cũ để bảo toàn toàn bộ lịch sử và hồ sơ liên kết.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID của khách hàng',
+    })
+    @ApiOkResponse({
+        description: 'Khách hàng đã được khôi phục hoạt động',
+    })
+    @ApiBadRequestResponse({
+        description: 'Khách hàng đang hoạt động',
+    })
+    @ApiNotFoundResponse({
+        description: 'Không tìm thấy khách hàng',
+    })
+    reactivate(
+        @Param('id')
+        id: string,
+    ) {
+        return this.customersService.reactivate(id);
+    }
+
     @Delete(':id')
     @Roles('ADMIN')
     @Permissions('customers.manage')

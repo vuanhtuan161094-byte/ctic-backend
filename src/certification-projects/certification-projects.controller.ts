@@ -5,6 +5,7 @@ import {
     Param,
     Post,
     Query,
+    Req,
     UseGuards,
 } from '@nestjs/common';
 import {
@@ -24,9 +25,13 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ResourceAccessService } from '../security/resource-access.service';
+import { getActorUserId } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { CertificationProjectsService } from './certification-projects.service';
 import { CreateCertificationProjectDto } from './dto/create-certification-project.dto';
+import { CreateCompleteCertificationProjectDto } from './dto/create-complete-certification-project.dto';
 
 @Controller('certification-projects')
 @ApiTags('07. Dự án chứng nhận')
@@ -40,7 +45,23 @@ export class CertificationProjectsController {
     constructor(
         private readonly certificationProjectsService:
             CertificationProjectsService,
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
+
+    private actor(
+        request: SecurityRequest,
+    ) {
+        return {
+            userId:
+                getActorUserId(
+                    request,
+                ),
+            roles:
+                request.user?.roles ??
+                [],
+        };
+    }
 
     @Get()
     @Roles(
@@ -60,8 +81,20 @@ export class CertificationProjectsController {
     @ApiOkResponse({
         description: 'Danh sách dự án chứng nhận',
     })
-    findAll() {
-        return this.certificationProjectsService.findAll();
+    async findAll(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const accessible =
+            await this.resourceAccess.getAccessibleProjectIds(
+                this.actor(request),
+            );
+
+        return this.certificationProjectsService.findAll(
+            accessible === null
+                ? undefined
+                : Array.from(accessible),
+        );
     }
 
     @Get(':id/dossier')
@@ -92,10 +125,18 @@ export class CertificationProjectsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy dự án chứng nhận',
     })
-    getDossier(
+    async getDossier(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertProjectAccess(
+            id,
+            this.actor(request),
+        );
+
         return this.certificationProjectsService.getDossier(
             id,
         );
@@ -136,13 +177,21 @@ export class CertificationProjectsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy dự án chứng nhận',
     })
-    getAlerts(
+    async getAlerts(
         @Param('id')
         id: string,
 
         @Query('warning_days')
-        warningDays?: string,
+        warningDays: string | undefined,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertProjectAccess(
+            id,
+            this.actor(request),
+        );
+
         return this.certificationProjectsService.getAlerts(
             id,
             Number(warningDays ?? 30),
@@ -175,12 +224,50 @@ export class CertificationProjectsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy dự án chứng nhận',
     })
-    findOne(
+    async findOne(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertProjectAccess(
+            id,
+            this.actor(request),
+        );
+
         return this.certificationProjectsService.findOne(
             id,
+        );
+    }
+
+    @Post('complete')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+    )
+    @Permissions('projects.manage')
+    @ApiOperation({
+        summary: 'Khởi tạo hoàn chỉnh hồ sơ chứng nhận',
+        description:
+            'Tạo hợp đồng/thỏa thuận và dự án chứng nhận trong một giao dịch từ đơn đăng ký đã được chấp nhận.',
+    })
+    @ApiCreatedResponse({
+        description: 'Đã tạo hồ sơ thương mại và dự án chứng nhận',
+    })
+    @ApiBadRequestResponse({
+        description: 'Đơn chưa đủ điều kiện, dữ liệu hợp đồng/thỏa thuận không hợp lệ hoặc hồ sơ đã được tạo trước đó',
+    })
+    @ApiNotFoundResponse({
+        description: 'Không tìm thấy đơn đăng ký hoặc dữ liệu liên kết',
+    })
+    createComplete(
+        @Body()
+        dto: CreateCompleteCertificationProjectDto,
+    ) {
+        return this.certificationProjectsService.createComplete(
+            dto,
         );
     }
 

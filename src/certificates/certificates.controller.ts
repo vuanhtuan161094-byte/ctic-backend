@@ -1,17 +1,22 @@
 import {
+    BadRequestException,
     Body,
     Controller,
     Get,
     Param,
+    ParseUUIDPipe,
     Patch,
     Post,
     Req,
+    UploadedFile,
     UseGuards,
+    UseInterceptors,
 } from '@nestjs/common';
 import {
     ApiBadRequestResponse,
     ApiBearerAuth,
     ApiConflictResponse,
+    ApiConsumes,
     ApiCreatedResponse,
     ApiNotFoundResponse,
     ApiOkResponse,
@@ -20,11 +25,18 @@ import {
     ApiTags,
 } from '@nestjs/swagger';
 
+import { FileInterceptor } from '@nestjs/platform-express';
+
 import { JwtAuthGuard } from '../auth/jwt-auth/jwt-auth.guard';
 import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import {
+    createSecureUploadOptions,
+    TempUploadCleanupInterceptor,
+} from '../common/upload-security';
+import { DocumentFilesService } from '../document-files/document-files.service';
 
 import { CertificatesService } from './certificates.service';
 import { CreateCertificateDto } from './dto/create-certificate.dto';
@@ -50,6 +62,8 @@ export class CertificatesController {
     constructor(
         private readonly certificatesService:
             CertificatesService,
+        private readonly documentFilesService:
+            DocumentFilesService,
     ) { }
 
     private getUserId(
@@ -85,8 +99,14 @@ export class CertificatesController {
     create(
         @Body()
         dto: CreateCertificateDto,
+
+        @Req()
+        request: AuthenticatedRequest,
     ) {
-        return this.certificatesService.create(dto);
+        return this.certificatesService.create(
+            dto,
+            this.getUserId(request),
+        );
     }
 
     @Get()
@@ -105,6 +125,75 @@ export class CertificatesController {
     })
     findAll() {
         return this.certificatesService.findAll();
+    }
+
+    @Get('plan/:planId/workspace')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'SALES',
+        'COORDINATOR',
+        'DECISION_MAKER',
+    )
+    @Permissions('certificates.read')
+    @ApiOperation({
+        summary: 'Lấy không gian cấp giấy chứng nhận theo kế hoạch Giai đoạn 2',
+        description:
+            'Tổng hợp báo cáo, thẩm xét, quyết định, thông báo, chứng chỉ hiện hành và điều kiện cấp.',
+    })
+    @ApiParam({
+        name: 'planId',
+        description: 'UUID kế hoạch đánh giá Giai đoạn 2',
+    })
+    @ApiOkResponse({
+        description: 'Không gian cấp và quản lý giấy chứng nhận',
+    })
+    getPlanWorkspace(
+        @Param('planId', ParseUUIDPipe) planId: string,
+    ) {
+        return this.certificatesService.getPlanIssuanceWorkspace(planId);
+    }
+
+    @Post(':id/pdf')
+    @Roles(
+        'ADMIN',
+        'DECISION_MAKER',
+    )
+    @Permissions('certificates.manage')
+    @ApiOperation({
+        summary: 'Tải PDF giấy chứng nhận chính thức',
+        description:
+            'Tạo phiên bản PDF mới cho giấy chứng nhận; bản cũ vẫn được giữ trong lịch sử.',
+    })
+    @ApiConsumes('multipart/form-data')
+    @UseInterceptors(
+        FileInterceptor(
+            'file',
+            createSecureUploadOptions(['.pdf']),
+        ),
+        new TempUploadCleanupInterceptor(),
+    )
+    async uploadOfficialPdf(
+        @Param('id', ParseUUIDPipe) id: string,
+        @UploadedFile() file: Express.Multer.File,
+        @Req() request: AuthenticatedRequest,
+    ) {
+        await this.certificatesService.findOne(id);
+        if (!file) {
+            throw new BadRequestException('Chưa chọn file PDF giấy chứng nhận');
+        }
+
+        return this.documentFilesService.upload(
+            {
+                entity_type: 'certificate',
+                entity_id: id,
+                document_type: 'certificate_pdf',
+                file_kind: 'signed_scan',
+                note: 'Giấy chứng nhận PDF chính thức',
+            },
+            file,
+            this.getUserId(request),
+        );
     }
 
     @Get('technical-review/:technicalReviewId')

@@ -1,45 +1,42 @@
 import {
     CallHandler,
     ExecutionContext,
+    HttpException,
     Injectable,
-    Logger,
     NestInterceptor,
 } from '@nestjs/common';
 
 import type {
-    Request,
+    Response,
 } from 'express';
 
 import {
+    from,
     Observable,
+    throwError,
 } from 'rxjs';
 
 import {
+    catchError,
     mergeMap,
 } from 'rxjs/operators';
 
-import { PrismaService } from '../prisma/prisma.service';
-
-interface AuditRequest
-    extends Request {
-    user?: {
-        id?: string;
-        userId?: string;
-        sub?: string;
-    };
-}
+import {
+    SecurityAuditService,
+} from '../security/security-audit.service';
+import {
+    getActorUserId,
+} from '../security/security-request';
+import type {
+    SecurityRequest,
+} from '../security/security-request';
 
 @Injectable()
 export class AuditLoggingInterceptor
     implements NestInterceptor {
-    private readonly logger =
-        new Logger(
-            AuditLoggingInterceptor.name,
-        );
-
     constructor(
-        private readonly prisma:
-            PrismaService,
+        private readonly securityAudit:
+            SecurityAuditService,
     ) { }
 
     private shouldSkip(
@@ -51,13 +48,13 @@ export class AuditLoggingInterceptor
                 'GET',
                 'HEAD',
                 'OPTIONS',
-            ].includes(
-                method,
-            )
+            ].includes(method)
         ) {
             return true;
         }
 
+        // Auth có security audit riêng để ghi được cả lần đăng nhập thất bại.
+        // Audit log tự thân được bỏ qua để tránh vòng lặp ghi log.
         if (
             path.startsWith(
                 '/auth',
@@ -65,11 +62,8 @@ export class AuditLoggingInterceptor
             path.startsWith(
                 '/audit-logs',
             ) ||
-            path.startsWith(
-                '/users',
-            ) ||
             path ===
-            '/notifications/sync'
+                '/notifications/sync'
         ) {
             return true;
         }
@@ -79,11 +73,11 @@ export class AuditLoggingInterceptor
 
     private getEntityId(
         response: unknown,
-        request: AuditRequest,
+        request: SecurityRequest,
     ) {
         if (
             typeof response ===
-            'object' &&
+                'object' &&
             response !== null &&
             'id' in response
         ) {
@@ -96,7 +90,7 @@ export class AuditLoggingInterceptor
 
             if (
                 typeof responseId ===
-                'string' &&
+                    'string' &&
                 this.isUuid(
                     responseId,
                 )
@@ -110,7 +104,7 @@ export class AuditLoggingInterceptor
 
         if (
             typeof parameterId ===
-            'string' &&
+                'string' &&
             this.isUuid(
                 parameterId,
             )
@@ -129,6 +123,35 @@ export class AuditLoggingInterceptor
         );
     }
 
+    private statusCode(
+        error: unknown,
+    ) {
+        return error instanceof
+            HttpException
+            ? error.getStatus()
+            : 500;
+    }
+
+    private buildAction(
+        method: string,
+        path: string,
+        request: SecurityRequest,
+    ) {
+        const routePath =
+            request.route?.path;
+
+        return `${method} ${
+            routePath
+                ? `${
+                    request.baseUrl ??
+                    ''
+                }${String(
+                    routePath,
+                )}`
+                : path
+        }`.slice(0, 100);
+    }
+
     intercept(
         context: ExecutionContext,
         next: CallHandler,
@@ -136,7 +159,12 @@ export class AuditLoggingInterceptor
         const request =
             context
                 .switchToHttp()
-                .getRequest<AuditRequest>();
+                .getRequest<SecurityRequest>();
+
+        const response =
+            context
+                .switchToHttp()
+                .getResponse<Response>();
 
         const method =
             request.method
@@ -157,100 +185,108 @@ export class AuditLoggingInterceptor
         }
 
         const userId =
-            request.user?.id ??
-            request.user?.userId ??
-            request.user?.sub ??
-            null;
+            getActorUserId(
+                request,
+            );
 
         if (!userId) {
             return next.handle();
         }
 
+        const startedAt =
+            Date.now();
+
+        const action =
+            this.buildAction(
+                method,
+                path,
+                request,
+            );
+
+        const entityType =
+            path
+                .split('/')
+                .filter(Boolean)[0]
+                ?.replace(
+                    /-/g,
+                    '_',
+                )
+                .slice(0, 50) ??
+            null;
+
         return next.handle().pipe(
             mergeMap(
                 async (
-                    response,
+                    result,
                 ) => {
-                    try {
-                        const routePath =
-                            request.route
-                                ?.path;
-
-                        const action =
-                            `${method} ${routePath
-                                    ? `${request.baseUrl ?? ''}${String(routePath)}`
-                                    : path
-                                }`.slice(
-                                    0,
-                                    100,
-                                );
-
-                        const entityType =
-                            path
-                                .split('/')
-                                .filter(Boolean)[0]
-                                ?.replace(
-                                    /-/g,
-                                    '_',
-                                )
-                                .slice(
-                                    0,
-                                    50,
-                                ) ??
-                            null;
-
-                        const entityId =
+                    await this.securityAudit.write({
+                        userId,
+                        action,
+                        entityType,
+                        entityId:
                             this.getEntityId(
-                                response,
+                                result,
                                 request,
-                            );
+                            ),
+                        ipAddress:
+                            request.ip,
+                        userAgent:
+                            request.get(
+                                'user-agent',
+                            ),
+                        requestId:
+                            request.requestId,
+                        outcome:
+                            'success',
+                        statusCode:
+                            response.statusCode,
+                        durationMs:
+                            Date.now() -
+                            startedAt,
+                    });
 
-                        await this.prisma.audit_logs.create({
-                            data: {
-                                user_id:
-                                    userId,
-
-                                action,
-
-                                entity_type:
-                                    entityType,
-
-                                entity_id:
-                                    entityId,
-
-                                ip_address:
-                                    request.ip
-                                        ?.slice(
-                                            0,
-                                            50,
-                                        ) ??
-                                    null,
-
-                                user_agent:
-                                    request
-                                        .get(
-                                            'user-agent',
-                                        )
-                                        ?.slice(
-                                            0,
-                                            255,
-                                        ) ??
-                                    null,
-                            },
-                        });
-                    } catch (error) {
-                        this.logger.error(
-                            'Không thể ghi audit log',
-
-                            error instanceof
-                                Error
-                                ? error.stack
-                                : undefined,
-                        );
-                    }
-
-                    return response;
+                    return result;
                 },
+            ),
+            catchError(
+                (error: unknown) =>
+                    from(
+                        this.securityAudit.write({
+                            userId,
+                            action,
+                            entityType,
+                            entityId:
+                                this.getEntityId(
+                                    null,
+                                    request,
+                                ),
+                            ipAddress:
+                                request.ip,
+                            userAgent:
+                                request.get(
+                                    'user-agent',
+                                ),
+                            requestId:
+                                request.requestId,
+                            outcome:
+                                'failure',
+                            statusCode:
+                                this.statusCode(
+                                    error,
+                                ),
+                            durationMs:
+                                Date.now() -
+                                startedAt,
+                        }),
+                    ).pipe(
+                        mergeMap(
+                            () =>
+                                throwError(
+                                    () =>
+                                        error,
+                                ),
+                        ),
+                    ),
             ),
         );
     }

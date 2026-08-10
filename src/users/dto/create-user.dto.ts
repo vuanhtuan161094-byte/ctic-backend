@@ -21,7 +21,7 @@ export class CreateUserDto {
     @MaxLength(50)
     username!: string;
 
-    @ApiProperty({ example: 'auditor01@ctic.vn' })
+    @ApiProperty({ example: 'auditor01@example.com' })
     @IsEmail()
     @MaxLength(255)
     email!: string;

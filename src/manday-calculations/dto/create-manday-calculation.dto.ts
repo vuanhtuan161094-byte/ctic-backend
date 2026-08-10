@@ -7,6 +7,7 @@ import {
     IsString,
     IsUUID,
     Max,
+    MaxLength,
     Min,
     ValidateNested,
 } from 'class-validator';
@@ -52,6 +53,7 @@ export class CreateMandayCalculationDto {
         description: 'Tiêu chuẩn hoặc hệ thống quản lý áp dụng',
     })
     @IsString()
+    @MaxLength(30)
     standard_type!: string;
 
     @ApiProperty({

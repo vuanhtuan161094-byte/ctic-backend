@@ -1,10 +1,13 @@
 import {
+    BadRequestException,
     Body,
     Controller,
     Get,
     Param,
     Patch,
     Post,
+    Query,
+    Req,
     UseGuards,
 } from '@nestjs/common';
 import {
@@ -15,6 +18,7 @@ import {
     ApiOkResponse,
     ApiOperation,
     ApiParam,
+    ApiQuery,
     ApiTags,
 } from '@nestjs/swagger';
 
@@ -23,12 +27,17 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ResourceAccessService } from '../security/resource-access.service';
+import { getResourceActor } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { TechnicalReviewsService } from './technical-reviews.service';
+import { AuditDocumentsService } from '../audit-documents/audit-documents.service';
 import { AttachReviewDocumentDto } from './dto/attach-review-document.dto';
 import { CreateTechnicalReviewDto } from './dto/create-technical-review.dto';
 import { UpdateReviewItemDto } from './dto/update-review-item.dto';
 import { UpdateTechnicalReviewReportDto } from './dto/update-technical-review-report.dto';
+import { SaveTechnicalReviewWorkspaceDto } from './dto/save-technical-review-workspace.dto';
 
 @Controller('technical-reviews')
 @ApiTags('15. Thẩm xét kỹ thuật')
@@ -42,7 +51,184 @@ export class TechnicalReviewsController {
     constructor(
         private readonly technicalReviewsService:
             TechnicalReviewsService,
+        private readonly auditDocumentsService:
+            AuditDocumentsService,
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
+
+    private getUserId(
+        request: SecurityRequest,
+    ) {
+        return request.user?.id ??
+            request.user?.userId ??
+            request.user?.sub;
+    }
+
+    @Get('plan/:planId/workspace')
+    @Roles(
+        'ADMIN',
+        'TECHNICAL_REVIEWER',
+        'DECISION_MAKER',
+    )
+    @Permissions('technical_reviews.read')
+    @ApiOperation({
+        summary: 'Lấy không gian thẩm xét kỹ thuật và dữ liệu F.11 theo PLAN',
+    })
+    @ApiParam({
+        name: 'planId',
+        description: 'UUID kế hoạch đánh giá',
+    })
+    @ApiOkResponse({
+        description: 'Điều kiện bắt đầu, hồ sơ thẩm xét, tiêu chí F.11 và lịch sử tài liệu',
+    })
+    async getWorkspaceByPlan(
+        @Param('planId')
+        planId: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_plan', entity_id: planId },
+            getResourceActor(request),
+        );
+
+        return this.technicalReviewsService
+            .getWorkspaceByPlan(planId);
+    }
+
+    @Post('plan/:planId/ensure')
+    @Roles(
+        'ADMIN',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('technical_reviews.perform')
+    @ApiOperation({
+        summary: 'Bắt đầu hoặc mở lại hồ sơ thẩm xét kỹ thuật của PLAN',
+    })
+    @ApiParam({
+        name: 'planId',
+        description: 'UUID kế hoạch đánh giá',
+    })
+    @ApiCreatedResponse({
+        description: 'Đã tạo/mở hồ sơ thẩm xét và gán cho người dùng hiện tại',
+    })
+    async ensureForPlan(
+        @Param('planId')
+        planId: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_plan', entity_id: planId },
+            getResourceActor(request),
+        );
+
+        return this.technicalReviewsService
+            .ensureForPlan(
+                planId,
+                this.getUserId(request),
+            );
+    }
+
+    @Patch(':id/workspace')
+    @Roles(
+        'ADMIN',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('technical_reviews.perform')
+    @ApiOperation({
+        summary: 'Lưu dữ liệu thẩm xét sơ bộ, kỹ thuật và kiến nghị F.11',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID hồ sơ thẩm xét',
+    })
+    @ApiOkResponse({
+        description: 'Đã lưu dự thảo F.11-P.09',
+    })
+    async saveWorkspace(
+        @Param('id')
+        id: string,
+
+        @Body()
+        dto: SaveTechnicalReviewWorkspaceDto,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
+        return this.technicalReviewsService
+            .saveWorkspace(
+                id,
+                dto,
+            );
+    }
+
+    @Post(':id/f11/generate')
+    @Roles(
+        'ADMIN',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('technical_reviews.perform')
+    @ApiOperation({
+        summary: 'Sinh báo cáo thẩm xét F.11-P.09 ở định dạng Word/PDF',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID hồ sơ thẩm xét kỹ thuật',
+    })
+    @ApiQuery({
+        name: 'format',
+        required: true,
+        enum: ['docx', 'pdf'],
+    })
+    @ApiCreatedResponse({
+        description: 'Đã sinh và lưu phiên bản F.11-P.09',
+    })
+    async generateF11(
+        @Param('id')
+        id: string,
+
+        @Query('format')
+        format: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
+        const review =
+            await this.technicalReviewsService.findOne(id);
+
+        const planId =
+            review.reports?.audit_plan_id;
+
+        if (!planId) {
+            throw new BadRequestException(
+                'Không xác định được kế hoạch của hồ sơ thẩm xét',
+            );
+        }
+
+        return this.auditDocumentsService.generate(
+            planId,
+            'technical_review_report_f11',
+            format,
+            this.getUserId(request),
+            undefined,
+            undefined,
+            undefined,
+        );
+    }
 
     @Patch(':id/sync-documents')
     @Roles(
@@ -60,10 +246,18 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Đã đồng bộ các tài liệu hiện có',
     })
-    syncDocuments(
+    async syncDocuments(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService
             .syncDocuments(id);
     }
@@ -89,7 +283,7 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Đã gắn phiên bản tài liệu; trạng thái được mở lại nếu cần',
     })
-    attachDocument(
+    async attachDocument(
         @Param('id')
         id: string,
 
@@ -98,7 +292,15 @@ export class TechnicalReviewsController {
 
         @Body()
         dto: AttachReviewDocumentDto,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService
             .attachDocument(
                 id,
@@ -122,10 +324,18 @@ export class TechnicalReviewsController {
     @ApiBadRequestResponse({
         description: 'Báo cáo chưa đáp ứng điều kiện thẩm xét',
     })
-    create(
+    async create(
         @Body()
         dto: CreateTechnicalReviewDto,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'report', entity_id: dto.report_id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService.create(
             dto,
         );
@@ -144,8 +354,28 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Danh sách hồ sơ thẩm xét',
     })
-    findAll() {
-        return this.technicalReviewsService.findAll();
+    async findAll(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const reviews =
+            await this.technicalReviewsService.findAll();
+
+        const scoped =
+            await this.resourceAccess.filterEntities(
+                reviews.map((review) => ({
+                    ...review,
+                    entity_type: 'technical_review',
+                    entity_id: review.id,
+                })),
+                getResourceActor(request),
+            );
+
+        return scoped.map(({
+            entity_type: _entityType,
+            entity_id: _entityId,
+            ...review
+        }) => review);
     }
 
     @Get('report/:reportId')
@@ -166,10 +396,18 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Hồ sơ thẩm xét của báo cáo',
     })
-    findByReport(
+    async findByReport(
         @Param('reportId')
         reportId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'report', entity_id: reportId },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService.findByReport(
             reportId,
         );
@@ -191,13 +429,21 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Đã lưu báo cáo và khuyến nghị thẩm xét',
     })
-    updateTechnicalReviewReport(
+    async updateTechnicalReviewReport(
         @Param('id')
         id: string,
 
         @Body()
         dto: UpdateTechnicalReviewReportDto,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService
             .updateTechnicalReviewReport(
                 id,
@@ -223,12 +469,63 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Nội dung báo cáo thẩm xét',
     })
-    getTechnicalReviewReport(
+    async getTechnicalReviewReport(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService
             .getTechnicalReviewReport(id);
+    }
+
+    @Get(':id/items/:documentKey/preview')
+    @Roles(
+        'ADMIN',
+        'TECHNICAL_REVIEWER',
+        'DECISION_MAKER',
+    )
+    @Permissions('technical_reviews.read')
+    @ApiOperation({
+        summary: 'Xem nhanh dữ liệu hoặc tệp của một hạng mục thẩm xét',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID hồ sơ thẩm xét',
+    })
+    @ApiParam({
+        name: 'documentKey',
+        description: 'Khóa hạng mục hồ sơ cần xem',
+    })
+    @ApiOkResponse({
+        description: 'Dữ liệu xem nhanh và các tệp hiện hành của hạng mục',
+    })
+    async getReviewItemPreview(
+        @Param('id')
+        id: string,
+
+        @Param('documentKey')
+        documentKey: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
+        return this.technicalReviewsService
+            .getReviewItemPreview(
+                id,
+                documentKey,
+            );
     }
 
     @Get(':id')
@@ -251,10 +548,18 @@ export class TechnicalReviewsController {
     @ApiNotFoundResponse({
         description: 'Không tìm thấy hồ sơ thẩm xét',
     })
-    findOne(
+    async findOne(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService.findOne(id);
     }
 
@@ -279,7 +584,7 @@ export class TechnicalReviewsController {
     @ApiOkResponse({
         description: 'Đã cập nhật trạng thái hạng mục',
     })
-    updateReviewItem(
+    async updateReviewItem(
         @Param('id')
         id: string,
 
@@ -288,7 +593,15 @@ export class TechnicalReviewsController {
 
         @Body()
         dto: UpdateReviewItemDto,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService.updateReviewItem(
             id,
             documentKey,
@@ -316,10 +629,18 @@ export class TechnicalReviewsController {
     @ApiBadRequestResponse({
         description: 'Còn tài liệu chưa được chấp nhận hoặc thiếu báo cáo thẩm xét',
     })
-    complete(
+    async complete(
         @Param('id')
         id: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'technical_review', entity_id: id },
+            getResourceActor(request),
+        );
+
         return this.technicalReviewsService.complete(id);
     }
 }

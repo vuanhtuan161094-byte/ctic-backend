@@ -252,6 +252,13 @@ export class DashboardService {
 
             this.prisma.audit_findings.count({
                 where: {
+                    finding_type: {
+                        in: [
+                            'major_nc',
+                            'minor_nc',
+                        ],
+                    },
+
                     status: {
                         not: 'closed',
                     },
@@ -260,6 +267,13 @@ export class DashboardService {
 
             this.prisma.audit_findings.count({
                 where: {
+                    finding_type: {
+                        in: [
+                            'major_nc',
+                            'minor_nc',
+                        ],
+                    },
+
                     status: {
                         not: 'closed',
                     },
@@ -557,6 +571,13 @@ export class DashboardService {
         ] = await Promise.all([
             this.prisma.audit_findings.findMany({
                 where: {
+                    finding_type: {
+                        in: [
+                            'major_nc',
+                            'minor_nc',
+                        ],
+                    },
+
                     status: {
                         not: 'closed',
                     },

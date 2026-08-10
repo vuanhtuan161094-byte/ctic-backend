@@ -11,6 +11,10 @@ import {
   PrismaService,
 } from './prisma.service';
 
+import {
+  DatabaseSchemaService,
+} from './database-schema.service';
+
 @Global()
 @Module({
   imports: [
@@ -19,10 +23,12 @@ import {
 
   providers: [
     PrismaService,
+    DatabaseSchemaService,
   ],
 
   exports: [
     PrismaService,
+    DatabaseSchemaService,
   ],
 })
 export class PrismaModule { }

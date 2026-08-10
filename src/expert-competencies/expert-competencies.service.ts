@@ -304,6 +304,11 @@ export class ExpertCompetenciesService {
                 expiry_date:
                     expiryDate,
 
+                scope_description:
+                    dto.scope_description
+                        ?.trim() ??
+                    null,
+
                 restriction:
                     dto.restriction
                         ?.trim() ??
@@ -561,6 +566,13 @@ export class ExpertCompetenciesService {
 
                 expiry_date:
                     expiryDate,
+
+                ...(dto.scope_description !== undefined
+                    ? {
+                        scope_description:
+                            dto.scope_description.trim(),
+                    }
+                    : {}),
 
                 ...(dto.restriction !== undefined
                     ? {

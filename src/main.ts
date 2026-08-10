@@ -4,6 +4,8 @@ import {
 
 import { NestFactory } from '@nestjs/core';
 
+import { randomUUID } from 'crypto';
+
 import {
     DocumentBuilder,
     SwaggerModule,
@@ -12,14 +14,145 @@ import {
 import { AppModule } from './app.module';
 
 import {
+    getDeploymentConfig,
+    isCorsOriginAllowed,
+} from './common/deployment-config';
+
+import {
     GlobalExceptionFilter,
 } from './common/filters/global-exception.filter';
 
+import {
+    getPlatformBranding,
+} from './common/platform-branding';
+
+import {
+    ensureStorageLayout,
+} from './common/storage-config';
+
+import {
+    getSecurityConfig,
+    validateSecurityEnvironment,
+} from './security/security-config';
+
+import {
+    PrismaService,
+} from './prisma/prisma.service';
+
+import {
+    DatabaseSchemaService,
+} from './prisma/database-schema.service';
+
 async function bootstrap() {
+    // NestFactory.create() khởi tạo ConfigModule.forRoot(), vì vậy .env đã được
+    // nạp trước khi đọc cấu hình deployment/storage.
     const app =
         await NestFactory.create(
             AppModule,
         );
+
+    const deployment =
+        getDeploymentConfig();
+
+    const storage =
+        ensureStorageLayout();
+
+    const expressApp =
+        app
+            .getHttpAdapter()
+            .getInstance() as {
+                set: (
+                    name: string,
+                    value: unknown,
+                ) => void;
+                disable: (
+                    name: string,
+                ) => void;
+            };
+
+    expressApp.set(
+        'trust proxy',
+        deployment.trustProxy,
+    );
+
+    expressApp.disable(
+        'x-powered-by',
+    );
+
+    const security =
+        getSecurityConfig();
+
+    validateSecurityEnvironment(
+        deployment.isProduction,
+    );
+
+    app.use((
+        request: {
+            headers: Record<string, string | string[] | undefined>;
+            requestId?: string;
+        },
+        response: {
+            setHeader: (name: string, value: string) => void;
+        },
+        next: () => void,
+    ) => {
+        const providedRequestId =
+            typeof request.headers['x-request-id'] === 'string'
+                ? request.headers['x-request-id'].trim()
+                : '';
+
+        const requestId =
+            /^[A-Za-z0-9._:-]{8,100}$/.test(
+                providedRequestId,
+            )
+                ? providedRequestId
+                : randomUUID();
+
+        request.requestId =
+            requestId;
+
+        response.setHeader(
+            'X-Request-Id',
+            requestId,
+        );
+
+        if (
+            security.securityHeadersEnabled
+        ) {
+            response.setHeader(
+                'X-Content-Type-Options',
+                'nosniff',
+            );
+            response.setHeader(
+                'X-Frame-Options',
+                'SAMEORIGIN',
+            );
+            response.setHeader(
+                'Referrer-Policy',
+                'no-referrer',
+            );
+            response.setHeader(
+                'Permissions-Policy',
+                'camera=(), microphone=(), geolocation=()',
+            );
+            response.setHeader(
+                'X-Permitted-Cross-Domain-Policies',
+                'none',
+            );
+
+            if (
+                deployment.isProduction &&
+                deployment.publicBaseUrl.startsWith('https://')
+            ) {
+                response.setHeader(
+                    'Strict-Transport-Security',
+                    'max-age=15552000',
+                );
+            }
+        }
+
+        next();
+    });
 
     app.useGlobalFilters(
         new GlobalExceptionFilter(),
@@ -37,37 +170,117 @@ async function bootstrap() {
         }),
     );
 
-    const allowedOrigins =
-        (
-            process.env.CORS_ORIGINS ??
-            'http://localhost:5173,http://localhost:3001'
-        )
-            .split(',')
-            .map(
-                (origin) =>
-                    origin.trim(),
-            )
-            .filter(Boolean);
-
     app.enableCors({
-        origin: allowedOrigins,
+        origin: (
+            origin,
+            callback,
+        ) => {
+            if (
+                isCorsOriginAllowed(
+                    origin,
+                    deployment,
+                )
+            ) {
+                callback(null, true);
+                return;
+            }
+
+            callback(
+                new Error(
+                    `Origin ${origin} is not allowed by CORS`,
+                ),
+                false,
+            );
+        },
         credentials: true,
     });
 
     app.enableShutdownHooks();
 
-    const swaggerEnabled =
-        process.env
-            .SWAGGER_ENABLED ===
-        'true' ||
-        process.env.NODE_ENV !==
-        'production';
+    const prisma =
+        app.get(
+            PrismaService,
+        );
 
-    if (swaggerEnabled) {
+    const databaseSchema =
+        app.get(
+            DatabaseSchemaService,
+        );
+
+    // Startup preflight: SQL Server có thể chậm khởi động sau reboot/service restart.
+    // Chờ có giới hạn và retry thay vì chết ngay ở lần kết nối đầu tiên.
+    await prisma
+        .waitForDatabaseReady();
+
+    // Chỉ kiểm schema sau khi database thực sự reachable. Nếu code/Prisma Client
+    // mới hơn database, backend fail-fast trước khi mở cổng HTTP để tránh P2022 ở từng API.
+    await databaseSchema
+        .assertCompatible();
+
+    process.on(
+        'uncaughtException',
+        (error) => {
+            if (
+                prisma.isRecoverableDriverError(
+                    error,
+                )
+            ) {
+                console.error(
+                    'SQL Server connection entered an invalid state. Recovering connection pool...',
+                    error,
+                );
+
+                void prisma
+                    .recoverConnection()
+                    .catch(
+                        (reconnectError) =>
+                            console.error(
+                                'SQL Server automatic recovery failed:',
+                                reconnectError,
+                            ),
+                    );
+                return;
+            }
+
+            console.error(
+                'Uncaught exception:',
+                error,
+            );
+
+            process.exitCode = 1;
+            setTimeout(
+                () => process.exit(1),
+                100,
+            ).unref();
+        },
+    );
+
+    process.on(
+        'unhandledRejection',
+        (reason) => {
+            console.error(
+                'Unhandled promise rejection:',
+                reason,
+            );
+
+            process.exitCode = 1;
+            setTimeout(
+                () => process.exit(1),
+                100,
+            ).unref();
+        },
+    );
+
+    const platformBranding =
+        getPlatformBranding();
+
+    if (
+        deployment.swaggerEnabled
+    ) {
         const swaggerConfig =
             new DocumentBuilder()
                 .setTitle(
-                    'CTIC Certification Management Platform',
+                    platformBranding.platformTitle,
                 )
                 .setDescription(
                     'API quản lý quy trình chứng nhận hệ thống quản lý P.09',
@@ -150,7 +363,7 @@ async function bootstrap() {
             swaggerDocument,
             {
                 customSiteTitle:
-                    'CTIC CMP API',
+                    platformBranding.swaggerSiteTitle,
 
                 swaggerOptions: {
                     persistAuthorization:
@@ -172,23 +385,101 @@ async function bootstrap() {
         );
     }
 
-    const port =
-        Number(
-            process.env.PORT ??
-            3000,
-        );
-
-    await app.listen(port);
-
-    console.log(
-        `Server running on http://localhost:${port}`,
+    await app.listen(
+        deployment.port,
+        deployment.host,
     );
 
-    if (swaggerEnabled) {
+    console.log(
+        `Server running on http://${deployment.host}:${deployment.port}`,
+    );
+
+    console.log(
+        `Public API base URL: ${deployment.publicBaseUrl}`,
+    );
+
+    console.log(
+        `Storage root: ${storage.rootDirectory}`,
+    );
+
+    console.log(
+        `Security headers: ${security.securityHeadersEnabled ? 'enabled' : 'disabled'}`,
+    );
+
+    console.log(
+        `Public registration: ${security.publicRegistrationEnabled ? 'enabled' : 'disabled'}`,
+    );
+
+    console.log(
+        `CORS origins: ${deployment.corsOrigins.join(', ') || '(none)'}`,
+    );
+
+    if (
+        deployment.allowPrivateNetworkOrigins
+    ) {
         console.log(
-            `API documentation: http://localhost:${port}/api-docs`,
+            'CORS private-network origins: enabled',
+        );
+    }
+
+    const publicHostname =
+        new URL(
+            deployment.publicBaseUrl,
+        ).hostname;
+
+    if (
+        deployment.allowPrivateNetworkOrigins &&
+        [
+            'localhost',
+            '127.0.0.1',
+            '::1',
+        ].includes(
+            publicHostname,
+        )
+    ) {
+        console.warn(
+            'WARNING: PUBLIC_BASE_URL đang trỏ localhost trong khi cho phép truy cập LAN. QR/link công khai sẽ không dùng được trên máy khác. Hãy chạy: npm run env:lan -- --host=<IP_LAN>',
+        );
+    }
+
+    if (
+        deployment.swaggerEnabled
+    ) {
+        console.log(
+            `API documentation: ${deployment.publicBaseUrl}/api-docs`,
         );
     }
 }
 
-void bootstrap();
+void bootstrap()
+    .catch((error) => {
+        const candidate =
+            error as {
+                code?: string;
+                message?: string;
+                stack?: string;
+            };
+
+        if (
+            candidate?.code ===
+                'DB_UNAVAILABLE' ||
+            candidate?.code ===
+                'DB_AUTHENTICATION_FAILED'
+        ) {
+            console.error(
+                `[FATAL] ${candidate.message ?? 'Database không sẵn sàng'}`,
+            );
+            console.error(
+                '[FATAL] Chạy "npm run db:preflight" để kiểm tra kết nối hoặc "npm run db:recover:local" nếu SQL Server nằm trên chính máy Windows này.',
+            );
+        } else {
+            console.error(
+                '[FATAL] Backend không thể khởi động:',
+                error instanceof Error
+                    ? error.stack
+                    : error,
+            );
+        }
+
+        process.exit(1);
+    });

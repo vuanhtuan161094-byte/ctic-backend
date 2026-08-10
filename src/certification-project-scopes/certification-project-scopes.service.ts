@@ -8,6 +8,14 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCertificationProjectScopeDto } from './dto/create-certification-project-scope.dto';
 
+type ReviewIndustryScope = {
+    isic_nace_mapping_id: string;
+    nace_iaf_mapping_id: string;
+    management_system: string;
+    scope_description: string;
+    is_primary?: boolean;
+};
+
 @Injectable()
 export class CertificationProjectScopesService {
     private readonly detailInclude = {
@@ -111,6 +119,76 @@ export class CertificationProjectScopesService {
         return value
             ?.trim()
             .toUpperCase() ?? '';
+    }
+
+
+    private standardFromManagementSystem(
+        managementSystem: string,
+    ): string {
+        const normalized = this.normalize(
+            managementSystem,
+        );
+
+        if (normalized === 'QMS') {
+            return 'ISO 9001:2015';
+        }
+
+        if (normalized === 'EMS') {
+            return 'ISO 14001:2015';
+        }
+
+        if (
+            normalized === 'OHSMS' ||
+            normalized === 'OH&SMS'
+        ) {
+            return 'ISO 45001:2018';
+        }
+
+        return normalized;
+    }
+
+    private parseReviewIndustryScopes(
+        rawValue?: string | null,
+    ): ReviewIndustryScope[] {
+        if (!rawValue?.trim()) {
+            return [];
+        }
+
+        try {
+            const parsed = JSON.parse(
+                rawValue,
+            ) as unknown;
+
+            if (!Array.isArray(parsed)) {
+                return [];
+            }
+
+            return parsed.filter(
+                (
+                    item,
+                ): item is ReviewIndustryScope => {
+                    if (
+                        !item ||
+                        typeof item !== 'object'
+                    ) {
+                        return false;
+                    }
+
+                    const value = item as Record<string, unknown>;
+
+                    return (
+                        typeof value.isic_nace_mapping_id === 'string' &&
+                        typeof value.nace_iaf_mapping_id === 'string' &&
+                        typeof value.management_system === 'string' &&
+                        typeof value.scope_description === 'string'
+                    );
+                },
+            );
+        } catch {
+            throw new BadRequestException(
+                'Dữ liệu phạm vi ngành trong bản xem xét bị lỗi định dạng. Hãy mở lại bước xem xét đơn và lưu lại mã ISIC/NACE/IAF.',
+            );
+        }
     }
 
     private resolveManagementSystem(
@@ -426,6 +504,214 @@ export class CertificationProjectScopesService {
             include:
                 this.detailInclude,
         });
+    }
+
+    async syncFromReview(
+        projectId: string,
+        userId: string,
+    ) {
+        const project =
+            await this.prisma.certification_projects.findUnique({
+                where: {
+                    id: projectId,
+                },
+
+                select: {
+                    id: true,
+                    application_id: true,
+                    project_code: true,
+                },
+            });
+
+        if (!project) {
+            throw new NotFoundException(
+                'Không tìm thấy dự án chứng nhận',
+            );
+        }
+
+        const review =
+            await this.prisma.application_reviews.findFirst({
+                where: {
+                    application_id:
+                        project.application_id,
+
+                    industry_scopes_json: {
+                        not: null,
+                    },
+                },
+
+                orderBy: [
+                    {
+                        approved_at:
+                            'desc',
+                    },
+                    {
+                        checked_at:
+                            'desc',
+                    },
+                    {
+                        created_at:
+                            'desc',
+                    },
+                ],
+
+                select: {
+                    id: true,
+                    industry_scopes_json: true,
+                    workflow_status: true,
+                    result: true,
+                },
+            });
+
+        if (!review) {
+            throw new BadRequestException(
+                'Bản xem xét đơn chưa có phạm vi ISIC/NACE/IAF. Hãy hoàn tất bước xem xét ngành nghề trước khi phân công đoàn.',
+            );
+        }
+
+        const scopes =
+            this.parseReviewIndustryScopes(
+                review.industry_scopes_json,
+            );
+
+        if (!scopes.length) {
+            throw new BadRequestException(
+                'Bản xem xét đơn không có phạm vi ngành hợp lệ để đồng bộ.',
+            );
+        }
+
+        const synchronized =
+            await this.prisma.$transaction(
+                async (
+                    transaction,
+                ) => {
+                    const results: Array<{ id: string }> = [];
+                    const synchronizedAt =
+                        new Date();
+
+                    for (
+                        const scope of scopes
+                    ) {
+                        const [
+                            isicNaceMapping,
+                            naceIafMapping,
+                        ] = await Promise.all([
+                            transaction.industry_code_mappings.findUnique({
+                                where: {
+                                    id: scope.isic_nace_mapping_id,
+                                },
+                            }),
+                            transaction.nace_iaf_mappings.findUnique({
+                                where: {
+                                    id: scope.nace_iaf_mapping_id,
+                                },
+                            }),
+                        ]);
+
+                        if (
+                            !isicNaceMapping ||
+                            this.normalize(
+                                isicNaceMapping.mapping_status,
+                            ) !== 'APPROVED'
+                        ) {
+                            throw new BadRequestException(
+                                'Có ánh xạ ISIC-NACE trong bản xem xét chưa được phê duyệt hoặc đã bị xóa.',
+                            );
+                        }
+
+                        if (
+                            !naceIafMapping ||
+                            this.normalize(
+                                naceIafMapping.mapping_status,
+                            ) !== 'APPROVED'
+                        ) {
+                            throw new BadRequestException(
+                                'Có ánh xạ NACE-IAF trong bản xem xét chưa được phê duyệt hoặc đã bị xóa.',
+                            );
+                        }
+
+                        const existing =
+                            await transaction.certification_project_scopes.findFirst({
+                                where: {
+                                    project_id:
+                                        projectId,
+                                    isic_nace_mapping_id:
+                                        scope.isic_nace_mapping_id,
+                                    nace_iaf_mapping_id:
+                                        scope.nace_iaf_mapping_id,
+                                },
+                            });
+
+                        const data = {
+                            management_system:
+                                this.normalize(
+                                    scope.management_system,
+                                ),
+                            standard_code:
+                                this.standardFromManagementSystem(
+                                    scope.management_system,
+                                ),
+                            scope_description:
+                                scope.scope_description.trim(),
+                            status:
+                                'APPROVED',
+                            notes:
+                                `Đồng bộ từ bản xem xét đơn ${review.id}`,
+                            selected_by:
+                                userId,
+                            selected_at:
+                                synchronizedAt,
+                            approved_by:
+                                userId,
+                            approved_at:
+                                synchronizedAt,
+                        } as const;
+
+                        if (existing) {
+                            results.push(
+                                await transaction.certification_project_scopes.update({
+                                    where: {
+                                        id: existing.id,
+                                    },
+                                    data,
+                                }),
+                            );
+                        } else {
+                            results.push(
+                                await transaction.certification_project_scopes.create({
+                                    data: {
+                                        project_id:
+                                            projectId,
+                                        isic_nace_mapping_id:
+                                            scope.isic_nace_mapping_id,
+                                        nace_iaf_mapping_id:
+                                            scope.nace_iaf_mapping_id,
+                                        ...data,
+                                    },
+                                }),
+                            );
+                        }
+                    }
+
+                    return results;
+                },
+            );
+
+        return {
+            project_id:
+                projectId,
+            project_code:
+                project.project_code,
+            synchronized_count:
+                synchronized.length,
+            review_id:
+                review.id,
+            scopes:
+                await this.findByProject(
+                    projectId,
+                    'APPROVED',
+                ),
+        };
     }
 
     async findByProject(

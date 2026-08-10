@@ -7,12 +7,23 @@ import {
     PrismaService,
 } from '../prisma/prisma.service';
 
+import {
+    DatabaseSchemaService,
+} from '../prisma/database-schema.service';
+
+import {
+    assertStorageWritable,
+    getStorageConfig,
+} from '../common/storage-config';
+
 export interface HealthStatusResponse {
     status: 'ok';
     service: string;
     version: string;
     environment: string;
     database: 'connected';
+    storage: 'writable';
+    database_schema: 'compatible';
     response_time_ms: number;
     uptime_seconds: number;
     timestamp: string;
@@ -30,6 +41,9 @@ export class HealthService {
     constructor(
         private readonly prisma:
             PrismaService,
+
+        private readonly databaseSchema:
+            DatabaseSchemaService,
     ) { }
 
     getLiveness():
@@ -72,6 +86,36 @@ export class HealthService {
             );
         }
 
+        try {
+            await this.databaseSchema
+                .assertCompatible();
+        } catch (error) {
+            if (
+                this.prisma
+                    .isDatabaseUnavailableError(
+                        error,
+                    )
+            ) {
+                throw new ServiceUnavailableException(
+                    'Cơ sở dữ liệu hiện không sẵn sàng',
+                );
+            }
+
+            throw new ServiceUnavailableException(
+                'Cơ sở dữ liệu chưa đồng bộ với phiên bản phần mềm',
+            );
+        }
+
+        try {
+            assertStorageWritable(
+                getStorageConfig(),
+            );
+        } catch {
+            throw new ServiceUnavailableException(
+                'Kho lưu trữ hồ sơ hiện không sẵn sàng hoặc không có quyền ghi',
+            );
+        }
+
         return {
             status: 'ok',
 
@@ -89,6 +133,12 @@ export class HealthService {
 
             database:
                 'connected',
+
+            storage:
+                'writable',
+
+            database_schema:
+                'compatible',
 
             response_time_ms:
                 Date.now() -
