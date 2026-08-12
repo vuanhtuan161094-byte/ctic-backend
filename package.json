@@ -19,6 +19,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e:p09": "node scripts/tests/run-p09-real-e2e.cjs",
     "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/p09-smoke-test.ps1",
     "test:regression": "node scripts/tests/run-current-regressions-patch36c0.mjs",
     "prisma:validate": "prisma validate",

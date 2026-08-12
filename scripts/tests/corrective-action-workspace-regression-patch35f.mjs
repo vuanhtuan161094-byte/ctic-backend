@@ -59,7 +59,7 @@ check(findingsService.includes("document_type: 'corrective_action_evidence'"), '
 check(findingsService.includes('submitted_by_user'), 'Backend trả thông tin người gửi phản hồi');
 check(findingsService.includes('reviewed_by_user'), 'Backend trả thông tin người xem xét');
 check(findingsService.includes('evidence_files'), 'Backend trả danh sách bằng chứng theo từng phiên bản CAP');
-check(findingsService.includes("status:\n                                'response_submitted'"), 'Gửi CAP chuyển NC sang trạng thái đã phản hồi');
+check(findingsService.includes("status: 'response_submitted'"), 'Gửi CAP chuyển NC sang trạng thái đã phản hồi');
 check(findingsService.includes("'revision_required'"), 'Backend hỗ trợ yêu cầu bổ sung CAP');
 check(findingsService.includes("'action_accepted'"), 'Backend hỗ trợ chấp nhận hành động khắc phục');
 check(findingsService.includes("'corrective_action_evidence'"), 'Chấp nhận CAP bắt buộc có bằng chứng');

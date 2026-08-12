@@ -3,6 +3,7 @@ import {
     Controller,
     Get,
     Param,
+    ParseUUIDPipe,
     Patch,
     Post,
     Req,
@@ -95,11 +96,7 @@ export class AuditFindingsController {
     }
 
     @Post(':id/corrective-actions')
-    @Roles(
-        'ADMIN',
-        'CUSTOMER',
-    )
-    @Permissions('customer_portal.access')
+    @Roles('CUSTOMER')
     @ApiOperation({
         summary: 'Gửi hành động khắc phục cho một NC',
     })
@@ -114,7 +111,10 @@ export class AuditFindingsController {
         description: 'Phát hiện không yêu cầu CAP hoặc dữ liệu không hợp lệ',
     })
     createCorrectiveAction(
-        @Param('id')
+        @Param(
+            'id',
+            new ParseUUIDPipe({ version: '4' }),
+        )
         id: string,
 
         @Body()
@@ -124,10 +124,10 @@ export class AuditFindingsController {
         request: SecurityRequest,
     ) {
         return this.auditFindingsService
-            .createCorrectiveAction(
+            .createCustomerCorrectiveAction(
                 id,
                 dto,
-                this.getUserId(request),
+                getResourceActor(request),
             );
     }
 
@@ -310,6 +310,100 @@ export class AuditFindingsController {
             entity_id: _entityId,
             ...finding
         }) => finding);
+    }
+
+    @Get('customer/workspaces')
+    @Roles('CUSTOMER')
+    @ApiOperation({
+        summary: 'Khách hàng lấy danh sách workspace NC/CAP được phép truy cập',
+        description: 'Chỉ trả kế hoạch thuộc customer đang active và đã được gán active cho tài khoản hiện tại.',
+    })
+    @ApiOkResponse({
+        description: 'Danh sách tóm tắt workspace NC/CAP an toàn cho customer portal',
+    })
+    async findCustomerWorkspaceIndex(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const customerIds =
+            await this.resourceAccess
+                .getAccessibleCustomerIds(
+                    getResourceActor(request),
+                );
+
+        return this.auditFindingsService
+            .findCustomerWorkspaceIndex(
+                Array.from(customerIds),
+            );
+    }
+
+    @Get('customer/plan/:auditPlanId')
+    @Roles('CUSTOMER')
+    @ApiOperation({
+        summary: 'Khách hàng lấy workspace NC/CAP theo kế hoạch đánh giá',
+        description: 'Chỉ trả dữ liệu thuộc customer đã được gán cho tài khoản hiện tại.',
+    })
+    @ApiParam({
+        name: 'auditPlanId',
+        description: 'UUID kế hoạch đánh giá',
+    })
+    @ApiOkResponse({
+        description: 'Thông tin kế hoạch và NC/CAP an toàn cho customer portal',
+    })
+    async findCustomerWorkspaceByPlan(
+        @Param(
+            'auditPlanId',
+            new ParseUUIDPipe({ version: '4' }),
+        )
+        auditPlanId: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertCustomerEntityAccess(
+            {
+                entity_type: 'audit_plan',
+                entity_id: auditPlanId,
+            },
+            getResourceActor(request),
+        );
+
+        return this.auditFindingsService
+            .findCustomerWorkspaceByPlan(auditPlanId);
+    }
+
+    @Get('customer/:id')
+    @Roles('CUSTOMER')
+    @ApiOperation({
+        summary: 'Khách hàng lấy chi tiết NC/CAP',
+        description: 'Chỉ trả phát hiện thuộc customer đã được gán cho tài khoản hiện tại.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID phát hiện đánh giá',
+    })
+    @ApiOkResponse({
+        description: 'Chi tiết NC/CAP an toàn cho customer portal',
+    })
+    async findCustomerOne(
+        @Param(
+            'id',
+            new ParseUUIDPipe({ version: '4' }),
+        )
+        id: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertCustomerEntityAccess(
+            {
+                entity_type: 'audit_finding',
+                entity_id: id,
+            },
+            getResourceActor(request),
+        );
+
+        return this.auditFindingsService.findCustomerOne(id);
     }
 
     @Get('report/:reportId')

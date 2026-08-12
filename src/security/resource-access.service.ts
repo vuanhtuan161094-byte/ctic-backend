@@ -110,7 +110,7 @@ export class ResourceAccessService {
 
     private customerAccessDenied(): never {
         throw new ForbiddenException(
-            'Báº¡n khÃ´ng cÃ³ quyá»n truy cáº­p dá»¯ liá»‡u cá»§a khÃ¡ch hÃ ng nÃ y',
+            'Bạn không có quyền truy cập dữ liệu của khách hàng này',
         );
     }
 

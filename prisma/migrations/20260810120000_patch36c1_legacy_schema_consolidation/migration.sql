@@ -120,8 +120,9 @@ BEGIN TRY
         WHERE object_id = OBJECT_ID(N'dbo.certification_application_sites')
           AND name = N'IX_certification_application_sites_application_id'
     )
-        CREATE INDEX IX_certification_application_sites_application_id
-            ON dbo.certification_application_sites(application_id);
+        EXEC sys.sp_executesql N'
+            CREATE INDEX IX_certification_application_sites_application_id
+                ON dbo.certification_application_sites(application_id);';
 
     /* Application review extended fields / IMS / industry / two-level workflow */
     IF COL_LENGTH(N'dbo.application_reviews', N'review_items_json') IS NULL
@@ -221,21 +222,22 @@ BEGIN TRY
 
     IF @workflow_status_added = 1
     BEGIN
-        UPDATE r
-        SET
-            workflow_status = CASE
-                WHEN LOWER(a.status) IN (N'accepted', N'rejected', N'need_more_info') THEN N'APPROVED'
-                ELSE N'PENDING_CHECK'
-            END,
-            prepared_by_id = COALESCE(r.prepared_by_id, r.reviewer_id),
-            submitted_at = COALESCE(r.submitted_at, r.created_at),
-            approved_at = CASE
-                WHEN LOWER(a.status) IN (N'accepted', N'rejected', N'need_more_info')
-                THEN COALESCE(r.approved_at, r.created_at)
-                ELSE r.approved_at
-            END
-        FROM dbo.application_reviews r
-        INNER JOIN dbo.certification_applications a ON a.id = r.application_id;
+        EXEC sys.sp_executesql N'
+            UPDATE r
+            SET
+                workflow_status = CASE
+                    WHEN LOWER(a.status) IN (N''accepted'', N''rejected'', N''need_more_info'') THEN N''APPROVED''
+                    ELSE N''PENDING_CHECK''
+                END,
+                prepared_by_id = COALESCE(r.prepared_by_id, r.reviewer_id),
+                submitted_at = COALESCE(r.submitted_at, r.created_at),
+                approved_at = CASE
+                    WHEN LOWER(a.status) IN (N''accepted'', N''rejected'', N''need_more_info'')
+                    THEN COALESCE(r.approved_at, r.created_at)
+                    ELSE r.approved_at
+                END
+            FROM dbo.application_reviews r
+            INNER JOIN dbo.certification_applications a ON a.id = r.application_id;';
     END;
 
     IF OBJECT_ID(N'dbo.application_review_actions', N'U') IS NULL
@@ -256,36 +258,42 @@ BEGIN TRY
     END;
 
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_application_reviews_proposed_auditor')
-        ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_proposed_auditor
-            FOREIGN KEY (proposed_auditor_id) REFERENCES dbo.experts(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_proposed_auditor
+                FOREIGN KEY (proposed_auditor_id) REFERENCES dbo.experts(id);';
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_application_reviews_prepared_by')
-        ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_prepared_by
-            FOREIGN KEY (prepared_by_id) REFERENCES dbo.users(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_prepared_by
+                FOREIGN KEY (prepared_by_id) REFERENCES dbo.users(id);';
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_application_reviews_checker')
-        ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_checker
-            FOREIGN KEY (checker_id) REFERENCES dbo.users(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_checker
+                FOREIGN KEY (checker_id) REFERENCES dbo.users(id);';
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_application_reviews_approver')
-        ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_approver
-            FOREIGN KEY (approver_id) REFERENCES dbo.users(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.application_reviews ADD CONSTRAINT FK_application_reviews_approver
+                FOREIGN KEY (approver_id) REFERENCES dbo.users(id);';
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_application_review_actions_review')
-        ALTER TABLE dbo.application_review_actions ADD CONSTRAINT FK_application_review_actions_review
-            FOREIGN KEY (review_id) REFERENCES dbo.application_reviews(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.application_review_actions ADD CONSTRAINT FK_application_review_actions_review
+                FOREIGN KEY (review_id) REFERENCES dbo.application_reviews(id);';
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_application_review_actions_actor')
-        ALTER TABLE dbo.application_review_actions ADD CONSTRAINT FK_application_review_actions_actor
-            FOREIGN KEY (actor_id) REFERENCES dbo.users(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.application_review_actions ADD CONSTRAINT FK_application_review_actions_actor
+                FOREIGN KEY (actor_id) REFERENCES dbo.users(id);';
 
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_application_reviews_proposed_auditor_id' AND object_id = OBJECT_ID(N'dbo.application_reviews'))
-        CREATE INDEX IX_application_reviews_proposed_auditor_id ON dbo.application_reviews(proposed_auditor_id);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_application_reviews_proposed_auditor_id ON dbo.application_reviews(proposed_auditor_id);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_application_reviews_workflow_status' AND object_id = OBJECT_ID(N'dbo.application_reviews'))
-        CREATE INDEX IX_application_reviews_workflow_status ON dbo.application_reviews(workflow_status);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_application_reviews_workflow_status ON dbo.application_reviews(workflow_status);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_application_reviews_checker_id' AND object_id = OBJECT_ID(N'dbo.application_reviews'))
-        CREATE INDEX IX_application_reviews_checker_id ON dbo.application_reviews(checker_id);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_application_reviews_checker_id ON dbo.application_reviews(checker_id);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_application_reviews_approver_id' AND object_id = OBJECT_ID(N'dbo.application_reviews'))
-        CREATE INDEX IX_application_reviews_approver_id ON dbo.application_reviews(approver_id);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_application_reviews_approver_id ON dbo.application_reviews(approver_id);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_application_review_actions_review_created' AND object_id = OBJECT_ID(N'dbo.application_review_actions'))
-        CREATE INDEX IX_application_review_actions_review_created ON dbo.application_review_actions(review_id, created_at DESC);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_application_review_actions_review_created ON dbo.application_review_actions(review_id, created_at DESC);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_application_review_actions_actor_id' AND object_id = OBJECT_ID(N'dbo.application_review_actions'))
-        CREATE INDEX IX_application_review_actions_actor_id ON dbo.application_review_actions(actor_id);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_application_review_actions_actor_id ON dbo.application_review_actions(actor_id);';
 
     /* Expert profile extension */
     DECLARE @expert_profile_added BIT = 0;
@@ -336,45 +344,49 @@ BEGIN TRY
     IF @expert_profile_added = 1
     BEGIN
         /* Existing active experts predate the approval workflow; grandfather them to preserve operations. */
-        UPDATE dbo.experts
-        SET profile_status = N'APPROVED',
-            approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
-        WHERE LOWER(COALESCE(status, N'active')) = N'active';
+        EXEC sys.sp_executesql N'
+            UPDATE dbo.experts
+            SET profile_status = N''APPROVED'',
+                approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
+            WHERE LOWER(COALESCE(status, N''active'')) = N''active'';';
     END;
 
     /* Link legacy expert profile to exactly one matching user email when unambiguous. */
-    UPDATE e
-    SET e.user_id = u.id
-    FROM dbo.experts e
-    INNER JOIN dbo.users u
-        ON LOWER(LTRIM(RTRIM(e.email))) = LOWER(LTRIM(RTRIM(u.email)))
-    WHERE e.user_id IS NULL
-      AND e.email IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1 FROM dbo.experts other
-          WHERE other.id <> e.id AND other.user_id = u.id
-      );
+    EXEC sys.sp_executesql N'
+        UPDATE e
+        SET e.user_id = u.id
+        FROM dbo.experts e
+        INNER JOIN dbo.users u
+            ON LOWER(LTRIM(RTRIM(e.email))) = LOWER(LTRIM(RTRIM(u.email)))
+        WHERE e.user_id IS NULL
+          AND e.email IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM dbo.experts other
+              WHERE other.id <> e.id AND other.user_id = u.id
+          );';
 
     IF COL_LENGTH(N'dbo.expert_competencies', N'scope_description') IS NULL
         ALTER TABLE dbo.expert_competencies ADD scope_description NVARCHAR(MAX) NULL;
 
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_experts_user_account')
-        ALTER TABLE dbo.experts ADD CONSTRAINT FK_experts_user_account
-            FOREIGN KEY (user_id) REFERENCES dbo.users(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.experts ADD CONSTRAINT FK_experts_user_account
+                FOREIGN KEY (user_id) REFERENCES dbo.users(id);';
     IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_experts_approved_by')
-        ALTER TABLE dbo.experts ADD CONSTRAINT FK_experts_approved_by
-            FOREIGN KEY (approved_by) REFERENCES dbo.users(id);
+        EXEC sys.sp_executesql N'
+            ALTER TABLE dbo.experts ADD CONSTRAINT FK_experts_approved_by
+                FOREIGN KEY (approved_by) REFERENCES dbo.users(id);';
 
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.experts') AND name = N'UX_experts_user_id')
-        CREATE UNIQUE INDEX UX_experts_user_id ON dbo.experts(user_id) WHERE user_id IS NOT NULL;
+        EXEC sys.sp_executesql N'CREATE UNIQUE INDEX UX_experts_user_id ON dbo.experts(user_id) WHERE user_id IS NOT NULL;';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.experts') AND name = N'UX_experts_employee_code')
-        CREATE UNIQUE INDEX UX_experts_employee_code ON dbo.experts(employee_code) WHERE employee_code IS NOT NULL;
+        EXEC sys.sp_executesql N'CREATE UNIQUE INDEX UX_experts_employee_code ON dbo.experts(employee_code) WHERE employee_code IS NOT NULL;';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.experts') AND name = N'IX_experts_profile_status')
-        CREATE INDEX IX_experts_profile_status ON dbo.experts(profile_status);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_experts_profile_status ON dbo.experts(profile_status);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.experts') AND name = N'IX_experts_status')
         CREATE INDEX IX_experts_status ON dbo.experts(status);
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.experts') AND name = N'IX_experts_approved_by')
-        CREATE INDEX IX_experts_approved_by ON dbo.experts(approved_by);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_experts_approved_by ON dbo.experts(approved_by);';
 
     IF OBJECT_ID(N'dbo.expert_work_experiences', N'U') IS NULL
     BEGIN
@@ -396,9 +408,9 @@ BEGIN TRY
         );
     END;
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.expert_work_experiences') AND name = N'IX_expert_work_experiences_expert_id')
-        CREATE INDEX IX_expert_work_experiences_expert_id ON dbo.expert_work_experiences(expert_id);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_expert_work_experiences_expert_id ON dbo.expert_work_experiences(expert_id);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.expert_work_experiences') AND name = N'IX_expert_work_experiences_start_date')
-        CREATE INDEX IX_expert_work_experiences_start_date ON dbo.expert_work_experiences(start_date);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_expert_work_experiences_start_date ON dbo.expert_work_experiences(start_date);';
 
     IF OBJECT_ID(N'dbo.expert_certificates', N'U') IS NULL
     BEGIN
@@ -422,11 +434,11 @@ BEGIN TRY
         );
     END;
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.expert_certificates') AND name = N'IX_expert_certificates_expert_id')
-        CREATE INDEX IX_expert_certificates_expert_id ON dbo.expert_certificates(expert_id);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_expert_certificates_expert_id ON dbo.expert_certificates(expert_id);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.expert_certificates') AND name = N'IX_expert_certificates_expiry_date')
-        CREATE INDEX IX_expert_certificates_expiry_date ON dbo.expert_certificates(expiry_date);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_expert_certificates_expiry_date ON dbo.expert_certificates(expiry_date);';
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.expert_certificates') AND name = N'IX_expert_certificates_type')
-        CREATE INDEX IX_expert_certificates_type ON dbo.expert_certificates(certificate_type);
+        EXEC sys.sp_executesql N'CREATE INDEX IX_expert_certificates_type ON dbo.expert_certificates(certificate_type);';
 
     COMMIT TRANSACTION;
 END TRY

@@ -1,9 +1,14 @@
 import {
     BadRequestException,
+    ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
 
+import {
+    Prisma,
+} from '@prisma/client';
 
 import {
     existsSync,
@@ -11,7 +16,8 @@ import {
 } from 'fs';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { ResourceAccessService, ResourceActor } from '../security/resource-access.service';
+import { ResourceAccessService } from '../security/resource-access.service';
+import type { ResourceActor } from '../security/resource-access.service';
 import { resolveDocumentStoragePath } from '../common/storage-config';
 import { calculateFileSha256 } from '../common/file-integrity';
 import {
@@ -22,6 +28,7 @@ import {
 } from '../common/upload-security';
 
 import { UploadDocumentFileDto } from './dto/upload-document-file.dto';
+import { UploadCustomerCorrectiveActionEvidenceDto } from './dto/upload-customer-corrective-action-evidence.dto';
 
 interface DocumentProjectContextSource {
     id: string;
@@ -80,6 +87,18 @@ export class DocumentFilesService {
             ...documentFile,
             download_url:
                 `/document-files/${documentFile.id}/download`,
+        };
+    }
+
+    private withCustomerDownloadUrl<
+        T extends {
+            id: string;
+        },
+    >(documentFile: T) {
+        return {
+            ...documentFile,
+            download_url:
+                `/document-files/customer/${documentFile.id}/download`,
         };
     }
 
@@ -564,6 +583,25 @@ export class DocumentFilesService {
         }
     }
 
+    private getPrismaErrorCode(
+        error: unknown,
+    ) {
+        if (
+            typeof error !== 'object' ||
+            error === null ||
+            !('code' in error)
+        ) {
+            return null;
+        }
+
+        const code =
+            (error as { code?: unknown }).code;
+
+        return typeof code === 'string'
+            ? code
+            : null;
+    }
+
     async upload(
         dto: UploadDocumentFileDto,
         file: Express.Multer.File,
@@ -662,6 +700,246 @@ export class DocumentFilesService {
             return this.withDownloadUrl(
                 documentFile,
             );
+        } catch (error) {
+            this.removePhysicalFile(
+                promoted.absolutePath,
+            );
+
+            throw error;
+        }
+    }
+
+
+    async uploadCustomerCorrectiveActionEvidence(
+        actionId: string,
+        dto: UploadCustomerCorrectiveActionEvidenceDto,
+        file: Express.Multer.File,
+        uploadedBy: string | undefined,
+        actor: ResourceActor,
+    ) {
+        if (!file) {
+            throw new BadRequestException(
+                'Chưa chọn file tải lên',
+            );
+        }
+
+        const entityRef = {
+            entity_type: 'corrective_action',
+            entity_id: actionId,
+        };
+
+        // Fail early before file validation/promotion. Ownership is resolved
+        // from the CAP -> finding -> report -> plan -> project -> customer chain.
+        await this.resourceAccess.assertCustomerEntityAccess(
+            entityRef,
+            actor,
+        );
+
+        const validated = validateUploadedFile(
+            file,
+            'attachment',
+        );
+
+        const promoted = promoteValidatedUpload(
+            file,
+            validated.extension,
+        );
+
+        const execute = () =>
+            this.prisma.$transaction(
+                async (tx) => {
+                    // Re-check inside the write transaction so a revoked
+                    // customer mapping cannot be used after the pre-check.
+                    await this.resourceAccess
+                        .assertCustomerEntityAccess(
+                            entityRef,
+                            actor,
+                            tx,
+                        );
+
+                    const action =
+                        await tx.corrective_actions.findUnique({
+                            where: {
+                                id: actionId,
+                            },
+                            select: {
+                                id: true,
+                                status: true,
+                                audit_findings: {
+                                    select: {
+                                        status: true,
+                                        corrective_actions: {
+                                            orderBy: {
+                                                version_no: 'desc',
+                                            },
+                                            take: 1,
+                                            select: {
+                                                id: true,
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        });
+
+                    const isCurrentSubmittedAction =
+                        action?.status
+                            .trim()
+                            .toLowerCase() === 'submitted' &&
+                        action.audit_findings.status
+                            .trim()
+                            .toLowerCase() === 'response_submitted' &&
+                        action.audit_findings
+                            .corrective_actions[0]?.id === actionId;
+
+                    if (!isCurrentSubmittedAction) {
+                        throw new ConflictException(
+                            'Chỉ được tải bằng chứng cho phiên bản CAP hiện hành đang chờ xem xét',
+                        );
+                    }
+
+                    const latestVersion =
+                        await tx.documentFile.aggregate({
+                            where: {
+                                entity_type:
+                                    'corrective_action',
+                                entity_id:
+                                    actionId,
+                                document_type:
+                                    'corrective_action_evidence',
+                                file_kind:
+                                    'attachment',
+                            },
+                            _max: {
+                                version_no:
+                                    true,
+                            },
+                        });
+
+                    const nextVersion =
+                        (latestVersion._max.version_no ?? 0) + 1;
+
+                    await tx.documentFile.updateMany({
+                        where: {
+                            entity_type:
+                                'corrective_action',
+                            entity_id:
+                                actionId,
+                            document_type:
+                                'corrective_action_evidence',
+                            file_kind:
+                                'attachment',
+                            is_current:
+                                true,
+                        },
+                        data: {
+                            is_current:
+                                false,
+                        },
+                    });
+
+                    return tx.documentFile.create({
+                        data: {
+                            entity_type:
+                                'corrective_action',
+                            entity_id:
+                                actionId,
+                            document_type:
+                                'corrective_action_evidence',
+                            file_kind:
+                                'attachment',
+                            original_name:
+                                validated.originalName,
+                            stored_name:
+                                promoted.storedName,
+                            file_url:
+                                `/uploads/documents/${promoted.storedName}`,
+                            mime_type:
+                                validated.mimeType,
+                            file_size:
+                                validated.fileSize,
+                            sha256:
+                                validated.sha256,
+                            version_no:
+                                nextVersion,
+                            is_current:
+                                true,
+                            note:
+                                dto.note?.trim() ?? null,
+                            uploaded_by:
+                                uploadedBy ?? null,
+                        },
+                    });
+                },
+                {
+                    isolationLevel:
+                        Prisma
+                            .TransactionIsolationLevel
+                            .Serializable,
+                },
+            );
+
+        try {
+            let documentFile:
+                Awaited<ReturnType<typeof execute>> |
+                undefined;
+
+            for (
+                let attempt = 1;
+                attempt <= 2;
+                attempt += 1
+            ) {
+                try {
+                    documentFile = await execute();
+                    break;
+                } catch (error) {
+                    const code =
+                        this.getPrismaErrorCode(error);
+
+                    const retryable =
+                        code === 'P2034' ||
+                        code === 'P2002';
+
+                    if (
+                        !retryable ||
+                        attempt === 2
+                    ) {
+                        if (retryable) {
+                            throw new ConflictException(
+                                'Có thay đổi đồng thời đối với bằng chứng CAP. Vui lòng tải lại và thử lại.',
+                            );
+                        }
+
+                        throw error;
+                    }
+                }
+            }
+
+            if (!documentFile) {
+                throw new ConflictException(
+                    'Không thể lưu bằng chứng CAP do xung đột đồng thời',
+                );
+            }
+
+            return this.withCustomerDownloadUrl({
+                id: documentFile.id,
+                original_name:
+                    documentFile.original_name,
+                mime_type:
+                    documentFile.mime_type,
+                file_size:
+                    documentFile.file_size,
+                version_no:
+                    documentFile.version_no,
+                is_current:
+                    documentFile.is_current,
+                note:
+                    documentFile.note,
+                created_at:
+                    documentFile.created_at,
+                updated_at:
+                    documentFile.updated_at,
+            });
         } catch (error) {
             this.removePhysicalFile(
                 promoted.absolutePath,
@@ -883,6 +1161,124 @@ export class DocumentFilesService {
         return this.withDownloadUrl(
             documentFile,
         );
+    }
+
+    async getCustomerCorrectiveActionEvidenceDownload(
+        id: string,
+        actor: ResourceActor,
+    ) {
+        const documentFile =
+            await this.prisma.documentFile.findUnique({
+                where: {
+                    id,
+                },
+            });
+
+        const isCorrectiveActionEvidence =
+            documentFile?.entity_type
+                ?.trim()
+                .toLowerCase() ===
+                'corrective_action' &&
+            documentFile?.document_type
+                ?.trim()
+                .toLowerCase() ===
+                'corrective_action_evidence' &&
+            documentFile?.file_kind
+                ?.trim()
+                .toLowerCase() ===
+                'attachment';
+
+        if (
+            !documentFile ||
+            !isCorrectiveActionEvidence
+        ) {
+            // Customer routes intentionally use a generic forbidden response
+            // so a UUID cannot be used to enumerate unrelated documents.
+            throw new ForbiddenException(
+                'Bạn không có quyền truy cập tệp này',
+            );
+        }
+
+        await this.resourceAccess
+            .assertCustomerEntityAccess(
+                {
+                    entity_type:
+                        'corrective_action',
+                    entity_id:
+                        documentFile.entity_id,
+                },
+                actor,
+            );
+
+        let absolutePath: string;
+
+        try {
+            absolutePath =
+                resolveDocumentStoragePath(
+                    documentFile.stored_name,
+                );
+        } catch {
+            throw new NotFoundException(
+                'Không tìm thấy tệp vật lý',
+            );
+        }
+
+        if (!existsSync(absolutePath)) {
+            throw new NotFoundException(
+                'Không tìm thấy tệp vật lý',
+            );
+        }
+
+        verifyStoredFileIntegrity(
+            absolutePath,
+            documentFile.file_size,
+            documentFile.sha256,
+        );
+
+        let verifiedDocumentFile = documentFile;
+
+        if (!documentFile.sha256) {
+            const sha256 =
+                calculateFileSha256(
+                    absolutePath,
+                );
+
+            verifiedDocumentFile =
+                await this.prisma.documentFile.update({
+                    where: {
+                        id:
+                            documentFile.id,
+                    },
+                    data: {
+                        sha256,
+                    },
+                });
+        }
+
+        return {
+            documentFile:
+                this.withCustomerDownloadUrl({
+                    id:
+                        verifiedDocumentFile.id,
+                    original_name:
+                        verifiedDocumentFile.original_name,
+                    mime_type:
+                        verifiedDocumentFile.mime_type,
+                    file_size:
+                        verifiedDocumentFile.file_size,
+                    version_no:
+                        verifiedDocumentFile.version_no,
+                    is_current:
+                        verifiedDocumentFile.is_current,
+                    note:
+                        verifiedDocumentFile.note,
+                    created_at:
+                        verifiedDocumentFile.created_at,
+                    updated_at:
+                        verifiedDocumentFile.updated_at,
+                }),
+            absolutePath,
+        };
     }
 
     async getDownload(

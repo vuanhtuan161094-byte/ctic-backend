@@ -45,7 +45,6 @@ export class AuditLoggingInterceptor
     ) {
         if (
             [
-                'GET',
                 'HEAD',
                 'OPTIONS',
             ].includes(method)
@@ -219,6 +218,10 @@ export class AuditLoggingInterceptor
                 async (
                     result,
                 ) => {
+                    if (method === 'GET') {
+                        return result;
+                    }
+
                     await this.securityAudit.write({
                         userId,
                         action,
@@ -249,8 +252,22 @@ export class AuditLoggingInterceptor
                 },
             ),
             catchError(
-                (error: unknown) =>
-                    from(
+                (error: unknown) => {
+                    const statusCode =
+                        this.statusCode(
+                            error,
+                        );
+
+                    if (
+                        method === 'GET' &&
+                        statusCode !== 403
+                    ) {
+                        return throwError(
+                            () => error,
+                        );
+                    }
+
+                    return from(
                         this.securityAudit.write({
                             userId,
                             action,
@@ -270,10 +287,7 @@ export class AuditLoggingInterceptor
                                 request.requestId,
                             outcome:
                                 'failure',
-                            statusCode:
-                                this.statusCode(
-                                    error,
-                                ),
+                            statusCode,
                             durationMs:
                                 Date.now() -
                                 startedAt,
@@ -286,7 +300,8 @@ export class AuditLoggingInterceptor
                                         error,
                                 ),
                         ),
-                    ),
+                    );
+                },
             ),
         );
     }

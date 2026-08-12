@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { SecurityAuditService } from '../security/security-audit.service';
+import { SecurityRateLimitService } from '../security/security-rate-limit.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 
@@ -14,6 +16,18 @@ describe('AuthController', () => {
           useValue: {
             login: jest.fn(),
             register: jest.fn(),
+          },
+        },
+        {
+          provide: SecurityAuditService,
+          useValue: {
+            write: jest.fn(),
+          },
+        },
+        {
+          provide: SecurityRateLimitService,
+          useValue: {
+            consume: jest.fn(),
           },
         },
       ],

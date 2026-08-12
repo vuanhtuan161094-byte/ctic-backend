@@ -6,7 +6,17 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 
+import {
+    Prisma,
+} from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service';
+import {
+    ResourceAccessService,
+} from '../security/resource-access.service';
+import type {
+    ResourceActor,
+} from '../security/resource-access.service';
 
 import { CloseAuditFindingDto } from './dto/close-audit-finding.dto';
 import { CreateAuditFindingDto } from './dto/create-audit-finding.dto';
@@ -17,6 +27,8 @@ import { ReviewCorrectiveActionDto } from './dto/review-corrective-action.dto';
 export class AuditFindingsService {
     constructor(
         private readonly prisma: PrismaService,
+        private readonly resourceAccess:
+            ResourceAccessService,
     ) { }
 
     private getDetailInclude() {
@@ -185,6 +197,210 @@ export class AuditFindingsService {
                 })),
             };
         });
+    }
+
+    private getCustomerFindingSelect() {
+        return {
+            id: true,
+            finding_code: true,
+            finding_type: true,
+            clause: true,
+            requirement: true,
+            description: true,
+            objective_evidence: true,
+            detected_date: true,
+            due_date: true,
+            status: true,
+            closed_at: true,
+            close_comment: true,
+            created_at: true,
+            updated_at: true,
+
+            corrective_actions: {
+                orderBy: {
+                    version_no: 'desc' as const,
+                },
+                select: {
+                    id: true,
+                    version_no: true,
+                    root_cause: true,
+                    correction: true,
+                    corrective_action_plan: true,
+                    responsible_person: true,
+                    target_date: true,
+                    status: true,
+                    submitted_by: true,
+                    submitted_at: true,
+                    reviewed_by: true,
+                    reviewed_at: true,
+                    review_comment: true,
+                    form_data: true,
+                    created_at: true,
+                    updated_at: true,
+                },
+            },
+        } as const;
+    }
+    private async normalizeCustomerFindingsWithEvidence(
+        findings: any[],
+    ) {
+        const actionIds = findings.flatMap(
+            (finding) =>
+                (finding.corrective_actions ?? [])
+                    .map((action: any) => action.id),
+        );
+
+        const userIds = Array.from(
+            new Set(
+                findings.flatMap(
+                    (finding) =>
+                        (finding.corrective_actions ?? [])
+                            .flatMap((action: any) => [
+                                action.submitted_by,
+                                action.reviewed_by,
+                            ].filter(Boolean)),
+                ),
+            ),
+        ) as string[];
+
+        const [files, users] = await Promise.all([
+            actionIds.length
+                ? this.prisma.documentFile.findMany({
+                    where: {
+                        entity_type:
+                            'corrective_action',
+                        entity_id: {
+                            in: actionIds,
+                        },
+                        document_type:
+                            'corrective_action_evidence',
+                        is_current: true,
+                    },
+                    select: {
+                        id: true,
+                        entity_id: true,
+                        original_name: true,
+                        file_kind: true,
+                        version_no: true,
+                        is_current: true,
+                        created_at: true,
+                    },
+                    orderBy: [
+                        { entity_id: 'asc' },
+                        { version_no: 'desc' },
+                        { created_at: 'desc' },
+                    ],
+                })
+                : Promise.resolve([]),
+
+            userIds.length
+                ? this.prisma.users.findMany({
+                    where: {
+                        id: {
+                            in: userIds,
+                        },
+                    },
+                    select: {
+                        id: true,
+                        full_name: true,
+                    },
+                })
+                : Promise.resolve([]),
+        ]);
+
+        const filesByAction = new Map<string, any[]>();
+        for (const file of files) {
+            const current =
+                filesByAction.get(file.entity_id) ?? [];
+
+            current.push({
+                id: file.id,
+                original_name: file.original_name,
+                file_kind: file.file_kind,
+                version_no: file.version_no,
+                is_current: file.is_current,
+                created_at: file.created_at,
+                download_url:
+                    `/document-files/customer/${file.id}/download`,
+            });
+
+            filesByAction.set(
+                file.entity_id,
+                current,
+            );
+        }
+
+        const usersById = new Map(
+            users.map((user) => [
+                user.id,
+                {
+                    full_name: user.full_name,
+                },
+            ] as const),
+        );
+
+        return findings.map((finding) => ({
+            id: finding.id,
+            finding_code: finding.finding_code,
+            finding_type: finding.finding_type,
+            clause: finding.clause,
+            requirement: finding.requirement,
+            description: finding.description,
+            objective_evidence:
+                finding.objective_evidence,
+            detected_date: finding.detected_date,
+            due_date: finding.due_date,
+            status: finding.status,
+            closed_at: finding.closed_at,
+            close_comment: finding.close_comment,
+            created_at: finding.created_at,
+            updated_at: finding.updated_at,
+            is_overdue:
+                finding.status !== 'closed' &&
+                finding.due_date !== null &&
+                new Date(finding.due_date).getTime() <
+                    Date.now(),
+            corrective_actions:
+                (finding.corrective_actions ?? [])
+                    .map((action: any) => ({
+                        id: action.id,
+                        version_no: action.version_no,
+                        root_cause: action.root_cause,
+                        correction: action.correction,
+                        corrective_action_plan:
+                            action.corrective_action_plan,
+                        responsible_person:
+                            action.responsible_person,
+                        target_date: action.target_date,
+                        status: action.status,
+                        submitted_at: action.submitted_at,
+                        reviewed_at: action.reviewed_at,
+                        review_comment:
+                            action.review_comment,
+                        created_at: action.created_at,
+                        updated_at: action.updated_at,
+                        form_data:
+                            this.parseFormData(
+                                action.form_data,
+                            ),
+                        submitted_by_user:
+                            action.submitted_by
+                                ? usersById.get(
+                                    action.submitted_by,
+                                ) ?? null
+                                : null,
+                        reviewed_by_user:
+                            action.reviewed_by
+                                ? usersById.get(
+                                    action.reviewed_by,
+                                ) ?? null
+                                : null,
+                        evidence_files:
+                            filesByAction.get(
+                                action.id,
+                            ) ?? [],
+                    })),
+        }));
     }
 
     private async assertFindingAccess(
@@ -440,6 +656,207 @@ export class AuditFindingsService {
         });
 
         return this.normalizeFindingsWithEvidence(findings);
+    }
+
+    async findCustomerOne(id: string) {
+        const finding =
+            await this.prisma.audit_findings.findUnique({
+                where: {
+                    id,
+                },
+                select:
+                    this.getCustomerFindingSelect(),
+            });
+
+        if (!finding) {
+            throw new NotFoundException(
+                'Không tìm thấy phát hiện đánh giá',
+            );
+        }
+
+        const [normalized] =
+            await this.normalizeCustomerFindingsWithEvidence([
+                finding,
+            ]);
+
+        return normalized;
+    }
+
+    async findCustomerWorkspaceIndex(
+        customerIds: string[],
+    ) {
+        if (customerIds.length === 0) {
+            return [];
+        }
+
+        const plans =
+            await this.prisma.audit_plans.findMany({
+                where: {
+                    certification_projects: {
+                        certification_applications: {
+                            customer_id: {
+                                in: customerIds,
+                            },
+                        },
+                    },
+                },
+                select: {
+                    id: true,
+                    plan_code: true,
+                    audit_type: true,
+                    planned_start_date: true,
+                    planned_end_date: true,
+                    status: true,
+                    certification_projects: {
+                        select: {
+                            project_code: true,
+                            standard_name: true,
+                            status: true,
+                            certification_applications: {
+                                select: {
+                                    customers: {
+                                        select: {
+                                            customer_code: true,
+                                            company_name: true,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    reports: {
+                        select: {
+                            audit_findings: {
+                                select: {
+                                    status: true,
+                                    due_date: true,
+                                },
+                            },
+                        },
+                    },
+                },
+                orderBy: [
+                    { planned_start_date: 'desc' },
+                    { created_at: 'desc' },
+                ],
+            });
+
+        const now = Date.now();
+
+        return plans.map((plan) => {
+            const findings = plan.reports.flatMap(
+                (report) => report.audit_findings,
+            );
+            const openFindings = findings.filter(
+                (finding) =>
+                    finding.status !== 'closed',
+            );
+
+            return {
+                plan: {
+                    id: plan.id,
+                    plan_code: plan.plan_code,
+                    audit_type: plan.audit_type,
+                    planned_start_date:
+                        plan.planned_start_date,
+                    planned_end_date:
+                        plan.planned_end_date,
+                    status: plan.status,
+                },
+                project: {
+                    project_code:
+                        plan.certification_projects.project_code,
+                    standard_name:
+                        plan.certification_projects.standard_name,
+                    status:
+                        plan.certification_projects.status,
+                },
+                customer: {
+                    customer_code:
+                        plan.certification_projects
+                            .certification_applications
+                            .customers.customer_code,
+                    company_name:
+                        plan.certification_projects
+                            .certification_applications
+                            .customers.company_name,
+                },
+                finding_summary: {
+                    total: findings.length,
+                    open: openFindings.length,
+                    overdue: openFindings.filter(
+                        (finding) =>
+                            finding.due_date !== null &&
+                            new Date(
+                                finding.due_date,
+                            ).getTime() < now,
+                    ).length,
+                },
+            };
+        });
+    }
+
+    async findCustomerWorkspaceByPlan(
+        auditPlanId: string,
+    ) {
+        const plan =
+            await this.prisma.audit_plans.findUnique({
+                where: {
+                    id: auditPlanId,
+                },
+                select: {
+                    id: true,
+                    plan_code: true,
+                    audit_type: true,
+                    planned_start_date: true,
+                    planned_end_date: true,
+                    certification_projects: {
+                        select: {
+                            project_code: true,
+                            standard_name: true,
+                            certification_applications: {
+                                select: {
+                                    customers: {
+                                        select: {
+                                            company_name: true,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+
+        if (!plan) {
+            throw new NotFoundException(
+                'Không tìm thấy kế hoạch đánh giá',
+            );
+        }
+
+        const findings =
+            await this.prisma.audit_findings.findMany({
+                where: {
+                    reports: {
+                        audit_plan_id:
+                            auditPlanId,
+                    },
+                },
+                select:
+                    this.getCustomerFindingSelect(),
+                orderBy: [
+                    { detected_date: 'asc' },
+                    { created_at: 'asc' },
+                ],
+            });
+
+        return {
+            plan,
+            findings:
+                await this.normalizeCustomerFindingsWithEvidence(
+                    findings,
+                ),
+        };
     }
 
     async create(
@@ -701,27 +1118,41 @@ export class AuditFindingsService {
         );
     }
 
-    async createCorrectiveAction(
-        findingId: string,
+    private prepareCorrectiveActionInput(
         dto: CreateCorrectiveActionDto,
-        submittedBy?: string,
     ) {
-        const finding =
-            await this.prisma.audit_findings.findUnique(
-                {
-                    where: {
-                        id:
-                            findingId,
-                    },
-                },
-            );
+        const rootCause = dto.root_cause?.trim();
+        const correction = dto.correction?.trim();
+        const actionPlan = dto.corrective_action_plan?.trim();
 
-        if (!finding) {
-            throw new NotFoundException(
-                'Không tìm thấy phát hiện đánh giá',
+        if (!rootCause || !correction || !actionPlan) {
+            throw new BadRequestException(
+                'Thiếu nguyên nhân, khắc phục tức thời hoặc kế hoạch hành động',
             );
         }
 
+        return {
+            rootCause,
+            correction,
+            actionPlan,
+            targetDate: this.parseDate(
+                dto.target_date,
+                'Ngày dự kiến hoàn thành',
+            ),
+            responsiblePerson:
+                dto.responsible_person?.trim() || null,
+            formData: {
+                custom_content: dto.custom_content ?? {},
+            },
+        };
+    }
+
+    private validateCorrectiveActionFinding(
+        finding: {
+            finding_type: string;
+            status: string;
+        },
+    ) {
         if (
             !['major_nc', 'minor_nc'].includes(
                 finding.finding_type,
@@ -732,138 +1163,221 @@ export class AuditFindingsService {
             );
         }
 
-        if (
-            finding.status === 'closed'
-        ) {
-            throw new BadRequestException(
-                'Phát hiện đã được đóng',
+        const status =
+            this.normalizeText(
+                finding.status,
             );
-        }
 
         if (
-            finding.status ===
-            'action_accepted'
+            ![
+                'open',
+                'revision_required',
+            ].includes(status)
         ) {
             throw new ConflictException(
-                'Hành động khắc phục đã được chấp nhận',
+                status === 'response_submitted'
+                    ? 'Phản hồi CAP đang chờ xem xét'
+                    : 'Phát hiện không ở trạng thái cho phép gửi CAP',
             );
         }
+    }
 
-        const rootCause =
-            dto.root_cause?.trim();
-
-        const correction =
-            dto.correction?.trim();
-
-        const actionPlan =
-            dto.corrective_action_plan?.trim();
-
+    private getPrismaErrorCode(
+        error: unknown,
+    ) {
         if (
-            !rootCause ||
-            !correction ||
-            !actionPlan
+            typeof error !== 'object' ||
+            error === null ||
+            !('code' in error)
         ) {
-            throw new BadRequestException(
-                'Thiếu nguyên nhân, khắc phục tức thời hoặc kế hoạch hành động',
-            );
+            return null;
         }
 
-        const targetDate =
-            this.parseDate(
-                dto.target_date,
-                'Ngày dự kiến hoàn thành',
-            );
+        const code =
+            (error as { code?: unknown }).code;
 
-        const latest =
-            await this.prisma.corrective_actions.aggregate(
+        return typeof code === 'string'
+            ? code
+            : null;
+    }
+
+    private async createCorrectiveActionTransaction(
+        findingId: string,
+        dto: CreateCorrectiveActionDto,
+        submittedBy: string | undefined,
+        customerActor?: ResourceActor,
+    ) {
+        const prepared =
+            this.prepareCorrectiveActionInput(dto);
+
+        const execute = () =>
+            this.prisma.$transaction(
+                async (transaction) => {
+                    if (customerActor) {
+                        await this.resourceAccess
+                            .assertCustomerEntityAccess(
+                                {
+                                    entity_type: 'audit_finding',
+                                    entity_id: findingId,
+                                },
+                                customerActor,
+                                transaction,
+                            );
+                    }
+
+                    const finding =
+                        await transaction.audit_findings.findUnique({
+                            where: {
+                                id: findingId,
+                            },
+                            select: {
+                                id: true,
+                                finding_type: true,
+                                status: true,
+                            },
+                        });
+
+                    if (!finding) {
+                        if (customerActor) {
+                            throw new ForbiddenException(
+                                'Bạn không có quyền truy cập dữ liệu của khách hàng này',
+                            );
+                        }
+
+                        throw new NotFoundException(
+                            'Không tìm thấy phát hiện đánh giá',
+                        );
+                    }
+
+                    this.validateCorrectiveActionFinding(
+                        finding,
+                    );
+
+                    const latest =
+                        await transaction.corrective_actions.aggregate({
+                            where: {
+                                finding_id: findingId,
+                            },
+                            _max: {
+                                version_no: true,
+                            },
+                        });
+
+                    const versionNo =
+                        (latest._max.version_no ?? 0) + 1;
+
+                    const action =
+                        await transaction.corrective_actions.create({
+                            data: {
+                                finding_id: findingId,
+                                version_no: versionNo,
+                                root_cause: prepared.rootCause,
+                                correction: prepared.correction,
+                                corrective_action_plan:
+                                    prepared.actionPlan,
+                                responsible_person:
+                                    prepared.responsiblePerson,
+                                target_date:
+                                    prepared.targetDate,
+                                status: 'submitted',
+                                submitted_by:
+                                    submittedBy ?? null,
+                                form_data:
+                                    JSON.stringify(
+                                        prepared.formData,
+                                    ),
+                            },
+                        });
+
+                    await transaction.audit_findings.update({
+                        where: {
+                            id: findingId,
+                        },
+                        data: {
+                            status: 'response_submitted',
+                        },
+                    });
+
+                    return {
+                        ...action,
+                        form_data:
+                            prepared.formData,
+                    };
+                },
                 {
-                    where: {
-                        finding_id:
-                            findingId,
-                    },
-
-                    _max: {
-                        version_no:
-                            true,
-                    },
+                    isolationLevel:
+                        Prisma
+                            .TransactionIsolationLevel
+                            .Serializable,
                 },
             );
 
-        const versionNo =
-            (
-                latest._max.version_no ??
-                0
-            ) + 1;
+        for (
+            let attempt = 1;
+            attempt <= 2;
+            attempt += 1
+        ) {
+            try {
+                return await execute();
+            } catch (error) {
+                const code =
+                    this.getPrismaErrorCode(error);
 
-        const formData = {
-            custom_content:
-                dto.custom_content ??
-                {},
-        };
+                const retryable =
+                    code === 'P2034' ||
+                    code === 'P2002';
 
-        return this.prisma.$transaction(
-            async (transaction) => {
-                const action =
-                    await transaction.corrective_actions.create(
-                        {
-                            data: {
-                                finding_id:
-                                    findingId,
+                if (
+                    !retryable ||
+                    attempt === 2
+                ) {
+                    if (retryable) {
+                        throw new ConflictException(
+                            'Có thay đổi đồng thời đối với hành động khắc phục. Vui lòng tải lại và thử lại.',
+                        );
+                    }
 
-                                version_no:
-                                    versionNo,
+                    throw error;
+                }
+            }
+        }
 
-                                root_cause:
-                                    rootCause,
+        throw new ConflictException(
+            'Không thể tạo hành động khắc phục do xung đột đồng thời',
+        );
+    }
 
-                                correction,
+    async createCorrectiveAction(
+        findingId: string,
+        dto: CreateCorrectiveActionDto,
+        submittedBy?: string,
+    ) {
+        return this.createCorrectiveActionTransaction(
+            findingId,
+            dto,
+            submittedBy,
+        );
+    }
 
-                                corrective_action_plan:
-                                    actionPlan,
+    async createCustomerCorrectiveAction(
+        findingId: string,
+        dto: CreateCorrectiveActionDto,
+        actor: ResourceActor,
+    ) {
+        const submittedBy =
+            actor.userId?.trim();
 
-                                responsible_person:
-                                    dto.responsible_person?.trim() ||
-                                    null,
+        if (!submittedBy) {
+            throw new ForbiddenException(
+                'Không xác định được tài khoản khách hàng',
+            );
+        }
 
-                                target_date:
-                                    targetDate,
-
-                                status:
-                                    'submitted',
-
-                                submitted_by:
-                                    submittedBy ??
-                                    null,
-
-                                form_data:
-                                    JSON.stringify(
-                                        formData,
-                                    ),
-                            },
-                        },
-                    );
-
-                await transaction.audit_findings.update(
-                    {
-                        where: {
-                            id:
-                                findingId,
-                        },
-
-                        data: {
-                            status:
-                                'response_submitted',
-                        },
-                    },
-                );
-
-                return {
-                    ...action,
-
-                    form_data:
-                        formData,
-                };
-            },
+        return this.createCorrectiveActionTransaction(
+            findingId,
+            dto,
+            submittedBy,
+            actor,
         );
     }
 

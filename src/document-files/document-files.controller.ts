@@ -44,6 +44,7 @@ import {
 
 import { DocumentFilesService } from './document-files.service';
 import { UploadDocumentFileDto } from './dto/upload-document-file.dto';
+import { UploadCustomerCorrectiveActionEvidenceDto } from './dto/upload-customer-corrective-action-evidence.dto';
 
 
 @Controller('document-files')
@@ -196,6 +197,128 @@ export class DocumentFilesController {
             file,
             uploadedBy ?? undefined,
             this.actor(request),
+        );
+    }
+
+    @Post('customer/corrective-actions/:actionId/evidence')
+    @Roles('CUSTOMER')
+    @ApiOperation({
+        summary: 'Khách hàng tải bằng chứng hành động khắc phục',
+        description:
+            'Chỉ cho phép tải bằng chứng vào đúng CAP thuộc customer đã được gán cho tài khoản hiện tại. Loại đối tượng và loại tài liệu do server khóa cứng.',
+    })
+    @ApiConsumes('multipart/form-data')
+    @ApiParam({
+        name: 'actionId',
+        description: 'UUID phiên bản hành động khắc phục',
+    })
+    @ApiBody({
+        schema: {
+            type: 'object',
+            required: ['file'],
+            properties: {
+                file: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'PDF, Word, JPG hoặc PNG tối đa 20 MB',
+                },
+                note: {
+                    type: 'string',
+                    maxLength: 1000,
+                    example: 'Bằng chứng thực hiện hành động khắc phục.',
+                },
+            },
+        },
+    })
+    @ApiCreatedResponse({
+        description: 'Tải bằng chứng CAP thành công',
+    })
+    @ApiBadRequestResponse({
+        description: 'Thiếu tệp, sai định dạng hoặc trường multipart không hợp lệ',
+    })
+    @UseInterceptors(
+        FileInterceptor(
+            'file',
+            createSecureUploadOptions(),
+        ),
+        new TempUploadCleanupInterceptor(),
+    )
+    uploadCustomerCorrectiveActionEvidence(
+        @Param(
+            'actionId',
+            new ParseUUIDPipe({ version: '4' }),
+        )
+        actionId: string,
+
+        @Body()
+        dto: UploadCustomerCorrectiveActionEvidenceDto,
+
+        @UploadedFile()
+        file: Express.Multer.File,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        const uploadedBy =
+            getActorUserId(
+                request,
+            );
+
+        return this.documentFilesService
+            .uploadCustomerCorrectiveActionEvidence(
+                actionId,
+                dto,
+                file,
+                uploadedBy ?? undefined,
+                this.actor(request),
+            );
+    }
+
+    @Get('customer/:id/download')
+    @Roles('CUSTOMER')
+    @ApiOperation({
+        summary: 'Khách hàng mở hoặc tải bằng chứng CAP của mình',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'UUID bản ghi bằng chứng CAP',
+    })
+    @ApiOkResponse({
+        description: 'Nội dung tệp bằng chứng CAP',
+    })
+    async downloadCustomerCorrectiveActionEvidence(
+        @Param(
+            'id',
+            new ParseUUIDPipe({ version: '4' }),
+        )
+        id: string,
+
+        @Req()
+        request: SecurityRequest,
+
+        @Res()
+        response: Response,
+    ) {
+        const result =
+            await this.documentFilesService
+                .getCustomerCorrectiveActionEvidenceDownload(
+                    id,
+                    this.actor(request),
+                );
+
+        response.type(
+            result.documentFile.mime_type,
+        );
+
+        response.setHeader(
+            'Content-Disposition',
+            `inline; filename*=UTF-8''${encodeURIComponent(
+                result.documentFile.original_name,
+            )}`,
+        );
+
+        return response.sendFile(
+            result.absolutePath,
         );
     }
 
