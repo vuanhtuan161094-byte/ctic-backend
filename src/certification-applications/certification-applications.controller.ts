@@ -6,6 +6,8 @@ import {
     Param,
     Patch,
     Post,
+    Req,
+    UnauthorizedException,
     UseGuards,
 } from '@nestjs/common';
 import {
@@ -23,6 +25,8 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { getActorUserId } from '../security/security-request';
+import type { SecurityRequest } from '../security/security-request';
 
 import { CertificationApplicationsService } from './certification-applications.service';
 import { CreateCertificationApplicationDto } from './dto/create-certification-application.dto';
@@ -40,6 +44,16 @@ export class CertificationApplicationsController {
         private readonly certificationApplicationsService:
             CertificationApplicationsService,
     ) { }
+
+    private actorUserId(request: SecurityRequest) {
+        const userId = getActorUserId(request);
+        if (!userId) {
+            throw new UnauthorizedException(
+                'Authenticated user id is required',
+            );
+        }
+        return userId;
+    }
 
     @Get()
     @Roles(
@@ -105,8 +119,13 @@ export class CertificationApplicationsController {
     update(
         @Param('id') id: string,
         @Body() dto: CreateCertificationApplicationDto,
+        @Req() request: SecurityRequest,
     ) {
-        return this.certificationApplicationsService.update(id, dto);
+        return this.certificationApplicationsService.update(
+            id,
+            dto,
+            this.actorUserId(request),
+        );
     }
 
     @Delete(':id')

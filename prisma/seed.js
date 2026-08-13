@@ -66,6 +66,7 @@ const roleDefinitions = {
     auditor: {
         description: 'Chuyên gia đánh giá',
         permissions: [
+            'applications.review',
             'audit_plans.read',
             'audit_programs.read',
             'audit_teams.read',
@@ -132,6 +133,7 @@ const roleDefinitions = {
     lead_auditor: {
         description: 'Trưởng đoàn đánh giá',
         permissions: [
+            'applications.review',
             'audit_plans.read',
             'audit_programs.read',
             'audit_teams.read',
@@ -192,6 +194,7 @@ const roleDefinitions = {
         description: 'Chuyên gia thẩm xét kỹ thuật',
         permissions: [
             'applications.read',
+            'applications.review',
             'audit_plans.read',
             'audit_programs.read',
             'audit_teams.read',

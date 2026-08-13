@@ -53,6 +53,79 @@ export class CustomersService {
         );
     }
 
+
+    private normalizeCountryCode(
+        value: string | null | undefined,
+    ) {
+        const normalized = String(value ?? 'VN')
+            .trim()
+            .toUpperCase();
+
+        if (!/^[A-Z]{2}$/.test(normalized)) {
+            throw new BadRequestException(
+                'Mã quốc gia phải gồm đúng 2 chữ cái',
+            );
+        }
+
+        return normalized;
+    }
+
+    private normalizeCountryName(
+        countryCode: string,
+        value: string | null | undefined,
+    ) {
+        const normalized = String(value ?? '').trim();
+
+        if (countryCode === 'OT') {
+            if (!normalized) {
+                throw new BadRequestException(
+                    'Vui lòng nhập tên quốc gia khi chọn Khác',
+                );
+            }
+
+            if (normalized.length > 100) {
+                throw new BadRequestException(
+                    'Tên quốc gia không được vượt quá 100 ký tự',
+                );
+            }
+
+            return normalized;
+        }
+
+        return null;
+    }
+
+    private normalizeTaxCode(
+        countryCode: string,
+        value: string | null | undefined,
+    ) {
+        const raw = String(value ?? '').trim();
+
+        if (!raw) {
+            return null;
+        }
+
+        if (countryCode === 'VN') {
+            const normalized = raw.replace(/[\s-]/g, '');
+
+            if (!/^\d{10}(?:\d{3})?$/.test(normalized)) {
+                throw new BadRequestException(
+                    'Mã số thuế Việt Nam phải gồm 10 hoặc 13 chữ số',
+                );
+            }
+
+            return normalized;
+        }
+
+        if (raw.length > 20) {
+            throw new BadRequestException(
+                'Tax ID/Business ID không được vượt quá 20 ký tự',
+            );
+        }
+
+        return raw;
+    }
+
     private customerUserAccessKey(
         customerId: string,
         userId: string,
@@ -89,10 +162,23 @@ export class CustomersService {
 
     // Tạo khách hàng mới
     async create(dto: CreateCustomerDto) {
+        const customerCode = dto.customer_code.trim();
+        const countryCode = this.normalizeCountryCode(
+            dto.country_code,
+        );
+        const countryName = this.normalizeCountryName(
+            countryCode,
+            dto.country_name,
+        );
+        const taxCode = this.normalizeTaxCode(
+            countryCode,
+            dto.tax_code,
+        );
+
         const existingCode =
             await this.prisma.customers.findUnique({
                 where: {
-                    customer_code: dto.customer_code,
+                    customer_code: customerCode,
                 },
             });
 
@@ -102,23 +188,32 @@ export class CustomersService {
             );
         }
 
-        if (dto.tax_code) {
+        if (taxCode) {
             const existingTax =
-                await this.prisma.customers.findUnique({
+                await this.prisma.customers.findFirst({
                     where: {
-                        tax_code: dto.tax_code,
+                        tax_code: taxCode,
                     },
                 });
 
             if (existingTax) {
                 throw new BadRequestException(
-                    'Mã số thuế đã tồn tại',
+                    'Mã số thuế / Tax ID đã tồn tại',
                 );
             }
         }
 
         return this.prisma.customers.create({
-            data: dto,
+            data: {
+                customer_code: customerCode,
+                company_name: dto.company_name.trim(),
+                country_code: countryCode,
+                country_name: countryName,
+                tax_code: taxCode,
+                address: dto.address?.trim(),
+                email: dto.email?.trim(),
+                phone: dto.phone?.trim(),
+            },
         });
     }
 
@@ -127,13 +222,76 @@ export class CustomersService {
         id: string,
         dto: UpdateCustomerDto,
     ) {
-        await this.findOne(id);
+        const current = await this.findOne(id);
+        const customerCode = dto.customer_code?.trim()
+            ?? current.customer_code;
+        const countryCode = this.normalizeCountryCode(
+            dto.country_code ?? current.country_code,
+        );
+        const countryName = this.normalizeCountryName(
+            countryCode,
+            dto.country_name !== undefined
+                ? dto.country_name
+                : current.country_name,
+        );
+        const taxCode = this.normalizeTaxCode(
+            countryCode,
+            dto.tax_code !== undefined
+                ? dto.tax_code
+                : current.tax_code,
+        );
+
+        const duplicateCode =
+            await this.prisma.customers.findFirst({
+                where: {
+                    customer_code: customerCode,
+                    NOT: { id },
+                },
+                select: { id: true },
+            });
+
+        if (duplicateCode) {
+            throw new BadRequestException(
+                'Mã khách hàng đã tồn tại',
+            );
+        }
+
+        if (taxCode) {
+            const duplicateTax =
+                await this.prisma.customers.findFirst({
+                    where: {
+                        tax_code: taxCode,
+                        NOT: { id },
+                    },
+                    select: { id: true },
+                });
+
+            if (duplicateTax) {
+                throw new BadRequestException(
+                    'Mã số thuế / Tax ID đã tồn tại',
+                );
+            }
+        }
 
         return this.prisma.customers.update({
-            where: {
-                id,
+            where: { id },
+            data: {
+                customer_code: customerCode,
+                company_name: dto.company_name?.trim()
+                    ?? current.company_name,
+                country_code: countryCode,
+                country_name: countryName,
+                tax_code: taxCode,
+                address: dto.address === undefined
+                    ? current.address
+                    : dto.address?.trim() || null,
+                email: dto.email === undefined
+                    ? current.email
+                    : dto.email?.trim() || null,
+                phone: dto.phone === undefined
+                    ? current.phone
+                    : dto.phone?.trim() || null,
             },
-            data: dto,
         });
     }
 

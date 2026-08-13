@@ -218,6 +218,35 @@ function buildMssqlConfig(
         parameters.get('password') ??
         parameters.get('pwd');
 
+    const encrypt =
+        parseBoolean(
+            parameters.get(
+                'encrypt',
+            ),
+            true,
+        );
+
+    // SQL Server's normal TDS packet size is 4096 bytes. Values above
+    // 32767 are invalid, and encrypted connections have a lower ceiling.
+    // Fall back to the interoperable default instead of allowing an invalid
+    // environment value to destabilize login/query processing.
+    const requestedPacketSize =
+        positiveInteger(
+            configService.get<string>(
+                'DB_PACKET_SIZE',
+            ),
+            4_096,
+        );
+    const maximumPacketSize =
+        encrypt
+            ? 16_383
+            : 32_767;
+    const packetSize =
+        requestedPacketSize >= 512 &&
+        requestedPacketSize <= maximumPacketSize
+            ? requestedPacketSize
+            : 4_096;
+
     return {
         server,
         port:
@@ -260,13 +289,7 @@ function buildMssqlConfig(
                 ),
         },
         options: {
-            encrypt:
-                parseBoolean(
-                    parameters.get(
-                        'encrypt',
-                    ),
-                    true,
-                ),
+            encrypt,
             trustServerCertificate:
                 parseBoolean(
                     parameters.get(
@@ -274,13 +297,7 @@ function buildMssqlConfig(
                     ),
                     false,
                 ),
-            packetSize:
-                positiveInteger(
-                    configService.get<string>(
-                        'DB_PACKET_SIZE',
-                    ),
-                    32_768,
-                ),
+            packetSize,
             enableArithAbort: true,
         },
     };

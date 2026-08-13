@@ -7,6 +7,7 @@ import {
 import type { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { CertificationBodyCapabilitiesService } from '../certification-body-capabilities/certification-body-capabilities.service';
 import { CreateCertificationProjectDto } from './dto/create-certification-project.dto';
 import { CreateCompleteCertificationProjectDto } from './dto/create-complete-certification-project.dto';
 
@@ -21,6 +22,7 @@ type ReviewIndustryScope = {
 export class CertificationProjectsService {
     constructor(
         private readonly prisma: PrismaService,
+        private readonly certificationBodyCapabilities: CertificationBodyCapabilitiesService,
     ) { }
 
 
@@ -1805,6 +1807,10 @@ export class CertificationProjectsService {
             );
         }
 
+        await this.certificationBodyCapabilities.assertApplicationApprovedForContract(
+            application.id,
+        );
+
         if (
             dto.contract_mode === 'none' &&
             dto.agreement_mode === 'none'
@@ -2050,6 +2056,8 @@ export class CertificationProjectsService {
                                         : undefined,
                                 total_value:
                                     contractData.total_value,
+                                currency:
+                                    contractData.currency?.trim().toUpperCase(),
                             },
                         });
 
@@ -2233,6 +2241,10 @@ export class CertificationProjectsService {
                 'Hồ sơ đăng ký chưa được chấp nhận',
             );
         }
+
+        await this.certificationBodyCapabilities.assertApplicationApprovedForContract(
+            application.id,
+        );
 
         // Mỗi hồ sơ chỉ được tạo một dự án
         const existingApplicationProject =

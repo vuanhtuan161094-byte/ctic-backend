@@ -24,6 +24,94 @@ function fail(message, details) {
   process.exit(1);
 }
 
+function splitConnectionParts(value) {
+  const parts = [];
+  let current = '';
+  let braceDepth = 0;
+
+  for (const character of String(value || '')) {
+    if (character === '{') braceDepth += 1;
+    if (character === '}' && braceDepth > 0) braceDepth -= 1;
+
+    if (character === ';' && braceDepth === 0) {
+      parts.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+
+  if (current) parts.push(current);
+  return parts;
+}
+
+function unwrap(value) {
+  const trimmed = String(value ?? '').trim();
+  return trimmed.startsWith('{') && trimmed.endsWith('}')
+    ? trimmed.slice(1, -1)
+    : trimmed;
+}
+
+function parseSqlServerUrl(url) {
+  if (!url || !/^sqlserver:\/\//i.test(url)) {
+    fail('DATABASE_URL phải dùng định dạng sqlserver://...');
+  }
+
+  const parts = splitConnectionParts(url.replace(/^sqlserver:\/\//i, ''));
+  const hostPart = String(parts.shift() || '').trim();
+  const lastColon = hostPart.lastIndexOf(':');
+  const server = (lastColon > 0 ? hostPart.slice(0, lastColon) : hostPart).trim();
+  const port = lastColon > 0 ? Number(hostPart.slice(lastColon + 1)) : 1433;
+  const params = new Map();
+
+  for (const part of parts) {
+    const separator = part.indexOf('=');
+    if (separator <= 0) continue;
+    params.set(
+      part.slice(0, separator).trim().toLowerCase(),
+      unwrap(part.slice(separator + 1)),
+    );
+  }
+
+  return {
+    server,
+    port: Number.isFinite(port) && port > 0 ? port : 1433,
+    database: params.get('database') || params.get('initial catalog') || '',
+    user: params.get('user') || params.get('username') || params.get('uid') || '',
+    password: params.get('password') || params.get('pwd') || '',
+    encrypt: ['1', 'true', 'yes', 'on'].includes(
+      String(params.get('encrypt') || '').toLowerCase(),
+    ),
+    trustServerCertificate: ['1', 'true', 'yes', 'on'].includes(
+      String(params.get('trustservercertificate') || '').toLowerCase(),
+    ),
+  };
+}
+
+function adapterConfig(url) {
+  const parsed = parseSqlServerUrl(url);
+  return {
+    server: parsed.server,
+    port: parsed.port,
+    database: parsed.database,
+    ...(parsed.user ? { user: parsed.user } : {}),
+    ...(parsed.password ? { password: parsed.password } : {}),
+    connectionTimeout: 15_000,
+    requestTimeout: 60_000,
+    pool: {
+      max: 2,
+      min: 0,
+      idleTimeoutMillis: 5_000,
+    },
+    options: {
+      encrypt: parsed.encrypt,
+      trustServerCertificate: parsed.trustServerCertificate,
+      packetSize: 4096,
+      enableArithAbort: true,
+    },
+  };
+}
+
 function parseNativeType(rest) {
   const match = rest.match(/@db\.([A-Za-z0-9_]+)(?:\(([^)]*)\))?/);
   if (!match) return null;
@@ -128,7 +216,7 @@ async function main() {
   const contract = parsePrismaSchema(fs.readFileSync(SCHEMA_FILE, 'utf8'));
   if (contract.size < 20) fail('Không đọc được Prisma schema contract; dừng để tránh kết luận sai.');
 
-  const prisma = new PrismaClient({ adapter: new PrismaMssql(databaseUrl) });
+  const prisma = new PrismaClient({ adapter: new PrismaMssql(adapterConfig(databaseUrl)) });
 
   try {
     await prisma.$connect();

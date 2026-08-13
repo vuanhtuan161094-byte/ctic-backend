@@ -17,6 +17,10 @@ const EXPECTED_MIGRATIONS = [
   '20260810013000_patch36b6_security_audit',
   '20260810120000_patch36c1_legacy_schema_consolidation',
   '20260810180000_p09_customer_user_access',
+  '20260812120000_application_review_cb_capability',
+  '20260812204000_application_review_invalidation_country',
+  '20260812223000_customer_tax_code_filtered_unique',
+  '20260812230000_uat_country_review_roundtrip',
 ];
 
 loadDotEnv({
@@ -237,6 +241,48 @@ async function ensureTestDatabase(testUrl) {
   }
 }
 
+
+async function enforceTestDatabaseOptions(testUrl) {
+  const target = assertTestTarget(testUrl);
+  if (target.database !== TEST_DATABASE_NAME) {
+    fail(
+      `Database option check is restricted to ${TEST_DATABASE_NAME}; received ${target.database}.`,
+    );
+  }
+
+  // Read-only safety gate. The application/migration principal must not need
+  // ALTER DATABASE permission just to execute E2E tests. Database-level
+  // options are configured administratively outside the test harness.
+  const master = createClient(testUrl, 'master');
+  try {
+    const rows = await master.$queryRawUnsafe(
+      `SELECT state_desc, is_auto_close_on
+       FROM sys.databases
+       WHERE name = N'${TEST_DATABASE_NAME}'`,
+    );
+    if (rows.length !== 1) {
+      fail(`${TEST_DATABASE_NAME} was not visible in sys.databases.`);
+    }
+
+    const state = String(rows[0]?.state_desc || '').toUpperCase();
+    const autoClose = Number(rows[0]?.is_auto_close_on ?? 1);
+    if (state !== 'ONLINE' || autoClose !== 0) {
+      fail(
+        `${TEST_DATABASE_NAME} must be ONLINE with AUTO_CLOSE OFF before E2E execution. ` +
+          `Current state=${state || '<unknown>'}, AUTO_CLOSE=${autoClose}. ` +
+          `Configure this database option with an administrative SQL login; ` +
+          `the E2E runner will not mutate database-level settings.`,
+      );
+    }
+
+    console.log(
+      `Test database option contract: ${TEST_DATABASE_NAME} ONLINE, AUTO_CLOSE OFF (read-only check).`,
+    );
+  } finally {
+    await master.$disconnect();
+  }
+}
+
 function runCommand(command, args, env) {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
@@ -376,7 +422,7 @@ async function verifyMigratedDatabase(testUrl) {
       migrations.some((name, index) => name !== EXPECTED_MIGRATIONS[index])
     ) {
       fail(
-        `Expected canonical 6 migrations, found ${migrations.join(', ') || 'none'}.`,
+        `Expected canonical ${EXPECTED_MIGRATIONS.length} migrations, found ${migrations.join(', ') || 'none'}.`,
       );
     }
 
@@ -387,7 +433,7 @@ async function verifyMigratedDatabase(testUrl) {
       fail('dbo.customer_user_access is missing after migrate deploy.');
     }
 
-    console.log('Test database migration contract: 6/6 PASS.');
+    console.log(`Test database migration contract: ${EXPECTED_MIGRATIONS.length}/${EXPECTED_MIGRATIONS.length} PASS.`);
   } finally {
     await client.$disconnect();
   }
@@ -401,6 +447,7 @@ async function main() {
   );
 
   await ensureTestDatabase(testUrl);
+  await enforceTestDatabaseOptions(testUrl);
 
   const childEnv = {
     ...process.env,
@@ -411,7 +458,9 @@ async function main() {
     CMP_DATABASE_CONNECTION_ROLE: 'migration',
   };
   await recoverKnownFailedTestMigration(testUrl, childEnv);
-  runNpm(['exec', 'prisma', '--', 'migrate', 'deploy'], childEnv);
+  if (!process.argv.includes('--e2e-only')) {
+    runNpm(['exec', 'prisma', '--', 'migrate', 'deploy'], childEnv);
+  }
   await verifyMigratedDatabase(testUrl);
 
   for (let run = 1; run <= 2; run += 1) {
@@ -440,7 +489,9 @@ if (require.main === module) {
 
 module.exports = {
   TEST_DATABASE_NAME,
+  EXPECTED_MIGRATIONS,
   createClient,
+  enforceTestDatabaseOptions,
   parseSqlServerUrl,
   replaceDatabase,
 };

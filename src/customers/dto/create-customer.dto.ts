@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import {
   ApiProperty,
   ApiPropertyOptional,
@@ -26,8 +26,31 @@ export class CreateCustomerDto {
   company_name!: string;
 
   @ApiPropertyOptional({
+    example: 'VN',
+    description: 'Mã quốc gia 2 chữ cái. Mặc định VN; dùng OT khi chọn Khác và điền country_name.',
+    default: 'VN',
+    maxLength: 2,
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z]{2}$/, {
+    message: 'Mã quốc gia phải gồm đúng 2 chữ cái',
+  })
+  country_code?: string;
+
+  @ApiPropertyOptional({
+    example: 'Lào',
+    description: 'Tên quốc gia khi country_code = OT (Khác).',
+    maxLength: 100,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country_name?: string;
+
+  @ApiPropertyOptional({
     example: '0101234567',
-    description: 'Mã số thuế',
+    description: 'Mã số thuế / Tax ID. Việt Nam: 10 hoặc 13 chữ số; quốc gia khác: nhập theo mã địa phương.',
     maxLength: 20,
   })
   @IsOptional()

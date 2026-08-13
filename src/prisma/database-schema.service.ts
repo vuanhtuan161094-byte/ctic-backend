@@ -36,6 +36,8 @@ export class DatabaseSchemaService {
                 SELECT
                     CASE WHEN OBJECT_ID(N'dbo.certification_application_sites', N'U') IS NULL THEN 0 ELSE 1 END AS table_certification_application_sites,
                     CASE WHEN OBJECT_ID(N'dbo.application_review_actions', N'U') IS NULL THEN 0 ELSE 1 END AS table_application_review_actions,
+                    CASE WHEN OBJECT_ID(N'dbo.certification_body_capabilities', N'U') IS NULL THEN 0 ELSE 1 END AS table_certification_body_capabilities,
+                    CASE WHEN OBJECT_ID(N'dbo.application_review_capability_snapshots', N'U') IS NULL THEN 0 ELSE 1 END AS table_application_review_capability_snapshots,
                     CASE WHEN OBJECT_ID(N'dbo.expert_work_experiences', N'U') IS NULL THEN 0 ELSE 1 END AS table_expert_work_experiences,
                     CASE WHEN OBJECT_ID(N'dbo.expert_certificates', N'U') IS NULL THEN 0 ELSE 1 END AS table_expert_certificates,
                     CASE WHEN OBJECT_ID(N'dbo.audit_program_manday_requirements', N'U') IS NULL THEN 0 ELSE 1 END AS table_audit_program_manday_requirements,
@@ -81,6 +83,8 @@ export class DatabaseSchemaService {
         const requiredTables: Array<[string, string]> = [
             ['table_certification_application_sites', 'dbo.certification_application_sites'],
             ['table_application_review_actions', 'dbo.application_review_actions'],
+            ['table_certification_body_capabilities', 'dbo.certification_body_capabilities'],
+            ['table_application_review_capability_snapshots', 'dbo.application_review_capability_snapshots'],
             ['table_expert_work_experiences', 'dbo.expert_work_experiences'],
             ['table_expert_certificates', 'dbo.expert_certificates'],
             ['table_audit_program_manday_requirements', 'dbo.audit_program_manday_requirements'],

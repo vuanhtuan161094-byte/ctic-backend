@@ -69,4 +69,10 @@ export class CreateContractDto {
     @IsNumber()
     @Min(0)
     total_value?: number;
+
+    @ApiPropertyOptional({ example: 'VND', description: 'Mã tiền tệ ISO 4217', maxLength: 3 })
+    @IsOptional()
+    @IsString()
+    @MaxLength(3)
+    currency?: string;
 }

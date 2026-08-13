@@ -27,10 +27,7 @@ import { RolesGuard } from '../auth/roles.guard';
 
 import { ApplicationReviewsService } from './application-reviews.service';
 import { CreateApplicationReviewDto } from './dto/create-application-review.dto';
-import {
-    ApproveApplicationReviewDto,
-    CheckApplicationReviewDto,
-} from './dto/review-workflow-action.dto';
+import { ReviewApplicationReviewDto } from './dto/review-workflow-action.dto';
 
 type AuthenticatedRequest = {
     user?: {
@@ -76,15 +73,24 @@ export class ApplicationReviewsController {
         return this.applicationReviewsService.findAll();
     }
 
+    @Get(':id/capability-evaluation')
+    @Roles('ADMIN', 'STAFF', 'COORDINATOR', 'AUDITOR', 'LEAD_AUDITOR', 'TECHNICAL_REVIEWER')
+    @Permissions('applications.read')
+    @ApiOperation({ summary: 'Đánh giá năng lực tổ chức chứng nhận theo Program + IAF' })
+    @ApiOkResponse({ description: 'Kết quả CAPABLE / REVIEW_REQUIRED / NOT_CAPABLE' })
+    evaluateCapability(@Param('id', ParseUUIDPipe) id: string) {
+        return this.applicationReviewsService.evaluateCapability(id);
+    }
+
     @Post()
     @Roles('ADMIN', 'COORDINATOR')
     @Permissions('applications.review')
     @ApiOperation({
-        summary: 'Lập bản xem xét và gửi người kiểm tra kỹ thuật',
+        summary: 'Lưu nháp hoặc gửi bản xem xét đăng ký cho một reviewer',
         description:
-            'Điều phối viên lập nội dung xem xét, phân công đánh giá viên và chuyển sang bước kiểm tra/xác nhận.',
+            'Điều phối viên lập nội dung xem xét, hoàn thiện phân loại/ngày công và phân công một đánh giá viên xem xét.',
     })
-    @ApiCreatedResponse({ description: 'Đã gửi bản xem xét tới đánh giá viên' })
+    @ApiCreatedResponse({ description: 'Đã lưu nháp hoặc gửi bản xem xét tới reviewer' })
     @ApiBadRequestResponse({ description: 'Dữ liệu hoặc phân công không hợp lệ' })
     @ApiNotFoundResponse({ description: 'Không tìm thấy hồ sơ đăng ký' })
     create(
@@ -95,37 +101,18 @@ export class ApplicationReviewsController {
         return this.applicationReviewsService.create(dto, currentUser.id);
     }
 
-    @Patch(':id/check')
-    @Roles('ADMIN', 'AUDITOR', 'LEAD_AUDITOR', 'TECHNICAL_REVIEWER')
+    @Patch(':id/review')
+    @Roles('AUDITOR', 'LEAD_AUDITOR', 'TECHNICAL_REVIEWER')
     @Permissions('applications.review')
-    @ApiOperation({ summary: 'Đánh giá viên kiểm tra và xác nhận bản xem xét đăng ký' })
-    @ApiOkResponse({ description: 'Đã cập nhật bước kiểm tra kỹ thuật' })
-    check(
+    @ApiOperation({ summary: 'Reviewer phê duyệt hoặc trả lại bản xem xét đăng ký' })
+    @ApiOkResponse({ description: 'Đã cập nhật quyết định của reviewer' })
+    review(
         @Param('id', ParseUUIDPipe) id: string,
-        @Body() dto: CheckApplicationReviewDto,
+        @Body() dto: ReviewApplicationReviewDto,
         @Req() request: AuthenticatedRequest,
     ) {
         const currentUser = this.currentUser(request);
-        return this.applicationReviewsService.check(
-            id,
-            dto,
-            currentUser.id,
-            currentUser.roles,
-        );
-    }
-
-    @Patch(':id/approve')
-    @Roles('ADMIN', 'APPROVER', 'CERTIFICATION_MANAGER', 'TECHNICAL_REVIEWER')
-    @Permissions('applications.review')
-    @ApiOperation({ summary: 'Phê duyệt bản xem xét đăng ký' })
-    @ApiOkResponse({ description: 'Đã cập nhật kết quả phê duyệt' })
-    approve(
-        @Param('id', ParseUUIDPipe) id: string,
-        @Body() dto: ApproveApplicationReviewDto,
-        @Req() request: AuthenticatedRequest,
-    ) {
-        const currentUser = this.currentUser(request);
-        return this.applicationReviewsService.approve(
+        return this.applicationReviewsService.review(
             id,
             dto,
             currentUser.id,

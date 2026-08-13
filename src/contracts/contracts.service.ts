@@ -22,6 +22,7 @@ export class ContractsService {
                         id: true,
                         customer_code: true,
                         company_name: true,
+                        country_code: true,
                         tax_code: true,
                         status: true,
                     },
@@ -46,6 +47,7 @@ export class ContractsService {
                         id: true,
                         customer_code: true,
                         company_name: true,
+                        country_code: true,
                         tax_code: true,
                         status: true,
                     },
@@ -128,6 +130,7 @@ export class ContractsService {
                     : undefined,
 
                 total_value: dto.total_value,
+                currency: dto.currency?.trim().toUpperCase(),
             },
             include: {
                 customers: {

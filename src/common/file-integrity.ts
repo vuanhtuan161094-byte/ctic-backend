@@ -16,6 +16,8 @@ export const ALLOWED_DOCUMENT_EXTENSIONS = [
     '.jpg',
     '.jpeg',
     '.png',
+    '.zip',
+    '.rar',
 ] as const;
 
 export type AllowedDocumentExtension =
@@ -28,6 +30,13 @@ export const MIME_BY_EXTENSION: Record<AllowedDocumentExtension, string> = {
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.png': 'image/png',
+    '.zip': 'application/zip',
+    '.rar': 'application/vnd.rar',
+};
+
+const MIME_ALIASES_BY_EXTENSION: Partial<Record<AllowedDocumentExtension, readonly string[]>> = {
+    '.zip': ['application/zip', 'application/x-zip-compressed'],
+    '.rar': ['application/vnd.rar', 'application/x-rar-compressed', 'application/x-rar'],
 };
 
 const GENERIC_MIME_TYPES = new Set([
@@ -91,9 +100,10 @@ export function inspectDeclaredMetadata(
     }
 
     const normalizedMime = (declaredMime ?? '').trim().toLowerCase();
+    const acceptedMimes = MIME_ALIASES_BY_EXTENSION[extension] ?? [MIME_BY_EXTENSION[extension]];
     if (
         !GENERIC_MIME_TYPES.has(normalizedMime) &&
-        normalizedMime !== MIME_BY_EXTENSION[extension]
+        !acceptedMimes.includes(normalizedMime)
     ) {
         throw new Error('MIME_EXTENSION_MISMATCH');
     }
@@ -241,6 +251,36 @@ export function isDocxBuffer(buffer: Buffer) {
     return requiredEntries.every((entry) => names.has(entry));
 }
 
+export function isZipBuffer(buffer: Buffer) {
+    if (buffer.length < 22) return false;
+
+    const startsWithLocalFile = startsWithBytes(buffer, [0x50, 0x4b, 0x03, 0x04]);
+    const startsWithEmptyArchive = startsWithBytes(buffer, [0x50, 0x4b, 0x05, 0x06]);
+    if (!startsWithLocalFile && !startsWithEmptyArchive) return false;
+
+    const minimumEocdSize = 22;
+    const searchStart = Math.max(0, buffer.length - 65_557);
+    let eocdOffset = -1;
+    for (let offset = buffer.length - minimumEocdSize; offset >= searchStart; offset -= 1) {
+        if (buffer.readUInt32LE(offset) === 0x06054b50) {
+            eocdOffset = offset;
+            break;
+        }
+    }
+    if (eocdOffset < 0) return false;
+
+    const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+    const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+    return centralDirectoryOffset + centralDirectorySize <= eocdOffset;
+}
+
+export function isRarBuffer(buffer: Buffer) {
+    if (buffer.length < 8) return false;
+    const rar4 = [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00];
+    const rar5 = [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00];
+    return startsWithBytes(buffer, rar4) || startsWithBytes(buffer, rar5);
+}
+
 export function contentMatchesExtension(
     extension: AllowedDocumentExtension,
     buffer: Buffer,
@@ -257,6 +297,10 @@ export function contentMatchesExtension(
             return isDocxBuffer(buffer);
         case '.doc':
             return isLegacyDocBuffer(buffer);
+        case '.zip':
+            return isZipBuffer(buffer);
+        case '.rar':
+            return isRarBuffer(buffer);
     }
 }
 

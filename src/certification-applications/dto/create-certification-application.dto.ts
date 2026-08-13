@@ -26,11 +26,15 @@ export class CreateCertificationApplicationDto {
     @IsNotEmpty()
     customer_id!: string;
 
-    @ApiProperty({ example: 'APP-2026-0003', maxLength: 50 })
+    @ApiPropertyOptional({
+        example: 'APP-2026-0003',
+        maxLength: 50,
+        description: 'Tùy chọn khi cập nhật. Khi tạo mới, hệ thống tự cấp mã APP-YYYY-NNNN ở backend.',
+    })
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
     @MaxLength(50)
-    application_code!: string;
+    application_code?: string;
 
     @ApiProperty({ example: '2026-08-01', format: 'date' })
     @IsDateString()

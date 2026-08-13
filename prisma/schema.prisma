@@ -143,6 +143,7 @@ model contracts {
   start_date               DateTime?                  @db.Date
   end_date                 DateTime?                  @db.Date
   total_value              Decimal?                   @db.Decimal(18, 2)
+  currency                 String?                    @db.NVarChar(3)
   created_at               DateTime                   @default(now(), map: "DF__contracts__creat__7C4F7684")
   updated_at               DateTime                   @default(now(), map: "DF__contracts__updat__7D439ABD")
   certification_projects   certification_projects[]
@@ -170,7 +171,9 @@ model customers {
   id                         String                       @id(map: "PK__customer__3213E83F9D8A955A") @default(dbgenerated("newid()"), map: "DF__customers__id__6EF57B66") @db.UniqueIdentifier
   customer_code              String                       @unique(map: "UQ__customer__6A9E4CB7960D22F9") @db.NVarChar(20)
   company_name               String                       @db.NVarChar(255)
-  tax_code                   String?                      @unique(map: "UQ__customer__13E39CF6CBF8D193") @db.NVarChar(20)
+  country_code               String                       @default("VN") @db.NVarChar(2)
+  country_name               String?                      @db.NVarChar(100)
+  tax_code                   String?                      @db.NVarChar(20)
   address                    String?                      @db.NVarChar(Max)
   phone                      String?                      @db.NVarChar(20)
   email                      String?                      @db.NVarChar(255)
@@ -294,6 +297,8 @@ model application_reviews {
   combined_audit_capability_percent Decimal? @db.Decimal(5, 2)
   effective_personnel           Int?
   risk_level                    String?   @db.NVarChar(30)
+  ems_complexity                String?   @db.NVarChar(30)
+  ohsms_complexity              String?   @db.NVarChar(30)
   manday_method                 String?   @db.NVarChar(30)
   base_mandays                  Decimal?  @db.Decimal(10, 2)
   increase_factors              String?   @db.NVarChar(Max)
@@ -315,7 +320,7 @@ model application_reviews {
   client_code                   String?   @db.NVarChar(30)
   checked_by_name               String?   @db.NVarChar(100)
   approved_by_name              String?   @db.NVarChar(100)
-  workflow_status               String    @default("PENDING_CHECK") @db.NVarChar(30)
+  workflow_status               String    @db.NVarChar(30)
   prepared_by_id                String?   @db.UniqueIdentifier
   checker_id                    String?   @db.UniqueIdentifier
   approver_id                   String?   @db.UniqueIdentifier
@@ -334,6 +339,7 @@ model application_reviews {
   checker                    users?                      @relation("ApplicationReviewChecker", fields: [checker_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   approver                   users?                      @relation("ApplicationReviewApprover", fields: [approver_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   workflow_actions           application_review_actions[]
+  capability_snapshots       application_review_capability_snapshots[]
 
   @@index([application_id])
   @@index([reviewer_id])
@@ -341,6 +347,32 @@ model application_reviews {
   @@index([workflow_status])
   @@index([checker_id])
   @@index([approver_id])
+}
+
+model application_review_capability_snapshots {
+  id                        String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  review_id                 String    @db.UniqueIdentifier
+  capability_id             String?   @db.UniqueIdentifier
+  program_code              String    @db.NVarChar(100)
+  program_name              String    @db.NVarChar(255)
+  iaf_code                  String    @db.NVarChar(20)
+  result                    String    @db.NVarChar(30)
+  reason                    String?   @db.NVarChar(1000)
+  capability_status         String?   @db.NVarChar(30)
+  capability_effective_from DateTime? @db.Date
+  capability_effective_to   DateTime? @db.Date
+  evaluated_at              DateTime  @default(now()) @db.DateTime2
+  evaluated_by              String?   @db.UniqueIdentifier
+  approval_version          Int       @default(1)
+
+  review      application_reviews             @relation(fields: [review_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  capability certification_body_capabilities? @relation(fields: [capability_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  evaluator  users?                          @relation("ApplicationReviewCapabilityEvaluatedBy", fields: [evaluated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([review_id, approval_version, program_code, iaf_code], map: "UQ_application_review_capability_snapshot_version_pair")
+  @@index([review_id, result], map: "IX_application_review_capability_snapshot_review_result")
+  @@index([capability_id], map: "IX_application_review_capability_snapshot_capability")
+  @@index([evaluated_by], map: "IX_application_review_capability_snapshot_evaluator")
 }
 
 model application_review_actions {
@@ -894,6 +926,9 @@ model users {
   expert_profiles_approved         experts[]                       @relation("ExpertProfileApprovedBy")
   customer_access                  customer_user_access[]          @relation("CustomerUserAccessUser")
   customer_access_created          customer_user_access[]          @relation("CustomerUserAccessCreatedBy")
+  certification_body_capabilities_created certification_body_capabilities[] @relation("CertificationBodyCapabilityCreatedBy")
+  certification_body_capabilities_updated certification_body_capabilities[] @relation("CertificationBodyCapabilityUpdatedBy")
+  application_review_capability_evaluations application_review_capability_snapshots[] @relation("ApplicationReviewCapabilityEvaluatedBy")
 }
 
 model notifications {
@@ -1251,8 +1286,36 @@ model iaf_scopes {
   updated_at DateTime @default(now()) @updatedAt @db.DateTime2
 
   nace_iaf_mappings nace_iaf_mappings[]
+  certification_body_capabilities certification_body_capabilities[]
 
   @@index([is_active])
+}
+
+model certification_body_capabilities {
+  id             String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  program_code   String    @db.NVarChar(100)
+  program_name   String    @db.NVarChar(255)
+  iaf_scope_id   String    @db.UniqueIdentifier
+  status         String    @default("ACTIVE") @db.NVarChar(30)
+  effective_from DateTime  @db.Date
+  effective_to   DateTime? @db.Date
+  notes          String?   @db.NVarChar(Max)
+  created_by     String?   @db.UniqueIdentifier
+  updated_by     String?   @db.UniqueIdentifier
+  created_at     DateTime  @default(now()) @db.DateTime2
+  updated_at     DateTime  @default(now()) @updatedAt @db.DateTime2
+
+  iaf_scope iaf_scopes @relation(fields: [iaf_scope_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator   users?     @relation("CertificationBodyCapabilityCreatedBy", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  updater   users?     @relation("CertificationBodyCapabilityUpdatedBy", fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  review_snapshots application_review_capability_snapshots[]
+
+  @@unique([program_code, iaf_scope_id], map: "UQ_certification_body_capability_program_iaf")
+  @@index([status, effective_from, effective_to], map: "IX_certification_body_capability_status_dates")
+  @@index([iaf_scope_id], map: "IX_certification_body_capability_iaf")
+  @@index([created_by], map: "IX_certification_body_capability_created_by")
+  @@index([updated_by], map: "IX_certification_body_capability_updated_by")
 }
 
 model nace_iaf_mappings {

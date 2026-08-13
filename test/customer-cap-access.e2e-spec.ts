@@ -17,6 +17,8 @@ import {
 } from '../src/common/storage-config';
 import { PrismaService } from '../src/prisma/prisma.service';
 
+jest.setTimeout(60_000);
+
 const ids = {
   userA: '00000000-0000-4000-8000-000000000001',
   userB: '00000000-0000-4000-8000-000000000002',

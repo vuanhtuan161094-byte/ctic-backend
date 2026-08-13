@@ -47,7 +47,7 @@ function toBadRequest(error: unknown): BadRequestException {
     const code = error instanceof Error ? error.message : '';
 
     const messageByCode: Record<string, string> = {
-        UNSUPPORTED_EXTENSION: 'Chỉ chấp nhận tệp PDF, Word, JPG hoặc PNG',
+        UNSUPPORTED_EXTENSION: 'Chỉ chấp nhận tệp PDF, Word, JPG, PNG, ZIP hoặc RAR',
         EXTENSION_NOT_ALLOWED_FOR_KIND: 'Định dạng tệp không phù hợp với loại hồ sơ đã chọn',
         MIME_EXTENSION_MISMATCH: 'Phần mở rộng và MIME type của tệp không khớp',
         FILE_NOT_FOUND: 'Không tìm thấy tệp vừa tải lên',

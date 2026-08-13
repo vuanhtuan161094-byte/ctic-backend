@@ -20,6 +20,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:e2e:p09": "node scripts/tests/run-p09-real-e2e.cjs",
+    "test:e2e:application-review-capability": "node scripts/tests/run-application-review-capability-e2e.cjs",
     "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/p09-smoke-test.ps1",
     "test:regression": "node scripts/tests/run-current-regressions-patch36c0.mjs",
     "prisma:validate": "prisma validate",
@@ -28,7 +29,7 @@
     "postbuild": "node scripts/copy-report-assets.cjs",
     "prisma:generate": "prisma generate && node scripts/verify-prisma-client-patch35a4.cjs",
     "prebuild": "node scripts/runtime-compatibility-check-patch36c0.cjs && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs",
-    "prestart:dev": "node scripts/runtime-compatibility-check-patch36c0.cjs && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:preflight && npm run db:contract",
+    "prestart:dev": "node scripts/runtime-compatibility-check-patch36c0.cjs && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:preflight",
     "prisma:verify": "node scripts/verify-prisma-client-patch35a4.cjs",
     "runtime:check": "node scripts/runtime-compatibility-check-patch36c0.cjs",
     "runtime:check:strict": "node scripts/runtime-compatibility-check-patch36c0.cjs --strict",
@@ -45,7 +46,8 @@
     "db:contract": "node scripts/database-schema-contract-patch36c1.cjs",
     "stabilize:commercial": "node scripts/commercial-stabilize-patch36c1a.cjs",
     "db:migration-permissions": "node scripts/migration-credentials-preflight-patch36c1a.cjs",
-    "db:runtime-permissions": "node scripts/runtime-database-permissions-patch36c1a.cjs"
+    "db:runtime-permissions": "node scripts/runtime-database-permissions-patch36c1a.cjs",
+    "verify": "npm run runtime:check && npm run prisma:validate && npm run prisma:generate && npm run build && npm test -- --runInBand && npm run test:regression && npm run db:preflight && npm run db:contract"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

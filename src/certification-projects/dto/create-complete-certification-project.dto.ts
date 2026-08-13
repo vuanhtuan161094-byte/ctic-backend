@@ -60,6 +60,12 @@ export class NewProjectContractDto {
     @IsNumber()
     @Min(0)
     total_value?: number;
+
+    @ApiPropertyOptional({ example: 'VND', maxLength: 3 })
+    @IsOptional()
+    @IsString()
+    @MaxLength(3)
+    currency?: string;
 }
 
 export class NewProjectAgreementDto {

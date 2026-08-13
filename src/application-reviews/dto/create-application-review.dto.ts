@@ -79,20 +79,15 @@ export class CreateApplicationReviewDto {
     @IsUUID()
     application_id!: string;
 
-    @ApiPropertyOptional({ format: 'uuid' })
+    @ApiPropertyOptional({ format: 'uuid', description: 'Một đánh giá viên/chuyên gia được phân công xem xét' })
     @IsOptional()
     @IsUUID()
     reviewer_id?: string;
 
-    @ApiPropertyOptional({ format: 'uuid', description: 'Tài khoản được phân công kiểm tra kỹ thuật' })
+    @ApiPropertyOptional({ enum: ['SAVE_DRAFT', 'SUBMIT'], default: 'SUBMIT' })
     @IsOptional()
-    @IsUUID()
-    checker_user_id?: string;
-
-    @ApiPropertyOptional({ format: 'uuid', description: 'Tài khoản được phân công phê duyệt xem xét' })
-    @IsOptional()
-    @IsUUID()
-    approver_user_id?: string;
+    @IsIn(['SAVE_DRAFT', 'SUBMIT'])
+    submission_action?: 'SAVE_DRAFT' | 'SUBMIT';
 
     @ApiPropertyOptional({ format: 'date' })
     @IsOptional()
@@ -172,6 +167,14 @@ export class CreateApplicationReviewDto {
     @IsString()
     @MaxLength(30)
     risk_level?: string;
+
+    @IsOptional()
+    @IsIn(['HIGH', 'MEDIUM', 'LOW', 'LIMITED'])
+    ems_complexity?: string;
+
+    @IsOptional()
+    @IsIn(['HIGH', 'MEDIUM', 'LOW'])
+    ohsms_complexity?: string;
 
     @IsOptional()
     @IsIn(['IAF_MD5', 'IAF_MD11', 'OTHER'])

@@ -21,6 +21,7 @@ import { AuditTeamAppointmentsModule } from './audit-team-appointments/audit-tea
 import { AuthModule } from './auth/auth.module';
 import { CertificatesModule } from './certificates/certificates.module';
 import { CertificationAgreementsModule } from './certification-agreements/certification-agreements.module';
+import { CertificationBodyCapabilitiesModule } from './certification-body-capabilities/certification-body-capabilities.module';
 import { CertificationApplicationsModule } from './certification-applications/certification-applications.module';
 import { CertificationDecisionsModule } from './certification-decisions/certification-decisions.module';
 import { CertificationProjectScopesModule } from './certification-project-scopes/certification-project-scopes.module';
@@ -57,6 +58,7 @@ import { UsersModule } from './users/users.module';
         UsersModule,
         CustomersModule,
         CertificationApplicationsModule,
+        CertificationBodyCapabilitiesModule,
         ApplicationReviewsModule,
         ContractsModule,
         CertificationAgreementsModule,
