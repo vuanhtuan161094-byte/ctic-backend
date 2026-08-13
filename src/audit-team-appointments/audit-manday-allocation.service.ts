@@ -290,9 +290,11 @@ export class AuditMandayAllocationService {
     ): number {
         const requiredUnits = this.requiredStage2Units(appointment);
         const assignedUnits = this.assignedStage2Units(appointment);
-        if (assignedUnits < requiredUnits) {
+        if (assignedUnits !== requiredUnits) {
             throw new BadRequestException(
-                `Chưa đủ man-day để phân bổ: kế hoạch yêu cầu tối thiểu ${(requiredUnits * MANDAY_UNIT).toFixed(1)} MD nhưng đoàn mới bố trí ${(assignedUnits * MANDAY_UNIT).toFixed(1)} MD.`,
+                assignedUnits < requiredUnits
+                    ? `Chưa đủ man-day để phân bổ: kế hoạch yêu cầu chính xác ${(requiredUnits * MANDAY_UNIT).toFixed(1)} MD nhưng đoàn mới bố trí ${(assignedUnits * MANDAY_UNIT).toFixed(1)} MD.`
+                    : `Man-day đang vượt kế hoạch: kế hoạch yêu cầu chính xác ${(requiredUnits * MANDAY_UNIT).toFixed(1)} MD nhưng đoàn đang bố trí ${(assignedUnits * MANDAY_UNIT).toFixed(1)} MD.`,
             );
         }
         return assignedUnits;
@@ -927,9 +929,11 @@ export class AuditMandayAllocationService {
                 );
             }
 
-            if (allocatedMandays + 0.001 < requiredMandays) {
+            if (Math.abs(allocatedMandays - requiredMandays) > 0.001) {
                 throw new BadRequestException(
-                    `Chưa thể ban hành: Giai đoạn 1 yêu cầu tối thiểu ${requiredMandays} MD nhưng mới bố trí ${allocatedMandays} MD.`,
+                    allocatedMandays < requiredMandays
+                        ? `Chưa thể xác nhận: Giai đoạn 1 yêu cầu chính xác ${requiredMandays} MD nhưng mới bố trí ${allocatedMandays} MD.`
+                        : `Chưa thể xác nhận: Giai đoạn 1 yêu cầu chính xác ${requiredMandays} MD nhưng đang bố trí vượt thành ${allocatedMandays} MD.`,
                 );
             }
             return;
@@ -937,9 +941,11 @@ export class AuditMandayAllocationService {
 
         const requiredStage2Units = this.requiredStage2Units(appointment);
         const stage2Units = this.assignedStage2Units(appointment);
-        if (stage2Units < requiredStage2Units) {
+        if (stage2Units !== requiredStage2Units) {
             throw new BadRequestException(
-                `Chưa thể ban hành: kế hoạch yêu cầu tối thiểu ${(requiredStage2Units * MANDAY_UNIT).toFixed(1)} MD nhưng đoàn mới bố trí ${(stage2Units * MANDAY_UNIT).toFixed(1)} MD.`,
+                stage2Units < requiredStage2Units
+                    ? `Chưa thể xác nhận: kế hoạch yêu cầu chính xác ${(requiredStage2Units * MANDAY_UNIT).toFixed(1)} MD nhưng đoàn mới bố trí ${(stage2Units * MANDAY_UNIT).toFixed(1)} MD.`
+                    : `Chưa thể xác nhận: kế hoạch yêu cầu chính xác ${(requiredStage2Units * MANDAY_UNIT).toFixed(1)} MD nhưng đoàn đang bố trí ${(stage2Units * MANDAY_UNIT).toFixed(1)} MD.`,
             );
         }
         const stage1Units = await this.stage1UnitsForPlan(plan);

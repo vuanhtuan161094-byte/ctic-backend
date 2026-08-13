@@ -1263,6 +1263,13 @@ export class NotificationsService {
                                     'declined',
                                 ],
                             },
+                            audit_team_appointments: {
+                                audit_plans: {
+                                    audit_type: {
+                                        not: 'project_team',
+                                    },
+                                },
+                            },
                         },
                         include: {
                             audit_team_appointments: {
@@ -1297,15 +1304,20 @@ export class NotificationsService {
                     const info =
                         getProjectInfo(project);
 
+                    const assignmentRole = (assignment.team_role ?? '').trim().toUpperCase();
+                    const isTeamLeaderAssignment = ['TEAM_LEADER', 'LEAD_AUDITOR'].includes(assignmentRole);
+
                     addTask({
                         id:
                             `assignment:${assignment.id}`,
                         task_type:
-                            'audit_assignment',
+                            isTeamLeaderAssignment ? 'lead_auditor_assignment' : 'audit_assignment',
                         title:
-                            `Lịch đánh giá được phân công ${info.projectCode ?? ''}`.trim(),
+                            isTeamLeaderAssignment
+                                ? `Lập kế hoạch & hồ sơ đánh giá ${info.projectCode ?? ''}`.trim()
+                                : `Tham gia đánh giá ${info.projectCode ?? ''}`.trim(),
                         description:
-                            `${info.organizationName ?? 'Khách hàng'} · ${assignment.team_role}`,
+                            `${info.organizationName ?? 'Khách hàng'} · ${plan.plan_code ?? 'Kỳ đánh giá'} · ${assignment.team_role}`,
                         group:
                             'Công việc được phân công',
                         priority:
@@ -1330,9 +1342,9 @@ export class NotificationsService {
                         due_date:
                             assignment.planned_start_date,
                         destination:
-                            'schedule-resources',
+                            isTeamLeaderAssignment ? 'project-detail' : 'schedule-resources',
                         target_id:
-                            plan.id,
+                            isTeamLeaderAssignment ? info.projectId : plan.id,
                         created_at:
                             assignment.created_at,
                         updated_at:

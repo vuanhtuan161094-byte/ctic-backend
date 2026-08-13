@@ -33,6 +33,8 @@ interface PlanDateRange {
     audit_event?: {
         planned_mandays:
         unknown;
+        event_type?:
+        string | null;
     } | null;
 }
 interface ProjectScopeMemberInput {
@@ -291,43 +293,15 @@ export class AuditTeamAppointmentsService {
         return /stage\s*1|stage1|giai[_\s-]*doan[_\s-]*1|gđ1/.test(value);
     }
 
-    private countsTowardMandays(teamRole?: string | null): boolean {
-        return countsTowardAuditMandays(teamRole ?? '');
+    private isInitialStage2Plan(
+        plan: { audit_type?: string | null; audit_event?: { event_type?: string | null } | null },
+    ): boolean {
+        const value = `${plan.audit_type ?? ''} ${plan.audit_event?.event_type ?? ''}`.toLowerCase();
+        return /stage\s*2|stage2|giai[_\s-]*doan[_\s-]*2|gđ2/.test(value);
     }
 
-    private async validateStage1TeamMembership(
-        projectId: string,
-        members: Array<{ expert_id: string; team_role: string }>,
-    ): Promise<void> {
-        const projectAppointment = await this.prisma.audit_team_appointments.findFirst({
-            where: {
-                status: 'issued',
-                audit_plans: {
-                    project_id: projectId,
-                    audit_type: this.projectTeamAuditType,
-                },
-            },
-            include: { members: true },
-            orderBy: { approved_at: 'desc' },
-        });
-        if (!projectAppointment) {
-            throw new BadRequestException(
-                'Hồ sơ chưa có quyết định chỉ định đoàn cấp hồ sơ đã ban hành',
-            );
-        }
-        const allowedExpertIds = new Set(projectAppointment.members.map((member) => member.expert_id));
-        const invalid = members.find((member) => !allowedExpertIds.has(member.expert_id));
-        if (invalid) {
-            throw new BadRequestException(
-                'Có chuyên gia Giai đoạn 1 không thuộc đoàn đã được chỉ định ở cấp hồ sơ',
-            );
-        }
-        const leaders = members.filter((member) =>
-            this.normalizeCompetencyValue(member.team_role) === 'TEAM_LEADER',
-        );
-        if (leaders.length !== 1) {
-            throw new BadRequestException('Giai đoạn 1 phải có đúng 01 trưởng đoàn đánh giá');
-        }
+    private countsTowardMandays(teamRole?: string | null): boolean {
+        return countsTowardAuditMandays(teamRole ?? '');
     }
 
     private normalizeCompetencyValue(
@@ -415,37 +389,43 @@ export class AuditTeamAppointmentsService {
         competenceDate: Date,
         members: ProgramAssignmentMemberInput[],
         updateMemberStatus = false,
+        inheritProjectTeam = false,
     ) {
         const programs = await this.getApprovedProjectPrograms(projectId);
-        const projectAppointment = await this.prisma.audit_team_appointments.findFirst({
-            where: {
-                status: 'issued',
-                audit_plans: {
-                    project_id: projectId,
-                    audit_type: this.projectTeamAuditType,
-                },
-            },
-            include: {
-                members: {
-                    select: {
-                        expert_id: true,
-                        team_role: true,
+        const projectAppointment = inheritProjectTeam
+            ? await this.prisma.audit_team_appointments.findFirst({
+                where: {
+                    status: 'issued',
+                    audit_plans: {
+                        project_id: projectId,
+                        audit_type: this.projectTeamAuditType,
                     },
                 },
-            },
-            orderBy: {
-                approved_at: 'desc',
-            },
-        });
+                include: {
+                    members: {
+                        select: {
+                            expert_id: true,
+                            team_role: true,
+                        },
+                    },
+                },
+                orderBy: {
+                    approved_at: 'desc',
+                },
+            })
+            : null;
 
-        if (!projectAppointment) {
+        if (inheritProjectTeam && !projectAppointment) {
             throw new BadRequestException(
                 'Hồ sơ chưa có quyết định chỉ định đoàn cấp hồ sơ đã ban hành',
             );
         }
 
-        const projectTeamExpertIds = new Set(
-            projectAppointment.members.map((member) => member.expert_id),
+        const projectTeamRoleByExpertId = new Map<string, string>(
+            (projectAppointment?.members ?? []).map((member) => [
+                member.expert_id,
+                this.normalizeCompetencyValue(member.team_role),
+            ] as const),
         );
         const expertIds = Array.from(new Set(members.map((member) => member.expert_id)));
         const competencies = await this.prisma.expert_competencies.findMany({
@@ -479,16 +459,30 @@ export class AuditTeamAppointmentsService {
         }> = [];
 
         for (const member of members) {
-            if (!projectTeamExpertIds.has(member.expert_id)) {
-                errors.push('Có chuyên gia không thuộc đoàn đã được chỉ định ở cấp hồ sơ');
-                memberResults.push({
-                    member_id: member.member_id,
-                    expert_id: member.expert_id,
-                    status: 'not_qualified',
-                    note: 'Chuyên gia không thuộc quyết định chỉ định đoàn cấp hồ sơ',
-                    qualified_program_keys: [],
-                });
-                continue;
+            if (inheritProjectTeam) {
+                const inheritedRole = projectTeamRoleByExpertId.get(member.expert_id);
+                if (!inheritedRole) {
+                    errors.push('Có chuyên gia không thuộc đoàn đã được chỉ định ở cấp hồ sơ');
+                    memberResults.push({
+                        member_id: member.member_id,
+                        expert_id: member.expert_id,
+                        status: 'not_qualified',
+                        note: 'Chuyên gia không thuộc quyết định chỉ định đoàn cấp hồ sơ',
+                        qualified_program_keys: [],
+                    });
+                    continue;
+                }
+                if (inheritedRole !== this.normalizeCompetencyValue(member.team_role)) {
+                    errors.push('Vai trò thành viên phải giữ nguyên theo quyết định chỉ định đoàn cấp hồ sơ');
+                    memberResults.push({
+                        member_id: member.member_id,
+                        expert_id: member.expert_id,
+                        status: 'not_qualified',
+                        note: 'Vai trò khác với quyết định chỉ định đoàn cấp hồ sơ',
+                        qualified_program_keys: [],
+                    });
+                    continue;
+                }
             }
 
             const acceptedRoles = this.acceptedProgramCompetencyRoles(member.team_role);
@@ -1146,6 +1140,8 @@ export class AuditTeamAppointmentsService {
                 .toLowerCase() ===
             this.projectTeamAuditType;
 
+        const isStage1 = this.isStage1Plan(plan);
+
         if (isProjectContext) {
             return;
         }
@@ -1186,7 +1182,9 @@ export class AuditTeamAppointmentsService {
             if (!this.isHalfDayIncrement(enteredMandays)) {
                 throw new BadRequestException('Ngày công phải được nhập theo bước 0,5 MD');
             }
-            if (enteredMandays > maximumMandays) {
+            // Giai đoạn 1 là xem xét hồ sơ từ xa. Ngày PLAN chỉ là mốc quản lý,
+            // không phải số ngày lịch bị khóa của chuyên gia.
+            if (!isStage1 && enteredMandays > maximumMandays) {
                 throw new BadRequestException(
                     `Ngày công ${enteredMandays} MD vượt quá ${maximumMandays} ngày tham gia đã chọn`,
                 );
@@ -1203,12 +1201,62 @@ export class AuditTeamAppointmentsService {
         if (
             strictTotal &&
             requiredMandays !== null &&
-            allocatedMandays + 0.001 < requiredMandays
+            Math.abs(allocatedMandays - requiredMandays) > 0.001
         ) {
             throw new BadRequestException(
-                `Chưa thể ban hành: kế hoạch yêu cầu tối thiểu ${requiredMandays} MD nhưng đoàn mới được bố trí ${allocatedMandays} MD`,
+                allocatedMandays < requiredMandays
+                    ? `Chưa thể xác nhận: kế hoạch yêu cầu ${requiredMandays} MD nhưng mới bố trí ${allocatedMandays} MD`
+                    : `Chưa thể xác nhận: kế hoạch yêu cầu ${requiredMandays} MD nhưng đang bố trí vượt thành ${allocatedMandays} MD`,
             );
         }
+    }
+
+    private async findScheduleOverlaps(
+        expertId: string,
+        startDate: Date,
+        endDate: Date,
+        excludeAppointmentId?: string,
+    ) {
+        return this.prisma.audit_team_members.findMany({
+            where: {
+                expert_id: expertId,
+                assignment_status: { not: 'cancelled' },
+                planned_start_date: { lte: endDate },
+                planned_end_date: { gte: startDate },
+                audit_team_appointments: {
+                    status: { in: ['draft', 'issued'] },
+                    ...(excludeAppointmentId
+                        ? { id: { not: excludeAppointmentId } }
+                        : {}),
+                },
+            },
+            orderBy: {
+                planned_start_date: 'asc',
+            },
+            include: {
+                experts: true,
+                audit_team_appointments: {
+                    include: {
+                        audit_plans: {
+                            select: {
+                                id: true,
+                                plan_code: true,
+                                project_id: true,
+                                audit_type: true,
+                                status: true,
+                                planned_start_date: true,
+                                planned_end_date: true,
+                                audit_event: {
+                                    select: {
+                                        event_type: true,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
     }
 
     private async findConflict(
@@ -1217,69 +1265,39 @@ export class AuditTeamAppointmentsService {
         endDate: Date,
         excludeAppointmentId?: string,
     ) {
-        return this.prisma.audit_team_members.findFirst({
-            where: {
-                expert_id:
-                    expertId,
+        const overlaps = await this.findScheduleOverlaps(
+            expertId,
+            startDate,
+            endDate,
+            excludeAppointmentId,
+        );
 
-                assignment_status: {
-                    not:
-                        'cancelled',
-                },
+        return overlaps.find((assignment) => {
+            const plan = assignment.audit_team_appointments.audit_plans;
+            if (this.normalizeCompetencyValue(plan.audit_type) === this.normalizeCompetencyValue(this.projectTeamAuditType)) {
+                return false;
+            }
+            // GĐ1 là workload từ xa: không khóa cứng lịch onsite, chỉ phát cảnh báo mềm.
+            return !this.isStage1Plan(plan);
+        }) ?? null;
+    }
 
-                planned_start_date: {
-                    lte:
-                        endDate,
-                },
+    private async findStage1WarningConflicts(
+        expertId: string,
+        startDate: Date,
+        endDate: Date,
+        excludeAppointmentId?: string,
+    ) {
+        const overlaps = await this.findScheduleOverlaps(
+            expertId,
+            startDate,
+            endDate,
+            excludeAppointmentId,
+        );
 
-                planned_end_date: {
-                    gte:
-                        startDate,
-                },
-
-                audit_team_appointments: {
-                    status: {
-                        in: [
-                            'draft',
-                            'issued',
-                        ],
-                    },
-
-                    audit_plans: {
-                        audit_type: {
-                            not:
-                                this.projectTeamAuditType,
-                        },
-                    },
-
-                    ...(excludeAppointmentId
-                        ? {
-                            id: {
-                                not:
-                                    excludeAppointmentId,
-                            },
-                        }
-                        : {}),
-                },
-            },
-
-            include: {
-                experts:
-                    true,
-
-                audit_team_appointments: {
-                    include: {
-                        audit_plans: {
-                            select: {
-                                id: true,
-                                plan_code: true,
-                                planned_start_date: true,
-                                planned_end_date: true,
-                            },
-                        },
-                    },
-                },
-            },
+        return overlaps.filter((assignment) => {
+            const plan = assignment.audit_team_appointments.audit_plans;
+            return this.isStage1Plan(plan);
         });
     }
 
@@ -1444,18 +1462,20 @@ export class AuditTeamAppointmentsService {
                 );
             }
 
-            const conflict =
-                await this.findConflict(
-                    member.expert_id,
-                    startDate,
-                    endDate,
-                    excludeAppointmentId,
-                );
+            if (!this.isStage1Plan(plan)) {
+                const conflict =
+                    await this.findConflict(
+                        member.expert_id,
+                        startDate,
+                        endDate,
+                        excludeAppointmentId,
+                    );
 
-            if (conflict) {
-                throw new ConflictException(
-                    `Chuyên gia ${conflict.experts.full_name} đã có lịch tại ${conflict.audit_team_appointments.audit_plans.plan_code ?? conflict.audit_team_appointments.audit_plans.id} trong khoảng ${this.formatDateOnly(this.parseDate(conflict.planned_start_date, 'Ngày bắt đầu lịch trùng'))}–${this.formatDateOnly(this.parseDate(conflict.planned_end_date, 'Ngày kết thúc lịch trùng'))}`,
-                );
+                if (conflict) {
+                    throw new ConflictException(
+                        `Chuyên gia ${conflict.experts.full_name} đã có lịch tại ${conflict.audit_team_appointments.audit_plans.plan_code ?? conflict.audit_team_appointments.audit_plans.id} trong khoảng ${this.formatDateOnly(this.parseDate(conflict.planned_start_date, 'Ngày bắt đầu lịch trùng'))}–${this.formatDateOnly(this.parseDate(conflict.planned_end_date, 'Ngày kết thúc lịch trùng'))}`,
+                    );
+                }
             }
         }
 
@@ -1965,14 +1985,6 @@ export class AuditTeamAppointmentsService {
                 plan.project_id,
                 resolvedMembers,
             );
-        } else if (this.isStage1Plan(plan)) {
-            await this.validateStage1TeamMembership(
-                plan.project_id,
-                resolvedMembers.map((member) => ({
-                    expert_id: member.expert_id,
-                    team_role: member.team_role,
-                })),
-            );
         } else {
             await this.evaluatePlanProgramAllocation(
                 plan.project_id,
@@ -1984,6 +1996,8 @@ export class AuditTeamAppointmentsService {
                         project_scope_id: scope.project_scope_id ?? null,
                     })),
                 })),
+                false,
+                this.isStage1Plan(plan) || this.isInitialStage2Plan(plan),
             );
         }
 
@@ -2127,6 +2141,7 @@ export class AuditTeamAppointmentsService {
                 })),
             })),
             true,
+            this.isInitialStage2Plan(appointment.audit_plans),
         );
     }
     async syncProjectScopes(
@@ -2431,6 +2446,13 @@ export class AuditTeamAppointmentsService {
                 endDate,
                 excludeAppointmentId,
             );
+        const stage1Warnings =
+            await this.findStage1WarningConflicts(
+                expertId,
+                startDate,
+                endDate,
+                excludeAppointmentId,
+            );
 
         return {
             expert: {
@@ -2474,6 +2496,16 @@ export class AuditTeamAppointmentsService {
                             conflict.planned_end_date,
                     }
                     : null,
+            warnings: stage1Warnings.map((warning) => ({
+                type: 'stage1_remote_workload',
+                appointment_id: warning.appointment_id,
+                appointment_number: warning.audit_team_appointments.appointment_number,
+                audit_plan_id: warning.audit_team_appointments.audit_plans.id,
+                plan_code: warning.audit_team_appointments.audit_plans.plan_code,
+                start_date: warning.planned_start_date,
+                end_date: warning.planned_end_date,
+                message: 'Chuyên gia đang có workload Giai đoạn 1 từ xa trong khoảng này. Nên ưu tiên lịch onsite khác nếu có thể.',
+            })),
         };
     }
 
@@ -2483,17 +2515,13 @@ export class AuditTeamAppointmentsService {
         endDateValue: string,
         excludeAppointmentId?: string,
     ) {
-        const expert =
-            await this.prisma.experts.findUnique({
-                where: {
-                    id:
-                        expertId,
-                },
-                select: {
-                    id: true,
-                    full_name: true,
-                },
-            });
+        const expert = await this.prisma.experts.findUnique({
+            where: { id: expertId },
+            select: {
+                id: true,
+                full_name: true,
+            },
+        });
 
         if (!expert) {
             throw new NotFoundException(
@@ -2501,17 +2529,14 @@ export class AuditTeamAppointmentsService {
             );
         }
 
-        const startDate =
-            this.parseDate(
-                startDateValue,
-                'Ngày bắt đầu',
-            );
-
-        const endDate =
-            this.parseDate(
-                endDateValue,
-                'Ngày kết thúc',
-            );
+        const startDate = this.parseDate(
+            startDateValue,
+            'Ngày bắt đầu',
+        );
+        const endDate = this.parseDate(
+            endDateValue,
+            'Ngày kết thúc',
+        );
 
         if (endDate < startDate) {
             throw new BadRequestException(
@@ -2519,62 +2544,37 @@ export class AuditTeamAppointmentsService {
             );
         }
 
-        const assignments =
-            await this.prisma.audit_team_members.findMany({
-                where: {
-                    expert_id:
-                        expertId,
-                    assignment_status: {
-                        not:
-                            'cancelled',
-                    },
-                    planned_start_date: {
-                        lte:
-                            endDate,
-                    },
-                    planned_end_date: {
-                        gte:
-                            startDate,
-                    },
-                    audit_team_appointments: {
-                        status: {
-                            in: [
-                                'draft',
-                                'issued',
-                            ],
-                        },
+        const assignments = await this.prisma.audit_team_members.findMany({
+            where: {
+                expert_id: expertId,
+                assignment_status: { not: 'cancelled' },
+                planned_start_date: { lte: endDate },
+                planned_end_date: { gte: startDate },
+                audit_team_appointments: {
+                    status: { in: ['draft', 'issued'] },
+                    ...(excludeAppointmentId
+                        ? { id: { not: excludeAppointmentId } }
+                        : {}),
+                },
+            },
+            orderBy: {
+                planned_start_date: 'asc',
+            },
+            include: {
+                audit_team_appointments: {
+                    include: {
                         audit_plans: {
-                            audit_type: {
-                                not:
-                                    this.projectTeamAuditType,
-                            },
-                        },
-                        ...(excludeAppointmentId
-                            ? {
-                                id: {
-                                    not:
-                                        excludeAppointmentId,
+                            include: {
+                                audit_event: {
+                                    select: {
+                                        event_type: true,
+                                    },
                                 },
-                            }
-                            : {}),
-                    },
-                },
-                orderBy: {
-                    planned_start_date:
-                        'asc',
-                },
-                include: {
-                    audit_team_appointments: {
-                        include: {
-                            audit_plans: {
-                                include: {
-                                    certification_projects: {
-                                        include: {
-                                            certification_applications: {
-                                                include: {
-                                                    customers:
-                                                        true,
-                                                },
+                                certification_projects: {
+                                    include: {
+                                        certification_applications: {
+                                            include: {
+                                                customers: true,
                                             },
                                         },
                                     },
@@ -2583,84 +2583,70 @@ export class AuditTeamAppointmentsService {
                         },
                     },
                 },
-            });
+            },
+        });
 
-        const busyDateSet =
-            new Set<string>();
+        const hardAssignments = assignments.filter((assignment) => {
+            const plan = assignment.audit_team_appointments.audit_plans;
+            if (this.normalizeCompetencyValue(plan.audit_type) === this.normalizeCompetencyValue(this.projectTeamAuditType)) {
+                return false;
+            }
+            return !this.isStage1Plan(plan);
+        });
+        const warningAssignments = assignments.filter((assignment) =>
+            this.isStage1Plan(assignment.audit_team_appointments.audit_plans),
+        );
 
-        for (const assignment of assignments) {
-            const rangeStart =
-                assignment.planned_start_date < startDate
+        const collectDates = (items: typeof assignments) => {
+            const dates = new Set<string>();
+            for (const assignment of items) {
+                const rangeStart = assignment.planned_start_date < startDate
                     ? startDate
                     : assignment.planned_start_date;
-            const rangeEnd =
-                assignment.planned_end_date > endDate
+                const rangeEnd = assignment.planned_end_date > endDate
                     ? endDate
                     : assignment.planned_end_date;
-
-            const cursor =
-                new Date(
-                    rangeStart,
-                );
-
-            while (cursor <= rangeEnd) {
-                busyDateSet.add(
-                    cursor.toISOString().slice(0, 10),
-                );
-                cursor.setUTCDate(
-                    cursor.getUTCDate() + 1,
-                );
+                const cursor = new Date(rangeStart);
+                while (cursor <= rangeEnd) {
+                    dates.add(cursor.toISOString().slice(0, 10));
+                    cursor.setUTCDate(cursor.getUTCDate() + 1);
+                }
             }
-        }
+            return [...dates].sort();
+        };
+
+        const serialize = (assignment: (typeof assignments)[number]) => {
+            const plan = assignment.audit_team_appointments.audit_plans;
+            const project = plan.certification_projects;
+            const customer = project.certification_applications.customers;
+            return {
+                appointment_id: assignment.appointment_id,
+                appointment_number: assignment.audit_team_appointments.appointment_number,
+                appointment_status: assignment.audit_team_appointments.status,
+                plan_id: plan.id,
+                plan_code: plan.plan_code,
+                audit_type: plan.audit_type,
+                plan_status: plan.status,
+                project_id: project.id,
+                project_code: project.project_code,
+                customer_name: customer.company_name,
+                start_date: assignment.planned_start_date,
+                end_date: assignment.planned_end_date,
+            };
+        };
 
         return {
             expert,
             requested_period: {
-                start_date:
-                    startDate,
-                end_date:
-                    endDate,
+                start_date: startDate,
+                end_date: endDate,
             },
-            busy_dates:
-                [...busyDateSet].sort(),
-            assignments:
-                assignments.map(
-                    (assignment) => {
-                        const plan =
-                            assignment.audit_team_appointments.audit_plans;
-                        const project =
-                            plan.certification_projects;
-                        const customer =
-                            project.certification_applications.customers;
-
-                        return {
-                            appointment_id:
-                                assignment.appointment_id,
-                            appointment_number:
-                                assignment.audit_team_appointments.appointment_number,
-                            appointment_status:
-                                assignment.audit_team_appointments.status,
-                            plan_id:
-                                plan.id,
-                            plan_code:
-                                plan.plan_code,
-                            audit_type:
-                                plan.audit_type,
-                            plan_status:
-                                plan.status,
-                            project_id:
-                                project.id,
-                            project_code:
-                                project.project_code,
-                            customer_name:
-                                customer.company_name,
-                            start_date:
-                                assignment.planned_start_date,
-                            end_date:
-                                assignment.planned_end_date,
-                        };
-                    },
-                ),
+            // Hard conflict: onsite/normal audit assignment. UI blocks these dates for onsite planning.
+            busy_dates: collectDates(hardAssignments),
+            assignments: hardAssignments.map(serialize),
+            // Soft conflict: GĐ1 remote workload. UI warns but never blocks an onsite assignment.
+            warning_dates: collectDates(warningAssignments),
+            warning_assignments: warningAssignments.map(serialize),
         };
     }
 
@@ -2746,14 +2732,6 @@ export class AuditTeamAppointmentsService {
                     appointment.audit_plans.project_id,
                     resolvedMembers,
                 );
-            } else if (this.isStage1Plan(appointment.audit_plans)) {
-                await this.validateStage1TeamMembership(
-                    appointment.audit_plans.project_id,
-                    resolvedMembers.map((member) => ({
-                        expert_id: member.expert_id,
-                        team_role: member.team_role,
-                    })),
-                );
             } else {
                 await this.evaluatePlanProgramAllocation(
                     appointment.audit_plans.project_id,
@@ -2765,6 +2743,8 @@ export class AuditTeamAppointmentsService {
                             project_scope_id: scope.project_scope_id ?? null,
                         })),
                     })),
+                    false,
+                    this.isStage1Plan(appointment.audit_plans) || this.isInitialStage2Plan(appointment.audit_plans),
                 );
             }
         }
@@ -2933,14 +2913,6 @@ export class AuditTeamAppointmentsService {
                     'Đoàn đánh giá chưa đáp ứng đầy đủ năng lực tổng thể',
                 );
             }
-        } else if (this.isStage1Plan(appointment.audit_plans)) {
-            await this.validateStage1TeamMembership(
-                appointment.audit_plans.project_id,
-                appointment.members.map((member) => ({
-                    expert_id: member.expert_id,
-                    team_role: member.team_role,
-                })),
-            );
         } else {
             await this.evaluatePlanProgramAllocation(
                 appointment.audit_plans.project_id,
@@ -2954,6 +2926,7 @@ export class AuditTeamAppointmentsService {
                     })),
                 })),
                 true,
+                this.isStage1Plan(appointment.audit_plans) || this.isInitialStage2Plan(appointment.audit_plans),
             );
         }
 

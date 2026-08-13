@@ -262,6 +262,9 @@ export class AuditPlansService {
         organizationName: string,
         eventType?: string | null,
     ): JsonObject {
+        const normalizedEventType = this.normalizeAuditStageToken(eventType);
+        const isStage1 = ['stage1', 'initialstage1', 'gd1', 'gđ1'].includes(normalizedEventType);
+
         return {
             organization: {
                 name: organizationName,
@@ -290,12 +293,12 @@ export class AuditPlansService {
             },
 
             audit_methods: {
-                onsite: true,
-                remote: false,
+                onsite: !isStage1,
+                remote: isStage1,
                 document_review: true,
                 interview: true,
-                observation: true,
-                sampling: true,
+                observation: !isStage1,
+                sampling: !isStage1,
             },
 
             event_information: {
@@ -637,8 +640,13 @@ export class AuditPlansService {
 
     async findOne(id: string) {
         const plan = await this.findRawPlan(id);
+        const normalized = this.normalizePlan(plan);
 
-        return this.normalizePlan(plan);
+        return {
+            ...normalized,
+            stage2_lifecycle_gate:
+                await this.stage2LifecycleGateForPlan(plan),
+        };
     }
 
     async update(
@@ -754,6 +762,235 @@ export class AuditPlansService {
 
     private normalizeText(value: string | null | undefined) {
         return (value ?? '').trim().toLowerCase();
+    }
+
+    private normalizeAuditStageToken(value: unknown) {
+        return String(value ?? '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_-]+/g, '');
+    }
+
+    private auditStageTokens(plan: any) {
+        return [
+            this.normalizeAuditStageToken(plan?.audit_type),
+            this.normalizeAuditStageToken(plan?.audit_event?.event_type),
+        ].filter(Boolean);
+    }
+
+    private isInitialStage1Plan(plan: any) {
+        const stage1Tokens = new Set([
+            'stage1',
+            'initialstage1',
+            'gd1',
+            'gđ1',
+        ]);
+
+        return this.auditStageTokens(plan).some((token) =>
+            stage1Tokens.has(token),
+        );
+    }
+
+    private isInitialStage2Plan(plan: any) {
+        const stage2Tokens = new Set([
+            'stage2',
+            'initialstage2',
+            'gd2',
+            'gđ2',
+        ]);
+
+        return this.auditStageTokens(plan).some((token) =>
+            stage2Tokens.has(token),
+        );
+    }
+
+    private stage1ReadinessFromReport(report: any) {
+        const direct = this.normalizeAuditStageToken(report?.audit_result);
+        if (direct) {
+            return direct;
+        }
+
+        const parsed = this.parseFormData(report?.form_data);
+        if (!this.isPlainObject(parsed)) {
+            return '';
+        }
+
+        const stage1Report = parsed.stage1_report;
+        if (!this.isPlainObject(stage1Report)) {
+            return '';
+        }
+
+        return this.normalizeAuditStageToken(
+            stage1Report.readiness_result,
+        );
+    }
+
+    private submittedAtFromReport(report: any): string | null {
+        const parsed = this.parseFormData(report?.form_data);
+        if (!this.isPlainObject(parsed)) {
+            return null;
+        }
+
+        const workflow = parsed.workflow;
+        if (!this.isPlainObject(workflow)) {
+            return null;
+        }
+
+        const submittedAt = workflow.submitted_at;
+        return typeof submittedAt === 'string' && submittedAt.trim()
+            ? submittedAt
+            : null;
+    }
+
+    private async stage2LifecycleGateForPlan(plan: any) {
+        if (!this.isInitialStage2Plan(plan)) {
+            return {
+                applicable: false,
+                allowed: true,
+                code: 'NOT_APPLICABLE',
+                message: 'Không áp dụng điều kiện chuyển Giai đoạn 1 → Giai đoạn 2 cho kỳ đánh giá này.',
+                stage1_plan_id: null,
+                stage1_plan_status: null,
+                stage1_report_id: null,
+                stage1_report_status: null,
+                stage1_readiness_result: null,
+                stage1_report_submitted_at: null,
+            };
+        }
+
+        const projectPlans = await this.prisma.audit_plans.findMany({
+            where: {
+                project_id: plan.project_id,
+                id: {
+                    not: plan.id,
+                },
+            },
+            include: {
+                audit_event: true,
+                reports: {
+                    orderBy: {
+                        version_no: 'desc',
+                    },
+                    take: 1,
+                    select: {
+                        id: true,
+                        version_no: true,
+                        status: true,
+                        audit_result: true,
+                        form_data: true,
+                        updated_at: true,
+                    },
+                },
+            },
+            orderBy: [
+                {
+                    created_at: 'desc',
+                },
+                {
+                    version_no: 'desc',
+                },
+            ],
+        });
+
+        const currentProgramId = plan.audit_event?.program_id ?? null;
+        const stage1Plan = projectPlans.find((candidate) => {
+            if (!this.isInitialStage1Plan(candidate)) {
+                return false;
+            }
+
+            if (!currentProgramId) {
+                return true;
+            }
+
+            return candidate.audit_event?.program_id === currentProgramId;
+        }) ?? null;
+
+        const base = {
+            applicable: true,
+            stage1_plan_id: stage1Plan?.id ?? null,
+            stage1_plan_status: stage1Plan?.status ?? null,
+            stage1_report_id: stage1Plan?.reports?.[0]?.id ?? null,
+            stage1_report_status: stage1Plan?.reports?.[0]?.status ?? null,
+            stage1_readiness_result: stage1Plan?.reports?.[0]
+                ? this.stage1ReadinessFromReport(stage1Plan.reports[0]) || null
+                : null,
+            stage1_report_submitted_at: stage1Plan?.reports?.[0]
+                ? this.submittedAtFromReport(stage1Plan.reports[0])
+                : null,
+        };
+
+        if (!stage1Plan) {
+            return {
+                ...base,
+                allowed: false,
+                code: 'STAGE1_PLAN_MISSING',
+                message: 'Chưa thể bắt đầu Giai đoạn 2: chưa có kế hoạch Giai đoạn 1 trong cùng chương trình đánh giá.',
+            };
+        }
+
+        if (this.normalizeText(stage1Plan.status) !== 'completed') {
+            return {
+                ...base,
+                allowed: false,
+                code: 'STAGE1_NOT_COMPLETED',
+                message: 'Chưa thể bắt đầu Giai đoạn 2: cuộc đánh giá Giai đoạn 1 chưa được hoàn thành.',
+            };
+        }
+
+        const stage1Report = stage1Plan.reports?.[0] ?? null;
+        if (!stage1Report) {
+            return {
+                ...base,
+                allowed: false,
+                code: 'STAGE1_REPORT_MISSING',
+                message: 'Chưa thể bắt đầu Giai đoạn 2: Giai đoạn 1 chưa có báo cáo đánh giá.',
+            };
+        }
+
+        if (!this.submittedAtFromReport(stage1Report)) {
+            return {
+                ...base,
+                allowed: false,
+                code: 'STAGE1_REPORT_NOT_SUBMITTED',
+                message: 'Chưa thể bắt đầu Giai đoạn 2: báo cáo Giai đoạn 1 chưa được nộp chính thức.',
+            };
+        }
+
+        const readiness = this.stage1ReadinessFromReport(stage1Report);
+        if (readiness === 'readyforstage2') {
+            return {
+                ...base,
+                allowed: true,
+                code: 'READY',
+                message: 'Giai đoạn 1 đã hoàn thành và kết luận sẵn sàng cho Giai đoạn 2.',
+            };
+        }
+
+        if (readiness === 'notreadyforstage2') {
+            return {
+                ...base,
+                allowed: false,
+                code: 'STAGE1_NOT_READY',
+                message: 'Chưa thể bắt đầu Giai đoạn 2: kết luận Giai đoạn 1 là chưa sẵn sàng.',
+            };
+        }
+
+        return {
+            ...base,
+            allowed: false,
+            code: 'STAGE1_READINESS_MISSING',
+            message: 'Chưa thể bắt đầu Giai đoạn 2: báo cáo Giai đoạn 1 chưa có kết luận về mức độ sẵn sàng cho Giai đoạn 2.',
+        };
+    }
+
+    private async assertStage2LifecycleGate(plan: any) {
+        const gate = await this.stage2LifecycleGateForPlan(plan);
+
+        if (gate.applicable && !gate.allowed) {
+            throw new BadRequestException(gate.message);
+        }
+
+        return gate;
     }
 
     private decimalValue(value: unknown): number {
@@ -884,6 +1121,24 @@ export class AuditPlansService {
             );
         }
 
+        if (plan.status === 'in_progress') {
+            return this.findOne(id);
+        }
+
+        if (plan.status === 'completed') {
+            throw new BadRequestException(
+                'Cuộc đánh giá đã hoàn thành',
+            );
+        }
+
+        if (plan.status === 'cancelled') {
+            throw new BadRequestException(
+                'Không thể bắt đầu kế hoạch đã hủy',
+            );
+        }
+
+        await this.assertStage2LifecycleGate(plan);
+
         const appointment = plan.audit_team_appointment;
 
         if (!appointment || appointment.status !== 'issued') {
@@ -902,22 +1157,6 @@ export class AuditPlansService {
             userId,
             appointment.members,
         );
-
-        if (plan.status === 'in_progress') {
-            return this.findOne(id);
-        }
-
-        if (plan.status === 'completed') {
-            throw new BadRequestException(
-                'Cuộc đánh giá đã hoàn thành',
-            );
-        }
-
-        if (plan.status === 'cancelled') {
-            throw new BadRequestException(
-                'Không thể bắt đầu kế hoạch đã hủy',
-            );
-        }
 
         if (
             !plan.planned_start_date ||
@@ -1173,6 +1412,7 @@ export class AuditPlansService {
             );
         }
 
+        const isStage1RemoteWorkload = this.isInitialStage1Plan(plan);
         let totalActualMandays = 0;
         const normalizedActuals = appointment.members.map((member) => {
             const actual = actualMap.get(member.id)!;
@@ -1236,7 +1476,7 @@ export class AuditPlansService {
                 actualEndDate,
             );
 
-            if (actualMandays > availableDays) {
+            if (!isStage1RemoteWorkload && actualMandays > availableDays) {
                 throw new BadRequestException(
                     `Man-day thực tế ${actualMandays.toFixed(1)} MD vượt quá ${availableDays} ngày tham gia của thành viên`,
                 );
@@ -1293,6 +1533,9 @@ export class AuditPlansService {
                     actual_end_date:
                         report.audit_end_date.toISOString(),
                     actual_mandays: totalActualMandays,
+                    actual_mandays_basis: isStage1RemoteWorkload
+                        ? 'approved_remote_document_workload'
+                        : 'calendar_actual',
                     completion_note: completionNote,
                     report_id: report.id,
                 },
