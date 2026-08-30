@@ -45,6 +45,7 @@ import {
 import { DocumentFilesService } from './document-files.service';
 import { UploadDocumentFileDto } from './dto/upload-document-file.dto';
 import { UploadCustomerCorrectiveActionEvidenceDto } from './dto/upload-customer-corrective-action-evidence.dto';
+import { UploadCustomerOrganizationChangeAttachmentDto } from '../customer-portal/dto/upload-customer-organization-change-attachment.dto';
 
 
 @Controller('document-files')
@@ -83,6 +84,7 @@ export class DocumentFilesController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -115,7 +117,7 @@ export class DocumentFilesController {
     @ApiOperation({
         summary: 'Tải tệp hồ sơ lên hệ thống',
         description:
-            'Chấp nhận PDF, Word, JPG hoặc PNG tối đa 20 MB; tự tăng phiên bản và chuyển bản cũ khỏi trạng thái current.',
+            'Chấp nhận PDF, Word, Excel, JPG, PNG, ZIP hoặc RAR tối đa 20 MB; tự tăng phiên bản và chuyển bản cũ khỏi trạng thái current.',
     })
     @ApiConsumes('multipart/form-data')
     @ApiBody({
@@ -132,7 +134,7 @@ export class DocumentFilesController {
                 file: {
                     type: 'string',
                     format: 'binary',
-                    description: 'Tệp PDF, Word, JPG hoặc PNG',
+                    description: 'Tệp PDF, Word, Excel, JPG, PNG, ZIP hoặc RAR',
                 },
                 entity_type: {
                     type: 'string',
@@ -151,6 +153,7 @@ export class DocumentFilesController {
                     type: 'string',
                     enum: [
                         'generated_docx',
+                        'generated_xlsx',
                         'generated_pdf',
                         'signed_scan',
                         'attachment',
@@ -274,17 +277,82 @@ export class DocumentFilesController {
             );
     }
 
+    @Post('customer/organization-change-requests/:requestId/attachment')
+    @Roles('CUSTOMER')
+    @Permissions('customer_portal.access')
+    @ApiOperation({
+        summary: 'Khách hàng tải tệp đính kèm yêu cầu thay đổi hồ sơ tổ chức',
+    })
+    @ApiConsumes('multipart/form-data')
+    @ApiParam({ name: 'requestId', description: 'UUID yêu cầu thay đổi hồ sơ' })
+    @ApiBody({
+        schema: {
+            type: 'object',
+            required: ['file'],
+            properties: {
+                file: { type: 'string', format: 'binary' },
+                note: { type: 'string', maxLength: 1000 },
+            },
+        },
+    })
+    @UseInterceptors(
+        FileInterceptor('file', createSecureUploadOptions()),
+        new TempUploadCleanupInterceptor(),
+    )
+    uploadCustomerOrganizationChangeAttachment(
+        @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+        @Body() dto: UploadCustomerOrganizationChangeAttachmentDto,
+        @UploadedFile() file: Express.Multer.File,
+        @Req() request: SecurityRequest,
+    ) {
+        return this.documentFilesService.uploadCustomerOrganizationChangeAttachment(
+            requestId,
+            dto,
+            file,
+            getActorUserId(request) ?? undefined,
+            this.actor(request),
+        );
+    }
+
+    @Post('customer/cases/:caseType/:caseId/evidence')
+    @Roles('CUSTOMER')
+    @Permissions('customer_portal.access')
+    @ApiOperation({
+        summary: 'Khách hàng tải bằng chứng cho complaint hoặc appeal thuộc customer mapping của mình',
+    })
+    @ApiConsumes('multipart/form-data')
+    @UseInterceptors(
+        FileInterceptor('file', createSecureUploadOptions()),
+        new TempUploadCleanupInterceptor(),
+    )
+    uploadCustomerCaseEvidence(
+        @Param('caseType') caseType: string,
+        @Param('caseId', new ParseUUIDPipe({ version: '4' })) caseId: string,
+        @Body() dto: UploadCustomerOrganizationChangeAttachmentDto,
+        @UploadedFile() file: Express.Multer.File,
+        @Req() request: SecurityRequest,
+    ) {
+        return this.documentFilesService.uploadCustomerCaseEvidence(
+            caseType,
+            caseId,
+            dto,
+            file,
+            getActorUserId(request) ?? undefined,
+            this.actor(request),
+        );
+    }
+
     @Get('customer/:id/download')
     @Roles('CUSTOMER')
     @ApiOperation({
-        summary: 'Khách hàng mở hoặc tải bằng chứng CAP của mình',
+        summary: 'Khách hàng mở hoặc tải tệp customer-safe của mình',
     })
     @ApiParam({
         name: 'id',
-        description: 'UUID bản ghi bằng chứng CAP',
+        description: 'UUID bản ghi tệp customer-safe',
     })
     @ApiOkResponse({
-        description: 'Nội dung tệp bằng chứng CAP',
+        description: 'Nội dung tệp customer-safe',
     })
     async downloadCustomerCorrectiveActionEvidence(
         @Param(
@@ -301,7 +369,7 @@ export class DocumentFilesController {
     ) {
         const result =
             await this.documentFilesService
-                .getCustomerCorrectiveActionEvidenceDownload(
+                .getCustomerPortalDownload(
                     id,
                     this.actor(request),
                 );
@@ -330,6 +398,7 @@ export class DocumentFilesController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -377,6 +446,7 @@ export class DocumentFilesController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -434,6 +504,7 @@ export class DocumentFilesController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -494,6 +565,7 @@ export class DocumentFilesController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )

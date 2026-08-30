@@ -42,6 +42,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { ResetUserPasswordDto } from './dto/reset-user-password.dto';
 import { UpdateRolePermissionsDto } from './dto/update-role-permissions.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateUserPermissionOverridesDto } from './dto/update-user-permission-overrides.dto';
 import { UpdateUserRolesDto } from './dto/update-user-roles.dto';
 import { UsersService } from './users.service';
 
@@ -188,6 +189,53 @@ export class UsersController {
             search,
             status,
             role,
+        );
+    }
+
+    @Get(':id/permission-profile')
+    @ApiOperation({ summary: 'Lấy quyền theo vai trò, quyền riêng và quyền hiệu lực của tài khoản' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @ApiOkResponse({ description: 'Hồ sơ quyền hiệu lực của tài khoản' })
+    @ApiNotFoundResponse({ description: 'Không tìm thấy tài khoản' })
+    @Roles('ADMIN')
+    @Permissions('users.read')
+    getPermissionProfile(
+        @Param(
+            'id',
+            ParseUUIDPipe,
+        )
+        id: string,
+    ): Promise<unknown> {
+        return this.usersService.getPermissionProfile(
+            id,
+        );
+    }
+
+    @Patch(':id/permission-overrides')
+    @ApiOperation({ summary: 'Thay thế quyền cấp thêm/thu hồi riêng của một tài khoản nội bộ' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @ApiOkResponse({ description: 'Đã cập nhật quyền riêng của tài khoản' })
+    @ApiBadRequestResponse({ description: 'Danh sách quyền riêng không hợp lệ hoặc tài khoản không hỗ trợ override' })
+    @ApiNotFoundResponse({ description: 'Không tìm thấy tài khoản hoặc quyền' })
+    @Roles('ADMIN')
+    @Permissions('users.manage')
+    replacePermissionOverrides(
+        @Param(
+            'id',
+            ParseUUIDPipe,
+        )
+        id: string,
+
+        @Body()
+        dto: UpdateUserPermissionOverridesDto,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.usersService.replacePermissionOverrides(
+            id,
+            dto,
+            request.user.userId,
         );
     }
 

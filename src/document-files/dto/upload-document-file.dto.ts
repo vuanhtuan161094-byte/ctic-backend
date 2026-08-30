@@ -44,6 +44,7 @@ export class UploadDocumentFileDto {
         example: 'attachment',
         enum: [
             'generated_docx',
+            'generated_xlsx',
             'generated_pdf',
             'signed_scan',
             'attachment',
@@ -52,6 +53,7 @@ export class UploadDocumentFileDto {
     })
     @IsIn([
         'generated_docx',
+        'generated_xlsx',
         'generated_pdf',
         'signed_scan',
         'attachment',

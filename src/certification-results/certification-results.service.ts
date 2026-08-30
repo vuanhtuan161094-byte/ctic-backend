@@ -17,8 +17,22 @@ import { DocumentFilesService } from '../document-files/document-files.service';
 import { getPlatformBranding } from '../common/platform-branding';
 import { getStorageConfig } from '../common/storage-config';
 import { convertDocxToPdf } from '../common/document-conversion';
+import {
+    certificateActionForDecisionType,
+    classifyAuditLifecycle,
+    decisionPreservesCurrentCertificate,
+    decisionRequiresCertificateVersion,
+    normalizeDecisionType,
+    allowedStatusDecisionTypesForCertificateStatus,
+    phase14WorkspaceDecisionTypes,
+} from '../certificates/certificate-lifecycle';
 
 import { PrismaService } from '../prisma/prisma.service';
+import {
+    expiryDateFromValidityMonths,
+    resolveSchemeRuntimeRules,
+    runtimeRuleSummary,
+} from '../master-data-configuration/scheme-runtime-rules';
 
 type DocumentFormat = 'docx' | 'pdf';
 type JsonObject = Record<string, unknown>;
@@ -135,8 +149,8 @@ export class CertificationResultsService {
             .slice(0, 60) || 'NA';
     }
 
-    private brandingSnapshot() {
-        const branding = getPlatformBranding();
+    private brandingSnapshot(source?: { platform_branding?: Parameters<typeof getPlatformBranding>[0] }) {
+        const branding = getPlatformBranding(source?.platform_branding);
 
         return {
             certification_body_name:
@@ -262,6 +276,10 @@ export class CertificationResultsService {
     async getWorkspace(planId: string) {
         const context = await this.loadContext(planId);
         const project = context.plan.certification_projects;
+        const runtimeRules =
+            resolveSchemeRuntimeRules(
+                project.scheme_config_snapshot,
+            );
         const application = project.certification_applications;
         const customer = application.customers;
         const formData = context.review ? this.parseJson(context.review.form_data) : {};
@@ -276,31 +294,93 @@ export class CertificationResultsService {
         const lifecycleType = this.auditLifecycleType(context.plan.audit_type);
         const isSurveillance = lifecycleType === 'surveillance';
 
-        const projectPlanIds = (await this.prisma.audit_plans.findMany({
+        const certificateSeries = await this.prisma.certificate_series.findMany({
             where: { project_id: project.id },
-            select: { id: true },
-        })).map((item) => item.id);
-        const projectReportIds = projectPlanIds.length
-            ? (await this.prisma.reports.findMany({
-                where: { audit_plan_id: { in: projectPlanIds } },
-                select: { id: true },
-            })).map((item) => item.id)
-            : [];
-        const projectReviewIds = projectReportIds.length
-            ? (await this.prisma.technical_reviews.findMany({
-                where: { report_id: { in: projectReportIds } },
-                select: { id: true },
-            })).map((item) => item.id)
-            : [];
-        const projectCertificates = projectReviewIds.length
-            ? await this.prisma.certificates.findMany({
-                where: { technical_review_id: { in: projectReviewIds } },
-                orderBy: { created_at: 'desc' },
-            })
-            : [];
+            orderBy: { created_at: 'asc' },
+            include: {
+                certificates: {
+                    orderBy: { version_no: 'desc' },
+                    include: {
+                        certification_decision: {
+                            select: {
+                                id: true,
+                                decision_number: true,
+                                decision_date: true,
+                                decision_type: true,
+                                decision_result: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        const projectCertificates = certificateSeries
+            .flatMap((series) => series.certificates)
+            .sort((left, right) =>
+                new Date(right.created_at).getTime() -
+                new Date(left.created_at).getTime(),
+            );
         const activeCertificate = projectCertificates.find((certificate) =>
             this.isCertificateActive(certificate.status),
         ) ?? null;
+        const currentCertificate = projectCertificates.find((certificate) =>
+            [
+                'active',
+                'suspended',
+            ].includes(
+                String(
+                    certificate.status ??
+                    '',
+                ).toLowerCase(),
+            ),
+        ) ?? projectCertificates[0] ?? null;
+
+        const certificateIds = projectCertificates.map((item) => item.id);
+        const certificateDocuments = certificateIds.length
+            ? await this.prisma.documentFile.findMany({
+                where: {
+                    entity_type: 'certificate',
+                    entity_id: { in: certificateIds },
+                    document_type: 'certificate_pdf',
+                },
+                orderBy: [
+                    { entity_id: 'asc' },
+                    { is_current: 'desc' },
+                    { version_no: 'desc' },
+                ],
+            })
+            : [];
+        const documentsByCertificate = new Map<string, typeof certificateDocuments>();
+        for (const document of certificateDocuments) {
+            if (!document.entity_id) continue;
+            const documents = documentsByCertificate.get(document.entity_id) ?? [];
+            documents.push(document);
+            documentsByCertificate.set(document.entity_id, documents);
+        }
+
+        const auditLifecycle = classifyAuditLifecycle(context.plan.audit_type);
+        const allowedDecisionTypes =
+            phase14WorkspaceDecisionTypes(
+                auditLifecycle,
+                currentCertificate?.status,
+            );
+        const allowedStatusActions =
+            allowedStatusDecisionTypesForCertificateStatus(
+                currentCertificate?.status,
+            ).filter((decisionType) =>
+                allowedDecisionTypes.includes(
+                    decisionType,
+                ),
+            );
+        const decisionType = context.decision
+            ? normalizeDecisionType(context.decision.decision_type ?? '')
+            : null;
+        const decisionFormData = context.decision
+            ? this.parseJson(context.decision.form_data)
+            : {};
+        const changeReason = String(
+            decisionFormData.lifecycle_change_reason ?? '',
+        ).trim() || null;
 
         const eligibilityErrors: string[] = [];
         const auditType = this.normalize(context.plan.audit_type);
@@ -317,17 +397,32 @@ export class CertificationResultsService {
         } else if (context.review.status !== 'completed') {
             eligibilityErrors.push('Hồ sơ thẩm xét kỹ thuật chưa hoàn thành.');
         }
-        if (isSurveillance && !activeCertificate) {
+        if (isSurveillance && !currentCertificate) {
             eligibilityErrors.push(
-                'Giám sát chỉ được kết luận duy trì khi dự án đang có giấy chứng nhận còn hiệu lực.',
+                'Chưa có chứng chỉ hiện hành để lập quyết định lifecycle trong kỳ giám sát.',
+            );
+        }
+        if (
+            auditLifecycle === 'RECERTIFICATION' &&
+            !currentCertificate
+        ) {
+            eligibilityErrors.push(
+                'Chưa có dòng chứng nhận hiện hữu để thực hiện tái chứng nhận.',
+            );
+        } else if (
+            auditLifecycle === 'RECERTIFICATION' &&
+            String(currentCertificate?.status ?? '').toLowerCase() !== 'active'
+        ) {
+            eligibilityErrors.push(
+                'Chỉ chứng chỉ hiện hành đang hiệu lực mới đủ điều kiện tái chứng nhận.',
             );
         }
 
         const now = new Date();
         const effectiveDate = context.decision?.effective_date
             ? new Date(context.decision.effective_date)
-            : activeCertificate?.issue_date
-                ? new Date(activeCertificate.issue_date)
+            : isSurveillance && currentCertificate?.issue_date
+                ? new Date(currentCertificate.issue_date)
                 : now;
         const nextAuditDueDate = this.nextAuditDate(context);
 
@@ -346,13 +441,15 @@ export class CertificationResultsService {
             )
             : [];
 
-        const requiresDecisionByDefault = !isSurveillance;
+        const requiresDecisionByDefault = true;
         const canIssueDecision =
-            eligibilityErrors.length === 0 && !context.decision;
+            eligibilityErrors.length === 0 &&
+            allowedDecisionTypes.length > 0 &&
+            !context.decision;
         const canIssueNotification =
             eligibilityErrors.length === 0
             && !context.notification
-            && (isSurveillance || Boolean(context.decision));
+            && Boolean(context.decision);
 
         return {
             plan: {
@@ -368,12 +465,66 @@ export class CertificationResultsService {
             is_surveillance: isSurveillance,
             requires_decision_by_default: requiresDecisionByDefault,
             surveillance_no_change_allowed: isSurveillance,
+            allowed_decision_types: allowedDecisionTypes,
+            current_status:
+                currentCertificate?.status ??
+                null,
+            allowed_status_actions:
+                allowedStatusActions,
+            certificate_series: certificateSeries.map((series) => ({
+                id: series.id,
+                series_code: series.series_code,
+                status: series.status,
+                current_certificate:
+                    series.certificates[0] ??
+                    null,
+                allowed_status_actions:
+                    allowedStatusDecisionTypesForCertificateStatus(
+                        series.certificates[0]?.status,
+                    ).filter((decisionType) =>
+                        allowedDecisionTypes.includes(
+                            decisionType,
+                        ),
+                    ),
+                versions: series.certificates.map((certificate) => ({
+                    ...certificate,
+                    official_pdf_available:
+                        (documentsByCertificate.get(certificate.id) ?? []).length > 0,
+                })),
+            })),
             active_certificate: activeCertificate ? {
                 id: activeCertificate.id,
                 cert_number: activeCertificate.cert_number,
+                certificate_series_id: activeCertificate.certificate_series_id,
+                version_no: activeCertificate.version_no,
                 issue_date: activeCertificate.issue_date,
                 expire_date: activeCertificate.expire_date,
                 status: activeCertificate.status,
+                organization_name: activeCertificate.organization_name,
+                organization_address: activeCertificate.organization_address,
+                management_system: activeCertificate.management_system,
+                standard_name: activeCertificate.standard_name,
+                certification_scope: activeCertificate.certification_scope,
+                verification_code: activeCertificate.verification_code,
+                official_pdf_available:
+                    (documentsByCertificate.get(activeCertificate.id) ?? []).length > 0,
+            } : null,
+            current_certificate: currentCertificate ? {
+                id: currentCertificate.id,
+                cert_number: currentCertificate.cert_number,
+                certificate_series_id: currentCertificate.certificate_series_id,
+                version_no: currentCertificate.version_no,
+                issue_date: currentCertificate.issue_date,
+                expire_date: currentCertificate.expire_date,
+                status: currentCertificate.status,
+                organization_name: currentCertificate.organization_name,
+                organization_address: currentCertificate.organization_address,
+                management_system: currentCertificate.management_system,
+                standard_name: currentCertificate.standard_name,
+                certification_scope: currentCertificate.certification_scope,
+                verification_code: currentCertificate.verification_code,
+                official_pdf_available:
+                    (documentsByCertificate.get(currentCertificate.id) ?? []).length > 0,
             } : null,
             report: context.report ? {
                 id: context.report.id,
@@ -396,13 +547,28 @@ export class CertificationResultsService {
                 conditions:
                     reviewReport.conditions ?? f11.conditions ?? null,
             } : null,
-            decision: context.decision,
+            decision: context.decision ? {
+                ...context.decision,
+                decision_type: decisionType,
+                change_reason: changeReason,
+                lifecycle: decisionType ? {
+                    certificate_action: certificateActionForDecisionType(decisionType),
+                    requires_certificate_version:
+                        decisionRequiresCertificateVersion(decisionType),
+                    preserves_current_certificate:
+                        decisionPreservesCurrentCertificate(decisionType),
+                } : null,
+            } : null,
             notification: context.notification,
             decision_history: decisionHistory,
             notification_history: notificationHistory,
             can_issue_decision: canIssueDecision,
             can_issue_notification: canIssueNotification,
             eligibility_errors: eligibilityErrors,
+            runtime_rules:
+                runtimeRuleSummary(
+                    runtimeRules,
+                ),
             defaults: {
                 organization_name:
                     customer.company_name ?? application.company_name_en ?? '',
@@ -417,7 +583,13 @@ export class CertificationResultsService {
                         project.standard_name ?? application.standard_name ?? '',
                     ),
                 certification_scope:
-                    application.certification_scope ?? '',
+                    auditLifecycle === 'RECERTIFICATION'
+                        ? application.certification_scope ??
+                            currentCertificate?.certification_scope ??
+                            ''
+                        : currentCertificate?.certification_scope ??
+                            application.certification_scope ??
+                            '',
                 contract_number:
                     project.contracts?.contract_number ?? '',
                 contract_date:
@@ -431,15 +603,37 @@ export class CertificationResultsService {
                 decision_date: now.toISOString().slice(0, 10),
                 effective_date: effectiveDate.toISOString().slice(0, 10),
                 expiry_date:
-                    isSurveillance && activeCertificate?.expire_date
-                        ? new Date(activeCertificate.expire_date).toISOString().slice(0, 10)
-                        : this.suggestedValidityDate(effectiveDate, 3, 1),
-                surveillance_interval_months: 12,
+                    isSurveillance && currentCertificate?.expire_date
+                        ? new Date(currentCertificate.expire_date).toISOString().slice(0, 10)
+                        : expiryDateFromValidityMonths(
+                            effectiveDate,
+                            runtimeRules.validity_duration_months,
+                        ).toISOString().slice(0, 10),
+                surveillance_interval_months:
+                    runtimeRules.surveillance_frequency_months,
                 audit_type: lifecycleType,
-                notification_result: isSurveillance
-                    ? 'certification_maintained'
-                    : 'certification_granted',
-                has_certification_changes: false,
+                notification_result:
+                    context.decision &&
+                    context.decision.decision_result !== 'approved'
+                        ? 'certification_not_granted'
+                        : decisionType === 'SUSPEND'
+                            ? 'certification_suspended'
+                            : decisionType === 'WITHDRAW'
+                                ? 'certification_withdrawn'
+                                : decisionType === 'MAINTAIN' ||
+                                    decisionType === 'RESTORE'
+                                    ? 'certification_maintained'
+                                    : decisionType
+                            ? 'certification_granted'
+                                : isSurveillance
+                                    ? 'certification_maintained'
+                                    : 'certification_granted',
+                has_certification_changes:
+                    Boolean(decisionType && [
+                        'AMEND',
+                        'EXTEND_SCOPE',
+                        'REDUCE_SCOPE',
+                    ].includes(decisionType)),
                 notification_number:
                     this.defaultNotificationNumber(project.project_code),
                 notification_date: now.toISOString().slice(0, 10),
@@ -486,7 +680,7 @@ export class CertificationResultsService {
         const project = plan.certification_projects;
         const application = project.certification_applications;
         const customer = application.customers;
-        const branding = this.brandingSnapshot();
+        const branding = this.brandingSnapshot(decision);
         const bodyName = branding.certification_body_name;
         const organizationDisplayName = application.company_name_en
             ? `${decision.organization_name}/ ${application.company_name_en}`
@@ -536,7 +730,7 @@ export class CertificationResultsService {
         const plan = report.audit_plans;
         const project = plan.certification_projects;
         const application = project.certification_applications;
-        const branding = this.brandingSnapshot();
+        const branding = this.brandingSnapshot(notification);
         const bodyName = branding.certification_body_name;
         const organizationDisplayName = application.company_name_en
             ? `${notification.organization_name}/ ${application.company_name_en}`
@@ -602,7 +796,10 @@ export class CertificationResultsService {
             },
         });
         if (!decision) throw new NotFoundException('Không tìm thấy quyết định chứng nhận');
-        return decision as any;
+        const platformBranding = 'organization_profiles' in this.prisma
+            ? await this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' } })
+            : null;
+        return Object.assign(decision, { platform_branding: platformBranding }) as any;
     }
 
     private async loadNotification(id: string) {
@@ -629,7 +826,10 @@ export class CertificationResultsService {
             },
         });
         if (!notification) throw new NotFoundException('Không tìm thấy thông báo kết quả đánh giá');
-        return notification as any;
+        const platformBranding = 'organization_profiles' in this.prisma
+            ? await this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' } })
+            : null;
+        return Object.assign(notification, { platform_branding: platformBranding }) as any;
     }
 
     private async convertToPdf(

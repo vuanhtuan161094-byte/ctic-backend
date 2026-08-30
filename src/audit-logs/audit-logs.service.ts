@@ -18,6 +18,15 @@ export class AuditLogsService {
             PrismaService,
     ) { }
 
+    private parseDetails(value: string | null) {
+        if (!value) return null;
+        try {
+            return JSON.parse(value) as unknown;
+        } catch {
+            return null;
+        }
+    }
+
     private parseStartDate(
         value?: string,
     ) {
@@ -144,7 +153,7 @@ export class AuditLogsService {
             total,
             items,
         ] =
-            await this.prisma.$transaction([
+            await Promise.all([
                 this.prisma.audit_logs.count({
                     where,
                 }),
@@ -225,6 +234,9 @@ export class AuditLogsService {
 
                         duration_ms:
                             item.duration_ms,
+
+                        details:
+                            this.parseDetails(item.details_json),
 
                         created_at:
                             item.created_at,
@@ -521,6 +533,21 @@ export class AuditLogsService {
 
             user_agent:
                 auditLog.user_agent,
+
+            request_id:
+                auditLog.request_id,
+
+            outcome:
+                auditLog.outcome,
+
+            status_code:
+                auditLog.status_code,
+
+            duration_ms:
+                auditLog.duration_ms,
+
+            details:
+                this.parseDetails(auditLog.details_json),
 
             created_at:
                 auditLog.created_at,

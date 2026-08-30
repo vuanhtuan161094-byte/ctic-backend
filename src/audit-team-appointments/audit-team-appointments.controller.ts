@@ -655,6 +655,29 @@ export class AuditTeamAppointmentsController {
         return this.service.findOne(id);
     }
 
+    @Get(':id/readiness')
+    @Roles(
+        'ADMIN',
+        'STAFF',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('audit_teams.read')
+    @ApiOperation({ summary: 'Đánh giá readiness hiện thời của toàn bộ đoàn' })
+    @ApiOkResponse({ description: 'Coverage matrix, gates và trạng thái sẵn sàng ban hành' })
+    async getReadiness(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_team_appointment', entity_id: id },
+            getResourceActor(request),
+        );
+        return this.service.getReadiness(id);
+    }
+
     @Patch(':id')
     @Roles(
         'ADMIN',
@@ -680,10 +703,14 @@ export class AuditTeamAppointmentsController {
 
         @Body()
         dto: UpdateAuditTeamAppointmentDto,
+
+        @Req()
+        request: AuthenticatedRequest,
     ): Promise<unknown> {
         return this.service.update(
             id,
             dto,
+            request.user.userId,
         );
     }
 

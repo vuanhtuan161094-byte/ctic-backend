@@ -8,6 +8,8 @@ import {
     ConfigService,
 } from '@nestjs/config';
 
+import { safeErrorForLog } from '../common/safe-error-log';
+
 import {
     PrismaMssql,
 } from '@prisma/adapter-mssql';
@@ -801,7 +803,7 @@ export class PrismaService
                 } catch (reconnectError) {
                     console.error(
                         'SQL Server reconnect failed:',
-                        reconnectError,
+                        safeErrorForLog(reconnectError),
                     );
                 }
                 return;
@@ -809,7 +811,7 @@ export class PrismaService
 
             console.error(
                 'SQL Server health check failed:',
-                error,
+                safeErrorForLog(error),
             );
         }
     }

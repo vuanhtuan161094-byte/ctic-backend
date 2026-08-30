@@ -7,18 +7,33 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 
+import { CompleteExpertMonitoringDto } from './dto/complete-expert-monitoring.dto';
+import { CreateExpertMonitoringDto } from './dto/create-expert-monitoring.dto';
+import { CreateExpertTrainingDto } from './dto/create-expert-training.dto';
+import { EvaluateExpertTrainingDto } from './dto/evaluate-expert-training.dto';
 import { CreateExpertCertificateDto } from './dto/create-expert-certificate.dto';
 import { CreateExpertWorkExperienceDto } from './dto/create-expert-work-experience.dto';
 import { CreateExpertDto } from './dto/create-expert.dto';
 import { UpdateExpertCertificateDto } from './dto/update-expert-certificate.dto';
 import { UpdateExpertWorkExperienceDto } from './dto/update-expert-work-experience.dto';
 import { UpdateExpertDto } from './dto/update-expert.dto';
+import {
+    CancelExpertResourceRecordDto,
+    CreateExpertAvailabilityDto,
+    CreateExpertCustomerConflictDto,
+    ReviewExpertCustomerConflictDto,
+} from './dto/expert-resource-governance.dto';
+import { ExpertResourceGovernanceService } from './expert-resource-governance.service';
 
 @Injectable()
 export class ExpertsService {
+    private readonly resourceGovernance: ExpertResourceGovernanceService;
+
     constructor(
         private readonly prisma: PrismaService,
-    ) {}
+    ) {
+        this.resourceGovernance = new ExpertResourceGovernanceService(prisma);
+    }
 
     private normalizeStatus(status?: string) {
         const value = status?.trim().toLowerCase();
@@ -58,6 +73,74 @@ export class ExpertsService {
         }
 
         return date;
+    }
+
+    private startOfUtcDay(value = new Date()) {
+        return new Date(Date.UTC(
+            value.getUTCFullYear(),
+            value.getUTCMonth(),
+            value.getUTCDate(),
+        ));
+    }
+
+    private addMonths(value: Date, months: number) {
+        const result = new Date(value.getTime());
+        result.setUTCMonth(result.getUTCMonth() + months);
+        return result;
+    }
+
+    private addYears(value: Date, years: number) {
+        const result = new Date(value.getTime());
+        result.setUTCFullYear(result.getUTCFullYear() + years);
+        return result;
+    }
+
+    private async assertCompetencyBelongsToExpert(
+        expertId: string,
+        competencyId?: string,
+    ) {
+        if (!competencyId) return null;
+        const competency = await this.prisma.expert_competencies.findFirst({
+            where: {
+                id: competencyId,
+                expert_id: expertId,
+            },
+            select: {
+                id: true,
+                management_system: true,
+                standard_code: true,
+                competency_role: true,
+                approval_status: true,
+            },
+        });
+        if (!competency) {
+            throw new BadRequestException(
+                'Phạm vi năng lực được liên kết không thuộc chuyên gia này',
+            );
+        }
+        return competency;
+    }
+
+    private async assertAuditPlanAssignedToExpert(
+        expertId: string,
+        auditPlanId?: string,
+    ) {
+        if (!auditPlanId) return;
+        const assignment = await this.prisma.audit_team_members.findFirst({
+            where: {
+                expert_id: expertId,
+                assignment_status: { not: 'cancelled' },
+                audit_team_appointments: {
+                    audit_plan_id: auditPlanId,
+                },
+            },
+            select: { id: true },
+        });
+        if (!assignment) {
+            throw new BadRequestException(
+                'Kế hoạch đánh giá được liên kết không có chuyên gia này trong đoàn đánh giá',
+            );
+        }
     }
 
     private validateDateRange(
@@ -308,6 +391,11 @@ export class ExpertsService {
 
     async getOverview() {
         const now = new Date();
+        const startOfToday = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate(),
+        ));
         const expiryThreshold = new Date(
             now.getTime() + 90 * 24 * 60 * 60 * 1000,
         );
@@ -327,18 +415,58 @@ export class ExpertsService {
             this.prisma.expert_competencies.findMany({
                 select: {
                     approval_status: true,
+                    effective_date: true,
                     expiry_date: true,
+                    approved_at: true,
+                    evidence_summary: true,
+                    evidence_records: {
+                        where: {
+                            status: 'ACTIVE',
+                            OR: [
+                                { valid_until: null },
+                                { valid_until: { gte: startOfToday } },
+                            ],
+                        },
+                        select: { id: true },
+                    },
+                    review_records: {
+                        orderBy: [
+                            { review_date: 'desc' },
+                            { created_at: 'desc' },
+                        ],
+                        take: 1,
+                        select: {
+                            review_date: true,
+                            next_review_date: true,
+                            result: true,
+                        },
+                    },
                 },
             }),
             this.prisma.expert_certificates.count({
                 where: {
                     expiry_date: {
-                        gte: now,
+                        gte: startOfToday,
                         lte: expiryThreshold,
                     },
                 },
             }),
         ]);
+
+        const addMonths = (value: Date, months: number) => {
+            const result = new Date(value.getTime());
+            result.setUTCMonth(result.getUTCMonth() + months);
+            return result;
+        };
+        const reviewDueDate = (item: (typeof competencies)[number]) => {
+            const latest = item.review_records[0];
+            if (latest?.next_review_date) return latest.next_review_date;
+            if (item.approval_status !== 'APPROVED') return null;
+            return addMonths(
+                latest?.review_date ?? item.approved_at ?? item.effective_date,
+                12,
+            );
+        };
 
         return {
             generated_at: new Date(),
@@ -364,8 +492,31 @@ export class ExpertsService {
                 expiring_90_days: competencies.filter(
                     (item) => item.approval_status === 'APPROVED' &&
                         item.expiry_date &&
-                        item.expiry_date >= now &&
+                        item.expiry_date >= startOfToday &&
                         item.expiry_date <= expiryThreshold,
+                ).length,
+                expired: competencies.filter(
+                    (item) => item.approval_status === 'APPROVED' &&
+                        item.expiry_date &&
+                        item.expiry_date < startOfToday,
+                ).length,
+                evidence_gaps: competencies.filter(
+                    (item) => item.approval_status === 'APPROVED' &&
+                        item.evidence_records.length === 0 &&
+                        !item.evidence_summary?.trim(),
+                ).length,
+                review_overdue: competencies.filter((item) => {
+                    const due = reviewDueDate(item);
+                    return due !== null && due < startOfToday;
+                }).length,
+                review_due_90_days: competencies.filter((item) => {
+                    const due = reviewDueDate(item);
+                    return due !== null &&
+                        due >= startOfToday &&
+                        due <= expiryThreshold;
+                }).length,
+                management_action_required: competencies.filter(
+                    (item) => item.review_records[0]?.result === 'UNSATISFACTORY',
                 ).length,
             },
             certificates: {
@@ -556,6 +707,711 @@ export class ExpertsService {
         };
     }
 
+    async getDevelopment(expertId: string) {
+        const expert = await this.prisma.experts.findUnique({
+            where: { id: expertId },
+            select: {
+                id: true,
+                full_name: true,
+                employee_code: true,
+                profile_status: true,
+                approved_at: true,
+                created_at: true,
+                competencies: {
+                    orderBy: [
+                        { management_system: 'asc' },
+                        { standard_code: 'asc' },
+                        { competency_role: 'asc' },
+                    ],
+                    select: {
+                        id: true,
+                        management_system: true,
+                        standard_code: true,
+                        competency_role: true,
+                        iaf_code: true,
+                        nace_code: true,
+                        approval_status: true,
+                    },
+                },
+                training_records: {
+                    orderBy: [
+                        { start_date: 'desc' },
+                        { created_at: 'desc' },
+                    ],
+                    include: {
+                        competency: {
+                            select: {
+                                id: true,
+                                management_system: true,
+                                standard_code: true,
+                                competency_role: true,
+                                iaf_code: true,
+                                nace_code: true,
+                            },
+                        },
+                        creator: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                        evaluator: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                        canceller: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                    },
+                },
+                monitoring_records: {
+                    orderBy: [
+                        { planned_date: 'desc' },
+                        { created_at: 'desc' },
+                    ],
+                    include: {
+                        competency: {
+                            select: {
+                                id: true,
+                                management_system: true,
+                                standard_code: true,
+                                competency_role: true,
+                                iaf_code: true,
+                                nace_code: true,
+                            },
+                        },
+                        audit_plan: {
+                            select: {
+                                id: true,
+                                plan_code: true,
+                                audit_type: true,
+                                planned_start_date: true,
+                                planned_end_date: true,
+                            },
+                        },
+                        creator: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                        assessor: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                        completer: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                        canceller: {
+                            select: { id: true, username: true, full_name: true },
+                        },
+                        witness_items: {
+                            orderBy: { criterion_code: 'asc' },
+                        },
+                    },
+                },
+                audit_team_members: {
+                    where: {
+                        assignment_status: { not: 'cancelled' },
+                    },
+                    orderBy: { planned_start_date: 'desc' },
+                    select: {
+                        team_role: true,
+                        planned_start_date: true,
+                        planned_end_date: true,
+                        audit_team_appointments: {
+                            select: {
+                                audit_plans: {
+                                    select: {
+                                        id: true,
+                                        plan_code: true,
+                                        audit_type: true,
+                                        planned_start_date: true,
+                                        planned_end_date: true,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        if (!expert) {
+            throw new NotFoundException('Không tìm thấy chuyên gia');
+        }
+
+        const trainingIds = expert.training_records.map((item) => item.id);
+        const monitoringIds = expert.monitoring_records.map((item) => item.id);
+        const attachments = trainingIds.length || monitoringIds.length
+            ? await this.prisma.documentFile.findMany({
+                where: {
+                    is_current: true,
+                    OR: [
+                        ...(trainingIds.length ? [{
+                            entity_type: 'expert_training_record',
+                            entity_id: { in: trainingIds },
+                        }] : []),
+                        ...(monitoringIds.length ? [{
+                            entity_type: 'expert_monitoring_record',
+                            entity_id: { in: monitoringIds },
+                        }] : []),
+                    ],
+                },
+                orderBy: [
+                    { entity_type: 'asc' },
+                    { entity_id: 'asc' },
+                    { version_no: 'desc' },
+                ],
+            })
+            : [];
+        const attachmentMap = new Map<string, Array<(typeof attachments)[number] & {
+            download_url: string;
+        }>>();
+        for (const item of attachments) {
+            const key = `${item.entity_type}|${item.entity_id}`;
+            const rows = attachmentMap.get(key) ?? [];
+            rows.push({
+                ...item,
+                download_url: `/document-files/${item.id}/download`,
+            });
+            attachmentMap.set(key, rows);
+        }
+
+        const now = this.startOfUtcDay();
+        const due90 = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+        const last12Months = this.addMonths(now, -12);
+        const completedMonitoring = expert.monitoring_records.filter(
+            (item) => item.status === 'COMPLETED' && item.performed_date,
+        );
+        const approvedAuditorCompetencies = expert.competencies.filter(
+            (item) => item.approval_status === 'APPROVED' &&
+                ['AUDITOR', 'LEAD_AUDITOR'].includes(
+                    this.normalizeUpper(item.competency_role),
+                ),
+        );
+        const auditorMonitoringApplicable = approvedAuditorCompetencies.length > 0;
+        const emsAuditor = approvedAuditorCompetencies.some(
+            (item) => this.normalizeUpper(item.management_system) === 'EMS',
+        );
+        const latestWitness = completedMonitoring
+            .filter((item) => item.monitoring_method === 'WITNESS')
+            .sort((left, right) =>
+                (right.performed_date?.getTime() ?? 0) -
+                (left.performed_date?.getTime() ?? 0),
+            )[0] ?? null;
+        const witnessBaseline = latestWitness?.performed_date ??
+            expert.approved_at ?? expert.created_at;
+        const witnessDueDate = auditorMonitoringApplicable
+            ? this.addYears(witnessBaseline, 3)
+            : null;
+        const witnessStatus = !witnessDueDate
+            ? 'NOT_APPLICABLE'
+            : witnessDueDate < now
+                ? 'OVERDUE'
+                : witnessDueDate <= due90
+                    ? 'DUE_90_DAYS'
+                    : 'CURRENT';
+        const hasReportReview12m = completedMonitoring.some(
+            (item) => item.monitoring_method === 'AUDIT_REPORT_REVIEW' &&
+                item.performed_date! >= last12Months,
+        );
+        const hasFeedback12m = completedMonitoring.some(
+            (item) => ['CUSTOMER_FEEDBACK', 'MARKET_FEEDBACK'].includes(
+                item.monitoring_method,
+            ) && item.performed_date! >= last12Months,
+        );
+        const completedEmsMonitoring = completedMonitoring.filter(
+            (item) => this.normalizeUpper(item.management_system) === 'EMS',
+        );
+        const latestEmsWitness = completedEmsMonitoring
+            .filter((item) => item.monitoring_method === 'WITNESS')
+            .sort((left, right) =>
+                (right.performed_date?.getTime() ?? 0) -
+                (left.performed_date?.getTime() ?? 0),
+            )[0] ?? null;
+        const emsWitnessCurrent = Boolean(
+            latestEmsWitness?.performed_date &&
+            this.addYears(latestEmsWitness.performed_date, 3) >= now,
+        );
+        const hasEmsFeedback12m = completedEmsMonitoring.some(
+            (item) => ['CUSTOMER_FEEDBACK', 'MARKET_FEEDBACK'].includes(
+                item.monitoring_method,
+            ) && item.performed_date! >= last12Months,
+        );
+        const witnessCurrent = witnessStatus === 'CURRENT' ||
+            witnessStatus === 'DUE_90_DAYS';
+
+        const auditPlanOptions = Array.from(new Map(
+            expert.audit_team_members.map((member) => {
+                const plan = member.audit_team_appointments.audit_plans;
+                return [plan.id, {
+                    ...plan,
+                    team_role: member.team_role,
+                }];
+            }),
+        ).values());
+
+        return {
+            expert: {
+                id: expert.id,
+                full_name: expert.full_name,
+                employee_code: expert.employee_code,
+                profile_status: expert.profile_status,
+            },
+            competencies: expert.competencies,
+            trainings: expert.training_records.map((item) => ({
+                ...item,
+                attachments: attachmentMap.get(
+                    `expert_training_record|${item.id}`,
+                ) ?? [],
+            })),
+            monitoring: expert.monitoring_records.map((item) => ({
+                ...item,
+                attachments: attachmentMap.get(
+                    `expert_monitoring_record|${item.id}`,
+                ) ?? [],
+            })),
+            audit_plan_options: auditPlanOptions,
+            governance: {
+                training: {
+                    planned: expert.training_records.filter(
+                        (item) => item.status === 'PLANNED',
+                    ).length,
+                    completed: expert.training_records.filter(
+                        (item) => item.status === 'COMPLETED',
+                    ).length,
+                    effectiveness_pending: expert.training_records.filter(
+                        (item) => item.status === 'COMPLETED' &&
+                            !item.effectiveness_result,
+                    ).length,
+                    unsatisfactory: expert.training_records.filter(
+                        (item) => item.effectiveness_result === 'UNSATISFACTORY',
+                    ).length,
+                },
+                monitoring: {
+                    planned: expert.monitoring_records.filter(
+                        (item) => item.status === 'PLANNED',
+                    ).length,
+                    overdue: expert.monitoring_records.filter((item) => {
+                        if (item.status !== 'PLANNED') return false;
+                        return (item.due_date ?? item.planned_date) < now;
+                    }).length,
+                    unsatisfactory: expert.monitoring_records.filter(
+                        (item) => item.status === 'COMPLETED' &&
+                            item.result === 'UNSATISFACTORY',
+                    ).length,
+                    improvement_required: expert.monitoring_records.filter(
+                        (item) => item.status === 'COMPLETED' &&
+                            item.result === 'IMPROVEMENT_REQUIRED',
+                    ).length,
+                },
+                witness: {
+                    applicable: auditorMonitoringApplicable,
+                    last_witness_date: latestWitness?.performed_date ?? null,
+                    due_date: witnessDueDate,
+                    status: witnessStatus,
+                    frequency_years: 3,
+                },
+                current_cycle_coverage: {
+                    audit_report_review_12m: hasReportReview12m,
+                    customer_or_market_feedback_12m: hasFeedback12m,
+                    witness_current: witnessCurrent,
+                    documented_follow_up_complete:
+                        !auditorMonitoringApplicable ||
+                        (witnessCurrent && hasReportReview12m && hasFeedback12m),
+                    ems_auditor: emsAuditor,
+                    ems_required_methods_met:
+                        !emsAuditor || (emsWitnessCurrent && hasEmsFeedback12m),
+                },
+                management_action_required:
+                    expert.training_records.some(
+                        (item) => item.effectiveness_result === 'UNSATISFACTORY',
+                    ) || expert.monitoring_records.some(
+                        (item) => item.status === 'COMPLETED' &&
+                            item.result === 'UNSATISFACTORY',
+                    ),
+            },
+        };
+    }
+
+    async createTraining(
+        expertId: string,
+        dto: CreateExpertTrainingDto,
+        actorId: string,
+    ) {
+        await this.getExpertOrThrow(expertId);
+        const competency = await this.assertCompetencyBelongsToExpert(
+            expertId,
+            dto.competency_id,
+        );
+        const startDate = this.parseDate(dto.start_date, 'Ngày bắt đầu đào tạo');
+        const endDate = dto.end_date
+            ? this.parseDate(dto.end_date, 'Ngày kết thúc đào tạo')
+            : null;
+        this.validateDateRange(
+            startDate,
+            endDate,
+            'Ngày bắt đầu đào tạo',
+            'Ngày kết thúc đào tạo',
+        );
+        const status = this.normalizeUpper(dto.status || 'PLANNED');
+
+        return this.prisma.expert_training_records.create({
+            data: {
+                expert_id: expertId,
+                competency_id: dto.competency_id ?? null,
+                training_type: this.normalizeUpper(dto.training_type),
+                title: dto.title.trim(),
+                provider: this.nullableText(dto.provider),
+                delivery_mode: dto.delivery_mode
+                    ? this.normalizeUpper(dto.delivery_mode)
+                    : null,
+                management_system: this.nullableText(
+                    competency?.management_system ?? dto.management_system,
+                )?.toUpperCase() ?? null,
+                standard_code: this.nullableText(
+                    competency?.standard_code ?? dto.standard_code,
+                )?.toUpperCase() ?? null,
+                start_date: startDate!,
+                end_date: endDate,
+                duration_hours: dto.duration_hours ?? null,
+                status,
+                completion_result: status === 'COMPLETED'
+                    ? this.nullableText(dto.completion_result) ?? 'COMPLETED'
+                    : null,
+                certificate_number: this.nullableText(dto.certificate_number),
+                note: this.nullableText(dto.note),
+                created_by: actorId,
+            },
+        });
+    }
+
+    async evaluateTraining(
+        expertId: string,
+        trainingId: string,
+        dto: EvaluateExpertTrainingDto,
+        actorId: string,
+    ) {
+        const record = await this.prisma.expert_training_records.findFirst({
+            where: { id: trainingId, expert_id: expertId },
+        });
+        if (!record) {
+            throw new NotFoundException('Không tìm thấy hồ sơ đào tạo');
+        }
+        if (record.status === 'CANCELLED') {
+            throw new BadRequestException(
+                'Không thể đánh giá hiệu quả đối với kế hoạch đào tạo đã hủy',
+            );
+        }
+
+        return this.prisma.expert_training_records.update({
+            where: { id: trainingId },
+            data: {
+                status: 'COMPLETED',
+                completion_result: record.completion_result ?? 'COMPLETED',
+                effectiveness_method: this.normalizeUpper(dto.method),
+                effectiveness_result: this.normalizeUpper(dto.result),
+                effectiveness_score: dto.score ?? null,
+                effectiveness_comment: this.nullableText(dto.comment),
+                evaluated_by: actorId,
+                evaluated_at: new Date(),
+            },
+        });
+    }
+
+    async cancelTraining(
+        expertId: string,
+        trainingId: string,
+        reason: string,
+        actorId: string,
+    ) {
+        const record = await this.prisma.expert_training_records.findFirst({
+            where: { id: trainingId, expert_id: expertId },
+        });
+        if (!record) {
+            throw new NotFoundException('Không tìm thấy hồ sơ đào tạo');
+        }
+        if (record.status === 'COMPLETED') {
+            throw new BadRequestException(
+                'Không thể hủy hồ sơ đào tạo đã hoàn thành',
+            );
+        }
+        if (record.status === 'CANCELLED') return record;
+
+        return this.prisma.expert_training_records.update({
+            where: { id: trainingId },
+            data: {
+                status: 'CANCELLED',
+                cancelled_by: actorId,
+                cancelled_at: new Date(),
+                cancellation_reason: reason.trim(),
+            },
+        });
+    }
+
+    async createMonitoring(
+        expertId: string,
+        dto: CreateExpertMonitoringDto,
+        actorId: string,
+    ) {
+        await this.getExpertOrThrow(expertId);
+        const competency = await this.assertCompetencyBelongsToExpert(
+            expertId,
+            dto.competency_id,
+        );
+        await this.assertAuditPlanAssignedToExpert(expertId, dto.audit_plan_id);
+        if (dto.assessor_user_id) {
+            await this.getAccountOrThrow(dto.assessor_user_id);
+        }
+        const plannedDate = this.parseDate(
+            dto.planned_date,
+            'Ngày dự kiến giám sát',
+        );
+        const dueDate = dto.due_date
+            ? this.parseDate(dto.due_date, 'Hạn giám sát')
+            : null;
+        this.validateDateRange(
+            plannedDate,
+            dueDate,
+            'Ngày dự kiến giám sát',
+            'Hạn giám sát',
+        );
+
+        return this.prisma.expert_monitoring_records.create({
+            data: {
+                expert_id: expertId,
+                competency_id: dto.competency_id ?? null,
+                monitoring_method: this.normalizeUpper(dto.monitoring_method),
+                monitoring_content: dto.monitoring_content.trim(),
+                plan_type: this.normalizeUpper(dto.plan_type || 'SCHEDULED'),
+                planned_date: plannedDate!,
+                due_date: dueDate,
+                management_system: this.nullableText(
+                    competency?.management_system ?? dto.management_system,
+                )?.toUpperCase() ?? null,
+                standard_code: this.nullableText(
+                    competency?.standard_code ?? dto.standard_code,
+                )?.toUpperCase() ?? null,
+                audit_plan_id: dto.audit_plan_id ?? null,
+                assessor_user_id: dto.assessor_user_id ?? null,
+                status: 'PLANNED',
+                created_by: actorId,
+            },
+        });
+    }
+
+    async completeMonitoring(
+        expertId: string,
+        monitoringId: string,
+        dto: CompleteExpertMonitoringDto,
+        actorId: string,
+    ) {
+        const record = await this.prisma.expert_monitoring_records.findFirst({
+            where: { id: monitoringId, expert_id: expertId },
+        });
+        if (!record) {
+            throw new NotFoundException('Không tìm thấy hồ sơ giám sát năng lực');
+        }
+        if (record.status === 'CANCELLED') {
+            throw new BadRequestException(
+                'Không thể hoàn tất kế hoạch giám sát đã hủy',
+            );
+        }
+        if (record.status === 'COMPLETED') {
+            throw new BadRequestException('Hồ sơ giám sát đã hoàn tất');
+        }
+
+        const performedDate = this.parseDate(
+            dto.performed_date,
+            'Ngày thực hiện giám sát',
+        );
+        const nextMonitoringDate = dto.next_monitoring_date
+            ? this.parseDate(dto.next_monitoring_date, 'Ngày giám sát tiếp theo')
+            : null;
+        this.validateDateRange(
+            performedDate,
+            nextMonitoringDate,
+            'Ngày thực hiện giám sát',
+            'Ngày giám sát tiếp theo',
+        );
+        const result = this.normalizeUpper(dto.result);
+        if (
+            result !== 'SATISFACTORY' &&
+            !this.nullableText(dto.required_action)
+        ) {
+            throw new BadRequestException(
+                'Kết quả cần cải tiến/không đạt phải có hành động yêu cầu',
+            );
+        }
+
+        const witnessItems = dto.witness_items ?? [];
+        if (record.monitoring_method === 'WITNESS' && witnessItems.length === 0) {
+            throw new BadRequestException(
+                'Đánh giá chứng kiến phải có kết quả tiêu chí F.09',
+            );
+        }
+        if (record.monitoring_method !== 'WITNESS' && witnessItems.length > 0) {
+            throw new BadRequestException(
+                'Tiêu chí F.09 chỉ áp dụng cho phương pháp đánh giá chứng kiến',
+            );
+        }
+        const criterionCodes = new Set(
+            witnessItems.map((item) => item.criterion_code.trim().toUpperCase()),
+        );
+        if (criterionCodes.size !== witnessItems.length) {
+            throw new BadRequestException(
+                'Tiêu chí đánh giá chứng kiến không được trùng mã',
+            );
+        }
+        let score = dto.score ?? null;
+        if (record.monitoring_method === 'WITNESS' && score === null) {
+            const numericRatings = witnessItems
+                .map((item) => Number(item.rating))
+                .filter((value) => Number.isFinite(value));
+            score = numericRatings.length
+                ? Number((
+                    numericRatings.reduce((sum, value) => sum + value, 0) /
+                    numericRatings.length /
+                    4 * 100
+                ).toFixed(2))
+                : null;
+        }
+
+        return this.prisma.$transaction(async (tx) => {
+            const updated = await tx.expert_monitoring_records.update({
+                where: { id: monitoringId },
+                data: {
+                    status: 'COMPLETED',
+                    performed_date: performedDate!,
+                    assessor_user_id: record.assessor_user_id ?? actorId,
+                    result,
+                    score,
+                    summary: this.nullableText(dto.summary),
+                    finding: this.nullableText(dto.finding),
+                    required_action: this.nullableText(dto.required_action),
+                    next_monitoring_date: nextMonitoringDate,
+                    completed_by: actorId,
+                },
+            });
+
+            if (witnessItems.length > 0) {
+                await tx.expert_witness_assessment_items.createMany({
+                    data: witnessItems.map((item) => ({
+                        monitoring_id: monitoringId,
+                        criterion_code: item.criterion_code.trim().toUpperCase(),
+                        criterion_label: item.criterion_label.trim(),
+                        rating: item.rating,
+                        comment: this.nullableText(item.comment),
+                    })),
+                });
+            }
+
+            return tx.expert_monitoring_records.findUniqueOrThrow({
+                where: { id: monitoringId },
+                include: { witness_items: true },
+            });
+        });
+    }
+
+    async cancelMonitoring(
+        expertId: string,
+        monitoringId: string,
+        reason: string,
+        actorId: string,
+    ) {
+        const record = await this.prisma.expert_monitoring_records.findFirst({
+            where: { id: monitoringId, expert_id: expertId },
+        });
+        if (!record) {
+            throw new NotFoundException('Không tìm thấy hồ sơ giám sát năng lực');
+        }
+        if (record.status === 'COMPLETED') {
+            throw new BadRequestException(
+                'Không thể hủy hồ sơ giám sát đã hoàn tất',
+            );
+        }
+        if (record.status === 'CANCELLED') return record;
+
+        return this.prisma.expert_monitoring_records.update({
+            where: { id: monitoringId },
+            data: {
+                status: 'CANCELLED',
+                cancelled_by: actorId,
+                cancelled_at: new Date(),
+                cancellation_reason: reason.trim(),
+            },
+        });
+    }
+
+    getResourceCustomers() {
+        return this.resourceGovernance.listCustomers();
+    }
+
+    getResourceGovernance(
+        expertId: string,
+        startDate?: string,
+        endDate?: string,
+        includeSensitiveDetails = false,
+    ) {
+        return this.resourceGovernance.getOverview(
+            expertId,
+            startDate,
+            endDate,
+            includeSensitiveDetails,
+        );
+    }
+
+    createAvailability(
+        expertId: string,
+        dto: CreateExpertAvailabilityDto,
+        actorId: string,
+    ) {
+        return this.resourceGovernance.createAvailability(expertId, dto, actorId);
+    }
+
+    cancelAvailability(
+        expertId: string,
+        recordId: string,
+        dto: CancelExpertResourceRecordDto,
+        actorId: string,
+    ) {
+        return this.resourceGovernance.cancelAvailability(
+            expertId,
+            recordId,
+            dto,
+            actorId,
+        );
+    }
+
+    declareConflict(
+        expertId: string,
+        dto: CreateExpertCustomerConflictDto,
+        actorId: string,
+    ) {
+        return this.resourceGovernance.declareConflict(expertId, dto, actorId);
+    }
+
+    reviewConflict(
+        expertId: string,
+        conflictId: string,
+        dto: ReviewExpertCustomerConflictDto,
+        actorId: string,
+    ) {
+        return this.resourceGovernance.reviewConflict(
+            expertId,
+            conflictId,
+            dto,
+            actorId,
+        );
+    }
+
+    cancelConflict(
+        expertId: string,
+        conflictId: string,
+        dto: CancelExpertResourceRecordDto,
+        actorId: string,
+    ) {
+        return this.resourceGovernance.cancelConflict(
+            expertId,
+            conflictId,
+            dto,
+            actorId,
+        );
+    }
+
     async recommendForPlan(planId: string, teamRole: string) {
         const requiredRoles = this.resolveCompetencyRoles(teamRole);
         const plan = await this.prisma.audit_plans.findUnique({
@@ -582,6 +1438,26 @@ export class ExpertsService {
                         },
                     },
                 },
+                audit_team_appointment: {
+                    select: {
+                        id: true,
+                        members: {
+                            select: {
+                                expert_id: true,
+                                team_role: true,
+                                experts: {
+                                    select: {
+                                        competencies: {
+                                            where: {
+                                                approval_status: 'APPROVED',
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
             },
         });
 
@@ -598,6 +1474,8 @@ export class ExpertsService {
         const requiredScopes = plan.certification_projects.industry_scopes.map(
             (scope) => ({
                 project_scope_id: scope.id,
+                management_system: scope.management_system,
+                standard_code: scope.standard_code,
                 iaf_code: scope.nace_iaf_mapping.iaf_scope.iaf_code,
                 iaf_name: scope.nace_iaf_mapping.iaf_scope.iaf_name,
                 nace_code: scope.isic_nace_mapping.target_code.code,
@@ -606,6 +1484,41 @@ export class ExpertsService {
                 scope_description: scope.scope_description,
             }),
         );
+        const customerId = plan.certification_projects
+            .certification_applications.customer_id;
+
+        const scopeCoveredBy = (
+            competencies: Array<{
+                management_system: string;
+                standard_code: string;
+                competency_role: string;
+                scope_level: string;
+                iaf_code: string;
+                nace_code: string | null;
+                effective_date: Date;
+                expiry_date: Date | null;
+            }>,
+            role: string,
+            scope: (typeof requiredScopes)[number],
+        ) => competencies.some((item) =>
+            this.resolveCompetencyRoles(role).includes(this.normalizeUpper(item.competency_role))
+            && this.normalizeUpper(item.management_system) === this.normalizeUpper(scope.management_system)
+            && this.normalizeUpper(item.standard_code) === this.normalizeUpper(scope.standard_code)
+            && item.effective_date <= startDate
+            && (!item.expiry_date || item.expiry_date >= endDate)
+            && this.normalizeUpper(item.iaf_code) === this.normalizeUpper(scope.iaf_code)
+            && (
+                this.normalizeUpper(item.scope_level) === 'IAF'
+                || this.normalizeUpper(item.nace_code) === this.normalizeUpper(scope.nace_code)
+            ),
+        );
+        const currentMembers = plan.audit_team_appointment?.members ?? [];
+        const coveredByCurrentTeam = new Set(requiredScopes.filter((scope) => currentMembers.some(
+            (member) => scopeCoveredBy(member.experts.competencies, member.team_role, scope),
+        )).map((scope) => scope.project_scope_id));
+        const missingBeforeRecommendation = requiredScopes.filter(
+            (scope) => !coveredByCurrentTeam.has(scope.project_scope_id),
+        );
 
         const experts = await this.prisma.experts.findMany({
             where: {
@@ -613,19 +1526,6 @@ export class ExpertsService {
                 profile_status: 'APPROVED',
                 user_id: { not: null },
                 user_account: { is: { status: 'active' } },
-                competencies: {
-                    some: {
-                        management_system: managementSystem,
-                        standard_code: standardCode,
-                        competency_role: { in: requiredRoles },
-                        approval_status: 'APPROVED',
-                        effective_date: { lte: startDate },
-                        OR: [
-                            { expiry_date: null },
-                            { expiry_date: { gte: endDate } },
-                        ],
-                    },
-                },
             },
             orderBy: { full_name: 'asc' },
             include: {
@@ -639,8 +1539,6 @@ export class ExpertsService {
                 },
                 competencies: {
                     where: {
-                        management_system: managementSystem,
-                        standard_code: standardCode,
                         competency_role: { in: requiredRoles },
                         approval_status: 'APPROVED',
                         effective_date: { lte: startDate },
@@ -648,49 +1546,57 @@ export class ExpertsService {
                             { expiry_date: null },
                             { expiry_date: { gte: endDate } },
                         ],
-                    },
-                },
-                audit_team_members: {
-                    where: {
-                        planned_start_date: { lte: endDate },
-                        planned_end_date: { gte: startDate },
-                        assignment_status: { not: 'cancelled' },
-                        audit_team_appointments: {
-                            audit_plan_id: { not: planId },
-                            status: { in: ['draft', 'issued'] },
-                        },
-                    },
-                    include: {
-                        audit_team_appointments: {
-                            include: {
-                                audit_plans: {
-                                    select: {
-                                        id: true,
-                                        plan_code: true,
-                                    },
-                                },
-                            },
-                        },
+                        ...(requiredScopes.length ? {
+                            AND: [{
+                                OR: requiredScopes.map((scope) => ({
+                                    management_system: scope.management_system,
+                                    standard_code: scope.standard_code,
+                                })),
+                            }],
+                        } : {
+                            management_system: managementSystem,
+                            standard_code: standardCode,
+                        }),
                     },
                 },
             },
         });
 
+        const resourceByExpert = await this.resourceGovernance.evaluateMany(
+            experts.map((expert) => expert.id),
+            startDate,
+            endDate,
+            {
+                customerId,
+                includeAssignments: true,
+                excludeAppointmentId: plan.audit_team_appointment?.id,
+            },
+        );
+
         const priority: Record<string, number> = {
             ELIGIBLE: 1,
-            SCHEDULE_CONFLICT: 2,
+            OTHER_COMMITMENT: 2,
             INSUFFICIENT_SCOPE: 3,
+            COMPETENCY_NOT_ELIGIBLE: 4,
+            DATE_CONFLICT: 5,
+            LEAVE: 6,
+            UNAVAILABLE: 7,
+            INDEPENDENCE_CONFLICT: 8,
         };
 
         const recommendations = experts.map((expert) => {
             const scopeMatches = requiredScopes.map((scope) => {
                 const competency = expert.competencies.find((item) => {
+                    const programMatches = this.normalizeUpper(item.management_system) ===
+                        this.normalizeUpper(scope.management_system) &&
+                        this.normalizeUpper(item.standard_code) ===
+                        this.normalizeUpper(scope.standard_code);
                     const iafMatches = this.normalizeUpper(item.iaf_code) ===
                         this.normalizeUpper(scope.iaf_code);
                     const naceMatches = this.normalizeUpper(item.scope_level) === 'IAF' ||
                         this.normalizeUpper(item.nace_code) ===
                         this.normalizeUpper(scope.nace_code);
-                    return iafMatches && naceMatches;
+                    return programMatches && iafMatches && naceMatches;
                 });
 
                 return {
@@ -700,29 +1606,62 @@ export class ExpertsService {
                 };
             });
             const covered = scopeMatches.filter((item) => item.qualified).length;
-            const scopeComplete = requiredScopes.length === 0 ||
-                covered === requiredScopes.length;
-            const hasConflict = expert.audit_team_members.length > 0;
-            const matchStatus = hasConflict
-                ? 'SCHEDULE_CONFLICT'
-                : scopeComplete
-                    ? 'ELIGIBLE'
-                    : 'INSUFFICIENT_SCOPE';
-            const reasons: string[] = [];
+            const contributedScopes = scopeMatches.filter((item) => item.qualified
+                && !coveredByCurrentTeam.has(item.project_scope_id));
+            const programAndRole = expert.competencies.length > 0;
+            const addsNeededCoverage = missingBeforeRecommendation.length === 0
+                || contributedScopes.length > 0;
+            const resource = resourceByExpert.get(expert.id)!;
+            const eligibilityReasons = [...resource.reasons];
 
-            if (!scopeComplete) {
-                reasons.push(
-                    `Đáp ứng ${covered}/${requiredScopes.length} phạm vi yêu cầu`,
-                );
+            if (!programAndRole) {
+                eligibilityReasons.unshift({
+                    code: 'COMPETENCY_NOT_ELIGIBLE',
+                    message: 'Chưa có competency hiệu lực phù hợp với chương trình và vai trò.',
+                    severity: 'BLOCK' as const,
+                });
             }
 
-            if (hasConflict) {
-                reasons.push('Trùng lịch với phân công khác');
+            if (!addsNeededCoverage) {
+                eligibilityReasons.push({
+                    code: 'NO_TEAM_COVERAGE_CONTRIBUTION',
+                    message: 'Ứng viên không bổ sung phạm vi nào mà đoàn hiện còn thiếu.',
+                    severity: 'BLOCK' as const,
+                });
             }
 
-            if (scopeComplete && !hasConflict) {
-                reasons.push('Đúng chương trình, vai trò, phạm vi và không trùng lịch');
+            if (currentMembers.some((member) => member.expert_id === expert.id)) {
+                eligibilityReasons.push({
+                    code: 'ALREADY_ASSIGNED',
+                    message: 'Chuyên gia đã thuộc đoàn hiện tại.',
+                    severity: 'BLOCK' as const,
+                });
             }
+
+            const eligible = programAndRole && addsNeededCoverage && resource.eligible
+                && !currentMembers.some((member) => member.expert_id === expert.id);
+            const firstBlock = eligibilityReasons.find(
+                (reason) => reason.severity === 'BLOCK',
+            );
+            const firstWarning = eligibilityReasons.find(
+                (reason) => reason.severity === 'WARNING',
+            );
+            const matchStatus = firstBlock?.code ??
+                firstWarning?.code ??
+                'ELIGIBLE';
+            const reasons = eligibilityReasons.length
+                ? eligibilityReasons.map((reason) => reason.message)
+                : ['Đúng chương trình, vai trò, phạm vi, nguồn lực và independence.'];
+
+            const scoreComponents = {
+                role_competency: programAndRole ? 30 : 0,
+                missing_coverage_contribution: missingBeforeRecommendation.length
+                    ? Math.round(40 * contributedScopes.length / missingBeforeRecommendation.length)
+                    : 40,
+                resource_eligibility: resource.eligible ? 20 : 0,
+                no_warning_bonus: eligibilityReasons.some((reason) => reason.severity === 'WARNING') ? 0 : 10,
+            };
+            const score = Object.values(scoreComponents).reduce((sum, value) => sum + value, 0);
 
             return {
                 expert: {
@@ -736,39 +1675,64 @@ export class ExpertsService {
                 },
                 team_role: this.normalizeUpper(teamRole),
                 required_competency_roles: requiredRoles,
+                eligible,
                 match_status: matchStatus,
                 reasons,
+                eligibility_reasons: eligibilityReasons,
                 checks: {
                     account_linked: Boolean(expert.user_id),
                     profile_approved: expert.profile_status === 'APPROVED',
-                    program_and_role: expert.competencies.length > 0,
-                    scope_complete: scopeComplete,
-                    schedule_available: !hasConflict,
+                    program_and_role: programAndRole,
+                    scope_complete: missingBeforeRecommendation.length === contributedScopes.length,
+                    adds_needed_team_coverage: addsNeededCoverage,
+                    schedule_available: !resource.reasons.some(
+                        (reason) => reason.code === 'DATE_CONFLICT',
+                    ),
+                    availability_available: !resource.reasons.some(
+                        (reason) => ['UNAVAILABLE', 'LEAVE'].includes(reason.code),
+                    ),
+                    independence_eligible: !resource.reasons.some(
+                        (reason) => reason.code === 'INDEPENDENCE_CONFLICT',
+                    ),
+                    capacity_exceeded: resource.workload.capacity_exceeded,
                 },
                 coverage: {
                     covered,
                     total: requiredScopes.length,
+                    currently_missing: missingBeforeRecommendation.length,
+                    contribution_count: contributedScopes.length,
+                    contribution_scope_ids: contributedScopes.map((scope) => scope.project_scope_id),
                     scopes: scopeMatches,
                 },
                 availability: {
-                    available: !hasConflict,
-                    conflicts: expert.audit_team_members.map((member) => ({
-                        plan_id: member.audit_team_appointments.audit_plans.id,
-                        plan_code: member.audit_team_appointments.audit_plans.plan_code,
-                        start_date: member.planned_start_date,
-                        end_date: member.planned_end_date,
+                    available: resource.eligible,
+                    conflicts: resource.assignments,
+                    periods: resource.availability_periods.map((period) => ({
+                        id: period.id,
+                        availability_type: period.availability_type,
+                        start_datetime: period.start_datetime,
+                        end_datetime: period.end_datetime,
+                        status: period.status,
                     })),
                 },
-                competencies: expert.competencies,
+                workload: resource.workload,
+                score,
+                score_components: scoreComponents,
             };
         }).sort((left, right) => {
-            const byStatus = priority[left.match_status] - priority[right.match_status];
-            return byStatus !== 0
-                ? byStatus
-                : left.expert.full_name.localeCompare(
+            if (left.eligible !== right.eligible) return Number(right.eligible) - Number(left.eligible);
+            const byStatus = (priority[left.match_status] ?? 20) -
+                (priority[right.match_status] ?? 20);
+            if (byStatus !== 0) return byStatus;
+            if (right.score !== left.score) return right.score - left.score;
+            if (left.workload.assigned_mandays !== right.workload.assigned_mandays) {
+                return left.workload.assigned_mandays - right.workload.assigned_mandays;
+            }
+            const byName = left.expert.full_name.localeCompare(
                     right.expert.full_name,
                     'vi',
                 );
+            return byName || left.expert.id.localeCompare(right.expert.id);
         });
 
         return {
@@ -785,6 +1749,12 @@ export class ExpertsService {
                     .certification_applications.customers.company_name,
             },
             required_scopes: requiredScopes,
+            team_context: {
+                appointment_id: plan.audit_team_appointment?.id ?? null,
+                current_member_count: currentMembers.length,
+                covered_scope_ids: [...coveredByCurrentTeam],
+                missing_scope_ids: missingBeforeRecommendation.map((scope) => scope.project_scope_id),
+            },
             recommendations,
         };
     }

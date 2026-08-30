@@ -24,6 +24,8 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { ApplicationReviewsService } from './application-reviews.service';
 import { CreateApplicationReviewDto } from './dto/create-application-review.dto';
@@ -45,6 +47,7 @@ type AuthenticatedRequest = {
 export class ApplicationReviewsController {
     constructor(
         private readonly applicationReviewsService: ApplicationReviewsService,
+        private readonly actionAuthorization: ActionAuthorizationService,
     ) { }
 
     private currentUser(request: AuthenticatedRequest) {
@@ -106,12 +109,31 @@ export class ApplicationReviewsController {
     @Permissions('applications.review')
     @ApiOperation({ summary: 'Reviewer phê duyệt hoặc trả lại bản xem xét đăng ký' })
     @ApiOkResponse({ description: 'Đã cập nhật quyết định của reviewer' })
-    review(
+    async review(
         @Param('id', ParseUUIDPipe) id: string,
         @Body() dto: ReviewApplicationReviewDto,
         @Req() request: AuthenticatedRequest,
     ) {
         const currentUser = this.currentUser(request);
+        const authorization =
+            await this.applicationReviewsService.getReviewAuthorizationContext(id);
+
+        await this.actionAuthorization.assertCanPerformAction({
+            user: {
+                userId: currentUser.id,
+                roles: currentUser.roles,
+            },
+            actionCode: WORK_ITEM_ACTIONS.APPLICATION_REVIEW,
+            resource: {
+                entityType: 'application_review',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: authorization.reviewerId,
+            },
+            workflowState: authorization.workflowState,
+        });
+
         return this.applicationReviewsService.review(
             id,
             dto,

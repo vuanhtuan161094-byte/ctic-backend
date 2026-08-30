@@ -34,6 +34,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 
 import { CreateNotificationDto } from './dto/create-notification.dto';
+import { UpdateNotificationPreferenceDto } from './dto/update-notification-preference.dto';
 import { NotificationsService } from './notifications.service';
 
 interface AuthenticatedUser {
@@ -55,8 +56,10 @@ const INTERNAL_ROLES = [
     'COORDINATOR',
     'LEAD_AUDITOR',
     'AUDITOR',
+    'TECHNICAL_EXPERT',
     'TECHNICAL_REVIEWER',
     'DECISION_MAKER',
+    'CUSTOMER',
 ];
 
 @Controller('notifications')
@@ -155,8 +158,14 @@ export class NotificationsController {
     @ApiQuery({
         name: 'status',
         required: false,
-        enum: ['unread', 'read', 'resolved'],
+        enum: ['all', 'unread', 'read', 'resolved'],
         example: 'unread',
+    })
+    @ApiQuery({ name: 'category', required: false, type: String })
+    @ApiQuery({
+        name: 'severity',
+        required: false,
+        enum: ['INFO', 'NORMAL', 'WARNING', 'CRITICAL'],
     })
     @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
     @ApiOkResponse({ description: 'Danh sách thông báo của người dùng' })
@@ -169,13 +178,61 @@ export class NotificationsController {
         @Query('status')
         status?: string,
 
+        @Query('category')
+        category?: string,
+
+        @Query('severity')
+        severity?: string,
+
         @Query('limit')
         limit?: string,
     ): Promise<unknown> {
         return this.notificationsService.findForUser(
             request.user.userId,
-            status,
-            Number(limit ?? 50),
+            {
+                status,
+                category,
+                severity,
+                limit:
+                    Number(limit ?? 50),
+            },
+        );
+    }
+
+    @Get('me/preferences')
+    @ApiOperation({ summary: 'Lấy lựa chọn nhận thông báo của tài khoản hiện tại' })
+    @ApiOkResponse({ description: 'Lựa chọn IN_APP và nền tảng EMAIL tương lai' })
+    @Roles(...INTERNAL_ROLES)
+    @Permissions('notifications.read')
+    getMyPreferences(
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.notificationsService.getPreferences(
+            request.user.userId,
+        );
+    }
+
+    @Patch('me/preferences/:category')
+    @ApiOperation({ summary: 'Cập nhật lựa chọn thông báo trong ứng dụng' })
+    @ApiParam({ name: 'category' })
+    @ApiOkResponse({ description: 'Lựa chọn đã cập nhật' })
+    @Roles(...INTERNAL_ROLES)
+    @Permissions('notifications.read')
+    updateMyPreference(
+        @Param('category')
+        category: string,
+
+        @Body()
+        dto: UpdateNotificationPreferenceDto,
+
+        @Req()
+        request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.notificationsService.setInAppPreference(
+            request.user.userId,
+            category,
+            dto.enabled,
         );
     }
 

@@ -36,6 +36,7 @@ import type { SecurityRequest } from '../security/security-request';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { CreateCustomerPortalUserDto } from './dto/create-customer-portal-user.dto';
 
 @Controller('customers')
 @ApiTags('02. Khách hàng')
@@ -88,6 +89,66 @@ export class CustomersController {
     })
     findAll() {
         return this.customersService.findAll();
+    }
+
+    @Post(':id/portal-users')
+    @Roles('ADMIN')
+    @Permissions('customer_user_requests.review')
+    @ApiOperation({
+        summary: 'Tạo hoặc liên kết tài khoản Portal cho khách hàng',
+        description: 'Tạo trực tiếp tài khoản CUSTOMER cho một khách hàng đang hoạt động. Nếu email đã thuộc tài khoản CUSTOMER hợp lệ, hệ thống chỉ liên kết hoặc khôi phục quyền truy cập. Mật khẩu ban đầu chỉ được trả về một lần khi tài khoản mới được tạo.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'Customer UUID',
+    })
+    @ApiCreatedResponse({
+        description: 'Tài khoản Portal đã được tạo/liên kết',
+    })
+    provisionPortalUser(
+        @Param('id', ParseUUIDPipe)
+        id: string,
+
+        @Body()
+        dto: CreateCustomerPortalUserDto,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        return this.customersService
+            .provisionPortalUser(
+                id,
+                dto,
+                this.actorUserId(request),
+            );
+    }
+
+    @Post(':id/portal-users/:userId/reset-password')
+    @Roles('ADMIN')
+    @Permissions('customer_user_requests.review')
+    @ApiOperation({
+        summary: 'Tạo mật khẩu mới cho tài khoản Portal khách hàng',
+        description: 'Chỉ áp dụng cho tài khoản CUSTOMER đã liên kết với khách hàng này. Mật khẩu mới chỉ được trả về một lần.',
+    })
+    @ApiParam({ name: 'id', description: 'Customer UUID' })
+    @ApiParam({ name: 'userId', description: 'CUSTOMER user UUID' })
+    @ApiOkResponse({ description: 'Đã tạo mật khẩu mới' })
+    resetPortalUserPassword(
+        @Param('id', ParseUUIDPipe)
+        id: string,
+
+        @Param('userId', ParseUUIDPipe)
+        userId: string,
+
+        @Req()
+        request: SecurityRequest,
+    ) {
+        return this.customersService
+            .resetPortalUserPassword(
+                id,
+                userId,
+                this.actorUserId(request),
+            );
     }
 
     @Get(':id/user-access')
@@ -182,11 +243,15 @@ export class CustomersController {
 
         @Param('userId', ParseUUIDPipe)
         userId: string,
+
+        @Req()
+        request: SecurityRequest,
     ) {
         return this.customersService
             .revokeUserAccess(
                 id,
                 userId,
+                this.actorUserId(request),
             );
     }
 

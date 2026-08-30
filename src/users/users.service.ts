@@ -1,9 +1,12 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
+
+import { Prisma } from '@prisma/client';
 
 import * as bcrypt from 'bcrypt';
 
@@ -16,6 +19,9 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { CreatePermissionDto } from './dto/create-permission.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRolePermissionsDto } from './dto/update-role-permissions.dto';
+import { UpdateUserPermissionOverridesDto } from './dto/update-user-permission-overrides.dto';
+
+import { resolveEffectivePermissionProfile } from '../auth/effective-permissions';
 
 interface UserRecord {
     id: string;
@@ -44,6 +50,17 @@ interface UserRecord {
 
 @Injectable()
 export class UsersService {
+    private readonly supportedInternalRoles = new Set([
+        'ADMIN',
+        'STAFF',
+        'SALES',
+        'COORDINATOR',
+        'LEAD_AUDITOR',
+        'AUDITOR',
+        'TECHNICAL_EXPERT',
+        'TECHNICAL_REVIEWER',
+        'DECISION_MAKER',
+    ]);
     private readonly userSelect = {
         id: true,
         username: true,
@@ -80,6 +97,37 @@ export class UsersService {
         return value
             .trim()
             .toUpperCase();
+    }
+
+    private normalizePermissionName(
+        value: string,
+    ) {
+        return value
+            .trim()
+            .toLowerCase();
+    }
+
+    private getRolePermissionNames(
+        user: UserRecord,
+    ) {
+        return Array.from(
+            new Set(
+                user.user_roles.flatMap(
+                    (userRole) =>
+                        userRole
+                            .roles
+                            .role_permissions
+                            .map(
+                                (rolePermission) =>
+                                    this.normalizePermissionName(
+                                        rolePermission
+                                            .permissions
+                                            .permission_name,
+                                    ),
+                            ),
+                ),
+            ),
+        ).sort();
     }
 
     private formatUser(
@@ -190,6 +238,18 @@ export class UsersService {
         ) {
             throw new BadRequestException(
                 'Phải chọn ít nhất một vai trò',
+            );
+        }
+
+        const unsupportedRoles = requestedRoleNames.filter(
+            (roleName) => !this.supportedInternalRoles.has(roleName),
+        );
+
+        if (unsupportedRoles.length > 0) {
+            throw new BadRequestException(
+                unsupportedRoles.includes('CUSTOMER')
+                    ? 'Vai trò CUSTOMER chỉ được cấp qua quy trình customer access Phase 3.2B'
+                    : `Vai trò không thuộc authority được hỗ trợ trong code: ${unsupportedRoles.join(', ')}`,
             );
         }
 
@@ -346,6 +406,525 @@ export class UsersService {
         );
     }
 
+    async getPermissionProfile(
+        id: string,
+    ) {
+        const user =
+            await this.prisma.users.findUnique({
+                where: {
+                    id,
+                },
+
+                select: {
+                    id:
+                        true,
+
+                    user_roles: {
+                        include: {
+                            roles: {
+                                include: {
+                                    role_permissions: {
+                                        include: {
+                                            permissions:
+                                                true,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+
+                    permission_overrides: {
+                        include: {
+                            permission:
+                                true,
+
+                            changed_by_user: {
+                                select: {
+                                    id:
+                                        true,
+
+                                    username:
+                                        true,
+
+                                    full_name:
+                                        true,
+                                },
+                            },
+                        },
+
+                        orderBy: [
+                            {
+                                effect:
+                                    'asc',
+                            },
+                            {
+                                updated_at:
+                                    'desc',
+                            },
+                        ],
+                    },
+                },
+            });
+
+        if (!user) {
+            throw new NotFoundException(
+                'Không tìm thấy tài khoản',
+            );
+        }
+
+        const roleNames =
+            user.user_roles.map(
+                (userRole) =>
+                    this.normalizeRoleName(
+                        userRole
+                            .roles
+                            .role_name,
+                    ),
+            );
+
+        const basePermissions =
+            user.user_roles.flatMap(
+                (userRole) =>
+                    userRole
+                        .roles
+                        .role_permissions
+                        .map(
+                            (rolePermission) =>
+                                rolePermission
+                                    .permissions
+                                    .permission_name,
+                        ),
+            );
+
+        const permissionProfile =
+            resolveEffectivePermissionProfile(
+                basePermissions,
+                user.permission_overrides.map(
+                    (override) => ({
+                        permission_name:
+                            override
+                                .permission
+                                .permission_name,
+
+                        effect:
+                            override.effect,
+                    }),
+                ),
+            );
+
+        const hasAdminRole =
+            roleNames.includes(
+                'ADMIN',
+            );
+
+        const hasUnsupportedRole =
+            roleNames.some(
+                (roleName) =>
+                    !this.supportedInternalRoles.has(
+                        roleName,
+                    ),
+            );
+
+        return {
+            user_id:
+                user.id,
+
+            role_names:
+                roleNames,
+
+            base_permissions:
+                permissionProfile
+                    .base_permissions,
+
+            allow_overrides:
+                user.permission_overrides
+                    .filter(
+                        (override) =>
+                            override.effect ===
+                            'ALLOW',
+                    )
+                    .map(
+                        (override) => ({
+                            permission_name:
+                                override
+                                    .permission
+                                    .permission_name,
+
+                            reason:
+                                override.reason,
+
+                            changed_at:
+                                override.updated_at,
+
+                            changed_by:
+                                override.changed_by_user,
+                        }),
+                    ),
+
+            deny_overrides:
+                user.permission_overrides
+                    .filter(
+                        (override) =>
+                            override.effect ===
+                            'DENY',
+                    )
+                    .map(
+                        (override) => ({
+                            permission_name:
+                                override
+                                    .permission
+                                    .permission_name,
+
+                            reason:
+                                override.reason,
+
+                            changed_at:
+                                override.updated_at,
+
+                            changed_by:
+                                override.changed_by_user,
+                        }),
+                    ),
+
+            effective_permissions:
+                permissionProfile
+                    .effective_permissions,
+
+            can_override:
+                roleNames.length > 0 &&
+                !hasAdminRole &&
+                !hasUnsupportedRole,
+
+            restriction_reason:
+                hasAdminRole
+                    ? 'Vai trò Quản trị viên sử dụng authority toàn phần và không áp dụng quyền ngoại lệ theo tài khoản.'
+                    : hasUnsupportedRole
+                        ? 'Tài khoản có vai trò legacy/khách hàng; quyền được quản trị theo quy trình chuyên biệt và không chỉnh tại đây.'
+                        : roleNames.length === 0
+                            ? 'Tài khoản chưa có vai trò nội bộ hợp lệ.'
+                            : null,
+
+            role_scope_note:
+                'Quyền riêng chỉ tinh chỉnh quyền trong phạm vi vai trò và các ràng buộc phân tách nhiệm vụ hiện có; không thay thế vai trò nghiệp vụ.',
+        };
+    }
+
+    async replacePermissionOverrides(
+        id: string,
+        dto: UpdateUserPermissionOverridesDto,
+        actorUserId: string,
+    ) {
+        const currentUser =
+            await this.getUserOrThrow(
+                id,
+            );
+
+        const roleNames =
+            currentUser.user_roles.map(
+                (userRole) =>
+                    this.normalizeRoleName(
+                        userRole
+                            .roles
+                            .role_name,
+                    ),
+            );
+
+        if (
+            roleNames.includes(
+                'ADMIN',
+            )
+        ) {
+            throw new BadRequestException(
+                'Không áp dụng quyền riêng cho vai trò Quản trị viên',
+            );
+        }
+
+        const unsupportedRoles =
+            roleNames.filter(
+                (roleName) =>
+                    !this.supportedInternalRoles.has(
+                        roleName,
+                    ),
+            );
+
+        if (
+            roleNames.length === 0 ||
+            unsupportedRoles.length > 0
+        ) {
+            throw new BadRequestException(
+                'Chỉ có thể điều chỉnh quyền riêng cho tài khoản nội bộ thuộc authority hiện hành',
+            );
+        }
+
+        const allowPermissions =
+            Array.from(
+                new Set(
+                    dto.allow_permissions
+                        .map(
+                            (permission) =>
+                                this.normalizePermissionName(
+                                    permission,
+                                ),
+                        )
+                        .filter(Boolean),
+                ),
+            ).sort();
+
+        const denyPermissions =
+            Array.from(
+                new Set(
+                    dto.deny_permissions
+                        .map(
+                            (permission) =>
+                                this.normalizePermissionName(
+                                    permission,
+                                ),
+                        )
+                        .filter(Boolean),
+                ),
+            ).sort();
+
+        const overlap =
+            allowPermissions.filter(
+                (permission) =>
+                    denyPermissions.includes(
+                        permission,
+                    ),
+            );
+
+        if (overlap.length > 0) {
+            throw new BadRequestException(
+                `Một quyền không thể đồng thời được cấp thêm và thu hồi: ${overlap.join(', ')}`,
+            );
+        }
+
+        const basePermissions =
+            this.getRolePermissionNames(
+                currentUser,
+            );
+
+        const redundantAllows =
+            allowPermissions.filter(
+                (permission) =>
+                    basePermissions.includes(
+                        permission,
+                    ),
+            );
+
+        if (redundantAllows.length > 0) {
+            throw new BadRequestException(
+                `Quyền đã có sẵn từ vai trò, không cần cấp riêng: ${redundantAllows.join(', ')}`,
+            );
+        }
+
+        const invalidDenies =
+            denyPermissions.filter(
+                (permission) =>
+                    !basePermissions.includes(
+                        permission,
+                    ),
+            );
+
+        if (invalidDenies.length > 0) {
+            throw new BadRequestException(
+                `Chỉ có thể thu hồi quyền đang được cấp từ vai trò: ${invalidDenies.join(', ')}`,
+            );
+        }
+
+        const requestedPermissions =
+            Array.from(
+                new Set([
+                    ...allowPermissions,
+                    ...denyPermissions,
+                ]),
+            );
+
+        const permissionRecords =
+            requestedPermissions.length > 0
+                ? await this.prisma.permissions.findMany({
+                    where: {
+                        permission_name: {
+                            in:
+                                requestedPermissions,
+                        },
+                    },
+                })
+                : [];
+
+        const permissionMap =
+            new Map(
+                permissionRecords.map(
+                    (permission) => [
+                        this.normalizePermissionName(
+                            permission.permission_name,
+                        ),
+                        permission,
+                    ],
+                ),
+            );
+
+        const missingPermissions =
+            requestedPermissions.filter(
+                (permission) =>
+                    !permissionMap.has(
+                        permission,
+                    ),
+            );
+
+        if (missingPermissions.length > 0) {
+            throw new BadRequestException(
+                `Không tìm thấy quyền: ${missingPermissions.join(', ')}`,
+            );
+        }
+
+        const reason =
+            dto.reason
+                .trim();
+
+        if (reason.length < 3) {
+            throw new BadRequestException(
+                'Lý do điều chỉnh quyền tối thiểu 3 ký tự',
+            );
+        }
+
+        const beforeOverrides =
+            await this.prisma.user_permission_overrides.findMany({
+                where: {
+                    user_id:
+                        id,
+                },
+
+                include: {
+                    permission:
+                        true,
+                },
+            });
+
+        const beforeProfile =
+            resolveEffectivePermissionProfile(
+                basePermissions,
+                beforeOverrides.map(
+                    (override) => ({
+                        permission_name:
+                            override
+                                .permission
+                                .permission_name,
+
+                        effect:
+                            override.effect,
+                    }),
+                ),
+            );
+
+        const afterOverrides = [
+            ...allowPermissions.map(
+                (permission) => ({
+                    permission_name:
+                        permission,
+
+                    effect:
+                        'ALLOW',
+                }),
+            ),
+            ...denyPermissions.map(
+                (permission) => ({
+                    permission_name:
+                        permission,
+
+                    effect:
+                        'DENY',
+                }),
+            ),
+        ];
+
+        const afterProfile =
+            resolveEffectivePermissionProfile(
+                basePermissions,
+                afterOverrides,
+            );
+
+        await this.prisma.$transaction(
+            async (transaction) => {
+                await transaction.user_permission_overrides.deleteMany({
+                    where: {
+                        user_id:
+                            id,
+                    },
+                });
+
+                if (afterOverrides.length > 0) {
+                    await transaction.user_permission_overrides.createMany({
+                        data:
+                            afterOverrides.map(
+                                (override) => ({
+                                    user_id:
+                                        id,
+
+                                    permission_id:
+                                        permissionMap.get(
+                                            override.permission_name,
+                                        )!.id,
+
+                                    effect:
+                                        override.effect,
+
+                                    reason,
+
+                                    changed_by:
+                                        actorUserId,
+                                }),
+                            ),
+                    });
+                }
+
+                await transaction.audit_logs.create({
+                    data: {
+                        user_id:
+                            actorUserId,
+
+                        action:
+                            'USER_PERMISSION_OVERRIDES_UPDATED',
+
+                        entity_type:
+                            'user',
+
+                        entity_id:
+                            id,
+
+                        details_json: JSON.stringify({
+                            reason,
+                            before: {
+                                allow_permissions:
+                                    beforeProfile.allow_overrides,
+                                deny_permissions:
+                                    beforeProfile.deny_overrides,
+                                effective_permissions:
+                                    beforeProfile.effective_permissions,
+                            },
+                            after: {
+                                allow_permissions:
+                                    afterProfile.allow_overrides,
+                                deny_permissions:
+                                    afterProfile.deny_overrides,
+                                effective_permissions:
+                                    afterProfile.effective_permissions,
+                            },
+                        }),
+                    },
+                });
+            },
+            {
+                isolationLevel:
+                    Prisma.TransactionIsolationLevel.Serializable,
+            },
+        );
+
+        return this.getPermissionProfile(
+            id,
+        );
+    }
+
     async findRoles() {
         const roles =
             await this.prisma.roles.findMany({
@@ -396,6 +975,13 @@ export class UsersService {
                                     .permission_name,
                         )
                         .sort(),
+
+                assignable:
+                    this.supportedInternalRoles.has(
+                        this.normalizeRoleName(
+                            role.role_name,
+                        ),
+                    ),
             }),
         );
     }
@@ -427,6 +1013,10 @@ export class UsersService {
         dto: CreateRoleDto,
         actorUserId: string,
     ) {
+        throw new ForbiddenException(
+            'Danh mục vai trò là system invariant được quản trị trong code; không thể tạo role tại runtime',
+        );
+        /* istanbul ignore next -- legacy implementation retained for schema compatibility */
         const roleName =
             dto.role_name
                 .trim()
@@ -528,6 +1118,10 @@ export class UsersService {
         dto: CreatePermissionDto,
         actorUserId: string,
     ) {
+        throw new ForbiddenException(
+            'Danh mục permission là system invariant được quản trị trong code; không thể tạo permission tại runtime',
+        );
+        /* istanbul ignore next -- legacy implementation retained for schema compatibility */
         const permissionName =
             dto.permission_name
                 .trim()
@@ -598,6 +1192,10 @@ export class UsersService {
         dto: UpdateRolePermissionsDto,
         actorUserId: string,
     ) {
+        throw new ForbiddenException(
+            'Permission projection của role là system invariant được quản trị trong code',
+        );
+        /* istanbul ignore next -- legacy implementation retained for schema compatibility */
         const role =
             await this.prisma.roles.findUnique({
                 where: {
@@ -864,6 +1462,14 @@ export class UsersService {
 
                                 entity_id:
                                     user.id,
+
+                                details_json: JSON.stringify({
+                                    before: null,
+                                    after: {
+                                        status: 'active',
+                                        roles: roles.map((role) => this.normalizeRoleName(role.role_name)),
+                                    },
+                                }),
                             },
                         });
 
@@ -895,7 +1501,7 @@ export class UsersService {
         dto: UpdateUserDto,
         actorUserId: string,
     ) {
-        await this.getUserOrThrow(
+        const currentUser = await this.getUserOrThrow(
             id,
         );
 
@@ -1042,6 +1648,27 @@ export class UsersService {
                 async (
                     transaction,
                 ) => {
+                    const isCurrentAdmin = currentUser.user_roles.some(
+                        ({ roles }) => this.normalizeRoleName(roles.role_name) === 'ADMIN',
+                    );
+                    const disablesAccount = dto.status !== undefined && dto.status !== 'active';
+
+                    if (isCurrentAdmin && disablesAccount) {
+                        const activeAdmins = await transaction.users.findMany({
+                            where: {
+                                status: 'active',
+                                user_roles: { some: { roles: { role_name: 'admin' } } },
+                            },
+                            select: { id: true, locked_until: true },
+                        });
+                        const otherActiveAdmins = activeAdmins.filter(
+                            (admin) => admin.id !== id && (!admin.locked_until || admin.locked_until <= new Date()),
+                        );
+                        if (otherActiveAdmins.length === 0) {
+                            throw new BadRequestException('Không thể vô hiệu hóa hoặc khóa ADMIN hoạt động cuối cùng');
+                        }
+                    }
+
                     await transaction.users.update({
                         where: {
                             id,
@@ -1049,6 +1676,13 @@ export class UsersService {
 
                         data,
                     });
+
+                    if (disablesAccount) {
+                        await transaction.user_sessions.updateMany({
+                            where: { user_id: id, revoked: false },
+                            data: { revoked: true },
+                        });
+                    }
 
                     const expertData: {
                         full_name?: string;
@@ -1102,11 +1736,27 @@ export class UsersService {
                             entity_type:
                                 'user',
 
-                            entity_id:
-                                id,
+                                entity_id:
+                                    id,
+
+                                details_json: JSON.stringify({
+                                    before: {
+                                        username: currentUser.username,
+                                        email: currentUser.email,
+                                        full_name: currentUser.full_name,
+                                        status: this.formatUser(currentUser).status,
+                                    },
+                                    after: {
+                                        username: data.username ?? currentUser.username,
+                                        email: data.email ?? currentUser.email,
+                                        full_name: data.full_name === undefined ? currentUser.full_name : data.full_name,
+                                        status: dto.status ?? this.formatUser(currentUser).status,
+                                    },
+                                }),
                         },
                     });
                 },
+                { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
             );
         } catch (error) {
             if (
@@ -1133,7 +1783,7 @@ export class UsersService {
         dto: UpdateUserRolesDto,
         actorUserId: string,
     ) {
-        await this.getUserOrThrow(
+        const currentUser = await this.getUserOrThrow(
             id,
         );
 
@@ -1159,7 +1809,29 @@ export class UsersService {
         await this.prisma.$transaction(
             async (
                 transaction,
-            ) => {
+                ) => {
+                const currentRoleNames = currentUser.user_roles.map(
+                    ({ roles: currentRole }) => this.normalizeRoleName(currentRole.role_name),
+                );
+                const removesAdmin = currentRoleNames.includes('ADMIN') && !roles.some(
+                    (role) => this.normalizeRoleName(role.role_name) === 'ADMIN',
+                );
+                if (removesAdmin && (currentUser.status ?? 'active').toLowerCase() === 'active') {
+                    const activeAdmins = await transaction.users.findMany({
+                        where: {
+                            status: 'active',
+                            user_roles: { some: { roles: { role_name: 'admin' } } },
+                        },
+                        select: { id: true, locked_until: true },
+                    });
+                    const otherActiveAdmins = activeAdmins.filter(
+                        (admin) => admin.id !== id && (!admin.locked_until || admin.locked_until <= new Date()),
+                    );
+                    if (otherActiveAdmins.length === 0) {
+                        throw new BadRequestException('Không thể thu hồi vai trò của ADMIN hoạt động cuối cùng');
+                    }
+                }
+
                 await transaction.user_roles.deleteMany({
                     where: {
                         user_id:
@@ -1180,6 +1852,137 @@ export class UsersService {
                         ),
                 });
 
+                const newRoleNames =
+                    roles.map(
+                        (role) =>
+                            this.normalizeRoleName(
+                                role.role_name,
+                            ),
+                    );
+
+                const existingOverrides =
+                    await transaction.user_permission_overrides.findMany({
+                        where: {
+                            user_id:
+                                id,
+                        },
+
+                        include: {
+                            permission:
+                                true,
+                        },
+                    });
+
+                let removedPermissionOverrides: string[] = [];
+
+                if (
+                    existingOverrides.length > 0
+                ) {
+                    if (
+                        newRoleNames.includes(
+                            'ADMIN',
+                        )
+                    ) {
+                        removedPermissionOverrides =
+                            existingOverrides.map(
+                                (override) =>
+                                    override
+                                        .permission
+                                        .permission_name,
+                            );
+
+                        await transaction.user_permission_overrides.deleteMany({
+                            where: {
+                                user_id:
+                                    id,
+                            },
+                        });
+                    } else {
+                        const rolePermissionRows =
+                            await transaction.role_permissions.findMany({
+                                where: {
+                                    role_id: {
+                                        in:
+                                            roles.map(
+                                                (role) =>
+                                                    role.id,
+                                            ),
+                                    },
+                                },
+
+                                include: {
+                                    permissions:
+                                        true,
+                                },
+                            });
+
+                        const newBasePermissionSet =
+                            new Set(
+                                rolePermissionRows.map(
+                                    (row) =>
+                                        this.normalizePermissionName(
+                                            row
+                                                .permissions
+                                                .permission_name,
+                                        ),
+                                ),
+                            );
+
+                        const redundantOverrides =
+                            existingOverrides.filter(
+                                (override) => {
+                                    const permissionName =
+                                        this.normalizePermissionName(
+                                            override
+                                                .permission
+                                                .permission_name,
+                                        );
+
+                                    return override.effect ===
+                                        'ALLOW'
+                                        ? newBasePermissionSet.has(
+                                            permissionName,
+                                        )
+                                        : !newBasePermissionSet.has(
+                                            permissionName,
+                                        );
+                                },
+                            );
+
+                        removedPermissionOverrides =
+                            redundantOverrides.map(
+                                (override) =>
+                                    override
+                                        .permission
+                                        .permission_name,
+                            );
+
+                        if (
+                            redundantOverrides.length > 0
+                        ) {
+                            await transaction.user_permission_overrides.deleteMany({
+                                where: {
+                                    user_id:
+                                        id,
+
+                                    permission_id: {
+                                        in:
+                                            redundantOverrides.map(
+                                                (override) =>
+                                                    override.permission_id,
+                                            ),
+                                    },
+                                },
+                            });
+                        }
+                    }
+                }
+
+                await transaction.user_sessions.updateMany({
+                    where: { user_id: id, revoked: false },
+                    data: { revoked: true },
+                });
+
                 await transaction.audit_logs.create({
                     data: {
                         user_id:
@@ -1191,11 +1994,25 @@ export class UsersService {
                         entity_type:
                             'user',
 
-                        entity_id:
-                            id,
+                            entity_id:
+                                id,
+
+                            details_json: JSON.stringify({
+                                before: {
+                                    roles:
+                                        currentRoleNames,
+                                },
+                                after: {
+                                    roles:
+                                        newRoleNames,
+                                    removed_permission_overrides:
+                                        removedPermissionOverrides,
+                                },
+                            }),
                     },
                 });
             },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
 
         return this.findOne(

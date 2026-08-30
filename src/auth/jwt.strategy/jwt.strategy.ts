@@ -18,6 +18,8 @@ import {
 
 import { PrismaService } from '../../prisma/prisma.service';
 
+import { resolveEffectivePermissionProfile } from '../effective-permissions';
+
 interface JwtPayload {
     sub: string;
     username: string;
@@ -75,6 +77,13 @@ export class JwtStrategy extends PassportStrategy(
                             },
                         },
                     },
+
+                    permission_overrides: {
+                        include: {
+                            permission:
+                                true,
+                        },
+                    },
                 },
             });
 
@@ -119,25 +128,41 @@ export class JwtStrategy extends PassportStrategy(
                         .role_name,
             );
 
-        const permissions =
-            Array.from(
-                new Set(
-                    user.user_roles.flatMap(
-                        (userRole) =>
-                            userRole
-                                .roles
-                                .role_permissions
-                                .map(
-                                    (
-                                        rolePermission,
-                                    ) =>
-                                        rolePermission
-                                            .permissions
-                                            .permission_name,
-                                ),
-                    ),
+        const basePermissions =
+            user.user_roles.flatMap(
+                (userRole) =>
+                    userRole
+                        .roles
+                        .role_permissions
+                        .map(
+                            (
+                                rolePermission,
+                            ) =>
+                                rolePermission
+                                    .permissions
+                                    .permission_name,
+                        ),
+            );
+
+        const permissionProfile =
+            resolveEffectivePermissionProfile(
+                basePermissions,
+                user.permission_overrides.map(
+                    (override) => ({
+                        permission_name:
+                            override
+                                .permission
+                                .permission_name,
+
+                        effect:
+                            override.effect,
+                    }),
                 ),
             );
+
+        const permissions =
+            permissionProfile
+                .effective_permissions;
 
         return {
             userId:

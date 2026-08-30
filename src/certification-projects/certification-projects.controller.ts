@@ -71,6 +71,7 @@ export class CertificationProjectsController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -105,6 +106,7 @@ export class CertificationProjectsController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -150,6 +152,7 @@ export class CertificationProjectsController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -195,6 +198,7 @@ export class CertificationProjectsController {
         return this.certificationProjectsService.getAlerts(
             id,
             Number(warningDays ?? 30),
+            request.user?.roles ?? [],
         );
     }
 
@@ -206,6 +210,7 @@ export class CertificationProjectsController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )

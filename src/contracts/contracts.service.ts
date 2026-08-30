@@ -3,6 +3,7 @@ import {
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateContractDto } from './dto/create-contract.dto';
@@ -111,6 +112,23 @@ export class ContractsService {
             );
         }
 
+        const quotation = dto.quotation_id
+            ? await this.prisma.quotations.findUnique({ where: { id: dto.quotation_id } })
+            : null;
+
+        if (dto.quotation_id && !quotation) {
+            throw new NotFoundException('Không tìm thấy báo giá');
+        }
+        if (quotation && (quotation.status !== 'ACCEPTED' || quotation.customer_id !== dto.customer_id)) {
+            throw new BadRequestException('Hợp đồng chỉ được liên kết báo giá ACCEPTED của cùng khách hàng');
+        }
+        if (quotation && dto.currency && dto.currency.trim().toUpperCase() !== quotation.currency) {
+            throw new BadRequestException('Tiền tệ hợp đồng phải khớp báo giá đã chấp nhận');
+        }
+        if (quotation && dto.total_value && !new Prisma.Decimal(dto.total_value).equals(quotation.total_amount)) {
+            throw new BadRequestException('Giá trị hợp đồng phải khớp báo giá đã chấp nhận');
+        }
+
         return this.prisma.contracts.create({
             data: {
                 customer_id: dto.customer_id,
@@ -129,8 +147,12 @@ export class ContractsService {
                     ? new Date(dto.end_date)
                     : undefined,
 
-                total_value: dto.total_value,
-                currency: dto.currency?.trim().toUpperCase(),
+                total_value: quotation?.total_amount ?? (dto.total_value ? new Prisma.Decimal(dto.total_value) : undefined),
+                currency: quotation?.currency ?? dto.currency?.trim().toUpperCase(),
+                quotation_id: quotation?.id,
+                commercial_status: dto.sign_date ? 'SIGNED' : 'DRAFT',
+                payment_terms: dto.payment_terms?.trim(),
+                renewal_date: dto.renewal_date ? new Date(dto.renewal_date) : undefined,
             },
             include: {
                 customers: {

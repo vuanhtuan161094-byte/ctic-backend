@@ -56,8 +56,6 @@ const allUserIds = [
   ids.admin,
   ids.auditor,
 ];
-const allRoleIds = [ids.customerRole, ids.adminRole, ids.auditorRole];
-const allPermissionIds = [ids.customersManage, ids.findingsManage];
 const allCustomerIds = [ids.customerA, ids.customerB];
 const allApplicationIds = [ids.applicationA, ids.applicationB];
 const allProjectIds = [ids.projectA, ids.projectB];
@@ -139,6 +137,11 @@ describeRealDatabase('P.09 customer CAP access (real database e2e)', () => {
   let tokenAuditor = '';
   let actionAId = '';
   let evidenceAId = '';
+  let customerRoleId = '';
+  let adminRoleId = '';
+  let auditorRoleId = '';
+  let customersManagePermissionId = '';
+  let findingsManagePermissionId = '';
 
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -211,6 +214,46 @@ describeRealDatabase('P.09 customer CAP access (real database e2e)', () => {
     await database.audit_logs.deleteMany({
       where: { user_id: { in: allUserIds } },
     });
+    const workItemIds = (
+      await database.work_items.findMany({
+        where: {
+          OR: [
+            { project_id: { in: allProjectIds } },
+            { entity_id: { in: allFindingIds } },
+          ],
+        },
+        select: { id: true },
+      })
+    ).map((item) => item.id);
+    await database.notifications.deleteMany({
+      where: {
+        OR: [
+          { user_id: { in: allUserIds } },
+          { project_id: { in: allProjectIds } },
+        ],
+      },
+    });
+    if (workItemIds.length) {
+      await database.notifications.deleteMany({
+        where: { work_item_id: { in: workItemIds } },
+      });
+    }
+    await database.work_items.deleteMany({
+      where: {
+        OR: [
+          { project_id: { in: allProjectIds } },
+          { entity_id: { in: allFindingIds } },
+        ],
+      },
+    });
+    await database.customer_user_access_history.deleteMany({
+      where: {
+        OR: [
+          { customer_id: { in: allCustomerIds } },
+          { user_id: { in: allUserIds } },
+        ],
+      },
+    });
     await database.customer_user_access.deleteMany({
       where: {
         OR: [
@@ -249,55 +292,69 @@ describeRealDatabase('P.09 customer CAP access (real database e2e)', () => {
     await database.user_roles.deleteMany({
       where: { user_id: { in: allUserIds } },
     });
-    await database.role_permissions.deleteMany({
-      where: { role_id: { in: allRoleIds } },
-    });
     await database.users.deleteMany({
       where: { id: { in: allUserIds } },
-    });
-    await database.permissions.deleteMany({
-      where: { id: { in: allPermissionIds } },
-    });
-    await database.roles.deleteMany({
-      where: { id: { in: allRoleIds } },
     });
     await database.customers.deleteMany({
       where: { id: { in: allCustomerIds } },
     });
   }
 
+  async function ensureRole(roleName: string, preferredId: string) {
+    return prisma.roles.upsert({
+      where: { role_name: roleName },
+      create: { id: preferredId, role_name: roleName },
+      update: {},
+      select: { id: true },
+    });
+  }
+
+  async function ensurePermission(permissionName: string, preferredId: string) {
+    return prisma.permissions.upsert({
+      where: { permission_name: permissionName },
+      create: {
+        id: preferredId,
+        permission_name: permissionName,
+      },
+      update: {},
+      select: { id: true },
+    });
+  }
+
+  async function ensureRolePermission(roleId: string, permissionId: string) {
+    const existing = await prisma.role_permissions.findFirst({
+      where: {
+        role_id: roleId,
+        permission_id: permissionId,
+      },
+      select: { role_id: true },
+    });
+    if (!existing) {
+      await prisma.role_permissions.create({
+        data: {
+          role_id: roleId,
+          permission_id: permissionId,
+        },
+      });
+    }
+  }
+
   async function createFixtures() {
-    await prisma.roles.createMany({
-      data: [
-        { id: ids.customerRole, role_name: 'CUSTOMER' },
-        { id: ids.adminRole, role_name: 'ADMIN' },
-        { id: ids.auditorRole, role_name: 'AUDITOR' },
-      ],
-    });
-    await prisma.permissions.createMany({
-      data: [
-        {
-          id: ids.customersManage,
-          permission_name: 'customers.manage',
-        },
-        {
-          id: ids.findingsManage,
-          permission_name: 'findings.manage',
-        },
-      ],
-    });
-    await prisma.role_permissions.createMany({
-      data: [
-        {
-          role_id: ids.adminRole,
-          permission_id: ids.customersManage,
-        },
-        {
-          role_id: ids.auditorRole,
-          permission_id: ids.findingsManage,
-        },
-      ],
-    });
+    customerRoleId = (
+      await ensureRole('CUSTOMER', ids.customerRole)
+    ).id;
+    adminRoleId = (await ensureRole('ADMIN', ids.adminRole)).id;
+    auditorRoleId = (await ensureRole('AUDITOR', ids.auditorRole)).id;
+
+    customersManagePermissionId = (
+      await ensurePermission('customers.manage', ids.customersManage)
+    ).id;
+    findingsManagePermissionId = (
+      await ensurePermission('findings.manage', ids.findingsManage)
+    ).id;
+
+    await ensureRolePermission(adminRoleId, customersManagePermissionId);
+    await ensureRolePermission(auditorRoleId, findingsManagePermissionId);
     await prisma.users.createMany({
       data: [
         {
@@ -339,11 +396,11 @@ describeRealDatabase('P.09 customer CAP access (real database e2e)', () => {
     });
     await prisma.user_roles.createMany({
       data: [
-        { user_id: ids.userA, role_id: ids.customerRole },
-        { user_id: ids.userB, role_id: ids.customerRole },
-        { user_id: ids.userUnmapped, role_id: ids.customerRole },
-        { user_id: ids.admin, role_id: ids.adminRole },
-        { user_id: ids.auditor, role_id: ids.auditorRole },
+        { user_id: ids.userA, role_id: customerRoleId },
+        { user_id: ids.userB, role_id: customerRoleId },
+        { user_id: ids.userUnmapped, role_id: customerRoleId },
+        { user_id: ids.admin, role_id: adminRoleId },
+        { user_id: ids.auditor, role_id: auditorRoleId },
       ],
     });
     await prisma.customers.createMany({

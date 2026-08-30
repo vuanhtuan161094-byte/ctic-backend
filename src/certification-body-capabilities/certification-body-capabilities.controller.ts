@@ -18,6 +18,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CertificationBodyCapabilitiesService } from './certification-body-capabilities.service';
 import {
+    CreateCertificationBodyCapabilityBatchDto,
     CreateCertificationBodyCapabilityDto,
     UpdateCertificationBodyCapabilityDto,
 } from './dto/certification-body-capability.dto';
@@ -47,6 +48,13 @@ export class CertificationBodyCapabilitiesController {
     @Permissions('applications.review')
     create(@Body() dto: CreateCertificationBodyCapabilityDto, @Req() request: AuthenticatedRequest) {
         return this.service.create(dto, this.userId(request));
+    }
+
+    @Post('batch')
+    @Roles('ADMIN')
+    @Permissions('applications.review')
+    createBatch(@Body() dto: CreateCertificationBodyCapabilityBatchDto, @Req() request: AuthenticatedRequest) {
+        return this.service.createBatch(dto, this.userId(request));
     }
 
     @Patch(':id')

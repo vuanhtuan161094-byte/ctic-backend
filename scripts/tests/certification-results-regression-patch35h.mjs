@@ -129,28 +129,33 @@ check(service.includes('next_audit_due_date'), 'F.12 có dữ liệu kỳ đánh
 check(service.includes('surveillance_interval_months'), 'F.13 có chu kỳ giám sát');
 
 check(decisionService.includes("report.status === 'stage1_completed'"), 'Quyết định chấp nhận Stage 1 đã nộp, không bắt F.11 cho GĐ1');
-check(decisionService.includes('Stage 1 chưa có báo cáo đã nộp và hoàn thành'), 'Thông báo lỗi Stage 1 đúng workflow mới');
+check(decisionService.includes('Giai đoạn 1 chưa có báo cáo đã nộp và hoàn thành'), 'Thông báo lỗi Stage 1 đúng workflow mới');
 check(!decisionService.includes('Stage 1 chưa có báo cáo thẩm xét hoàn thành'), 'Đã bỏ yêu cầu thẩm xét kỹ thuật Stage 1 cũ');
 
 check(projectService.includes('...decisions.map((item) => item.id)'), 'Hồ sơ dự án nạp file F.13 theo entity quyết định');
 check(projectService.includes('...notifications.map((item) => item.id)'), 'Hồ sơ dự án nạp file F.12 theo entity thông báo');
 
-check(modal.includes('Quyết định F.13'), 'Frontend có tab Quyết định F.13');
-check(modal.includes('Thông báo F.12'), 'Frontend có tab Thông báo F.12');
+check(modal.includes('Quyết định chứng nhận'), 'Frontend có tab Quyết định chứng nhận');
+check(modal.includes('Thông báo kết quả'), 'Frontend có tab Thông báo kết quả');
 check(modal.includes('/certification-decisions'), 'Frontend ban hành quyết định qua API nghiệp vụ');
 check(modal.includes('/audit-result-notifications'), 'Frontend lập thông báo qua API nghiệp vụ');
 check(modal.includes('mark-sent'), 'Frontend có thao tác ghi nhận đã gửi khách hàng');
 check(modal.includes('Xuất Word'), 'Frontend có nút xuất Word');
 check(modal.includes('Xuất PDF'), 'Frontend có nút xuất PDF');
-check(modal.includes('Phiên bản F.13 đã sinh'), 'Frontend hiển thị lịch sử F.13');
-check(modal.includes('Phiên bản F.12 đã sinh'), 'Frontend hiển thị lịch sử F.12');
+check(modal.includes('Lịch sử tài liệu quyết định'), 'Frontend hiển thị lịch sử quyết định');
+check(modal.includes('Lịch sử tài liệu thông báo'), 'Frontend hiển thị lịch sử thông báo');
 check(modal.includes('Chỉ người ra quyết định'), 'Frontend giải thích quyền ban hành quyết định');
 check(css.includes('.certification-result-form-grid'), 'Có layout riêng cho form kết quả chứng nhận');
 
 check(detail.includes('CertificationResultWorkspaceModal'), 'Hồ sơ chứng nhận đã gắn workspace kết quả');
 check(detail.includes('setCertificationResultWorkspace'), 'Dòng hồ sơ mở trực tiếp workspace kết quả');
 check(detail.includes('"certification_decision"') && detail.includes('"audit_result_notification"') && detail.includes('return stage2 ?? null;'), 'Quyết định và thông báo khóa về PLAN GĐ2');
-check(detail.includes('Mở kết quả'), 'Thành phần hồ sơ có nút Mở kết quả');
+check(
+  detail.includes('key === "audit_result_notification"')
+    && detail.includes('key === "certification_decision"')
+    && detail.includes('setCertificationResultWorkspace({'),
+  'Thành phần hồ sơ kết quả mở đúng workspace nghiệp vụ',
+);
 check(detail.includes('certification_decision_f13'), 'Bảng thành phần nhận lịch sử F.13');
 check(detail.includes('audit_result_notification_f12'), 'Bảng thành phần nhận lịch sử F.12');
 

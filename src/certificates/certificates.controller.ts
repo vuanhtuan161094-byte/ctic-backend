@@ -37,6 +37,8 @@ import {
     TempUploadCleanupInterceptor,
 } from '../common/upload-security';
 import { DocumentFilesService } from '../document-files/document-files.service';
+import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { CertificatesService } from './certificates.service';
 import { CreateCertificateDto } from './dto/create-certificate.dto';
@@ -47,6 +49,7 @@ interface AuthenticatedRequest {
         id?: string;
         userId?: string;
         sub?: string;
+        roles?: string[];
     };
 }
 
@@ -64,6 +67,8 @@ export class CertificatesController {
             CertificatesService,
         private readonly documentFilesService:
             DocumentFilesService,
+        private readonly actionAuthorization:
+            ActionAuthorizationService,
     ) { }
 
     private getUserId(
@@ -77,15 +82,12 @@ export class CertificatesController {
     }
 
     @Post()
-    @Roles(
-        'ADMIN',
-        'DECISION_MAKER',
-    )
+    @Roles('DECISION_MAKER')
     @Permissions('certificates.manage')
     @ApiOperation({
         summary: 'Cấp chứng chỉ',
         description:
-            'Cấp chứng chỉ từ hồ sơ đã có quyết định phù hợp; tự thay thế chứng chỉ cũ khi cần.',
+            'Cấp version chứng chỉ từ quyết định lifecycle phù hợp; chỉ thay thế version hiện hành trong cùng Certificate Series.',
     })
     @ApiCreatedResponse({
         description: 'Cấp chứng chỉ thành công và sinh mã xác minh',
@@ -94,15 +96,31 @@ export class CertificatesController {
         description: 'Chưa có quyết định hoặc thông báo phù hợp',
     })
     @ApiConflictResponse({
-        description: 'Hồ sơ thẩm xét hoặc số chứng chỉ đã được sử dụng',
+        description: 'Hồ sơ thẩm xét đã được dùng để tạo certificate version',
     })
-    create(
+    async create(
         @Body()
         dto: CreateCertificateDto,
 
         @Req()
         request: AuthenticatedRequest,
     ) {
+        await this.actionAuthorization.assertCanPerformAction({
+            user: {
+                userId: this.getUserId(request),
+                roles: request.user?.roles ?? [],
+            },
+            actionCode: WORK_ITEM_ACTIONS.CERTIFICATE_ISSUE,
+            resource: {
+                entityType: 'technical_review',
+                entityId: dto.technical_review_id,
+            },
+            assignment: {
+                assignedRole: 'DECISION_MAKER',
+            },
+            workflowState: 'OPEN',
+        });
+
         return this.certificatesService.create(
             dto,
             this.getUserId(request),
@@ -155,10 +173,7 @@ export class CertificatesController {
     }
 
     @Post(':id/pdf')
-    @Roles(
-        'ADMIN',
-        'DECISION_MAKER',
-    )
+    @Roles('DECISION_MAKER')
     @Permissions('certificates.manage')
     @ApiOperation({
         summary: 'Tải PDF giấy chứng nhận chính thức',
@@ -178,6 +193,22 @@ export class CertificatesController {
         @UploadedFile() file: Express.Multer.File,
         @Req() request: AuthenticatedRequest,
     ) {
+        await this.actionAuthorization.assertCanPerformAction({
+            user: {
+                userId: this.getUserId(request),
+                roles: request.user?.roles ?? [],
+            },
+            actionCode: WORK_ITEM_ACTIONS.CERTIFICATE_ISSUE,
+            resource: {
+                entityType: 'certificate',
+                entityId: id,
+            },
+            assignment: {
+                assignedRole: 'DECISION_MAKER',
+            },
+            workflowState: 'ISSUED',
+        });
+
         await this.certificatesService.findOne(id);
         if (!file) {
             throw new BadRequestException('Chưa chọn file PDF giấy chứng nhận');
@@ -232,8 +263,8 @@ export class CertificatesController {
     )
     @Permissions('certificates.manage')
     @ApiOperation({
-        summary: 'Thay đổi trạng thái chứng chỉ',
-        description: 'Đình chỉ, khôi phục, thu hồi hoặc xác nhận hết hạn chứng chỉ.',
+        summary: 'Ghi nhận hết hạn chứng chỉ theo tác vụ quản trị',
+        description: 'Không cho phép bypass quyết định lifecycle để đình chỉ, khôi phục hoặc thu hồi.',
     })
     @ApiParam({
         name: 'id',

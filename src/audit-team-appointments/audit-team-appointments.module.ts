@@ -6,6 +6,7 @@ import { AuditTeamAppointmentsController } from './audit-team-appointments.contr
 import { AuditTeamAppointmentsService } from './audit-team-appointments.service';
 import { AuditTeamCompetencyService } from './audit-team-competency.service';
 import { AuditMandayAllocationService } from './audit-manday-allocation.service';
+import { AuditTeamReadinessService } from './audit-team-readiness.service';
 
 @Module({
   controllers: [
@@ -16,12 +17,14 @@ import { AuditMandayAllocationService } from './audit-manday-allocation.service'
     AuditTeamAppointmentsService,
     AuditTeamCompetencyService,
     AuditMandayAllocationService,
+    AuditTeamReadinessService,
   ],
 
   exports: [
     AuditTeamAppointmentsService,
     AuditTeamCompetencyService,
     AuditMandayAllocationService,
+    AuditTeamReadinessService,
   ],
 })
 export class AuditTeamAppointmentsModule { }

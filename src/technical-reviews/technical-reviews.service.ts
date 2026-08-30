@@ -3,13 +3,14 @@ import {
     ConflictException,
     Injectable,
     NotFoundException,
+    Optional,
 
 } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 
 import { UpdateTechnicalReviewReportDto } from './dto/update-technical-review-report.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttachReviewDocumentDto } from './dto/attach-review-document.dto';
-import { CreateTechnicalReviewDto } from './dto/create-technical-review.dto';
 import { UpdateReviewItemDto } from './dto/update-review-item.dto';
 import { SaveTechnicalReviewWorkspaceDto } from './dto/save-technical-review-workspace.dto';
 import {
@@ -17,12 +18,53 @@ import {
     TECHNICAL_REVIEW_CRITERIA,
     TechnicalReviewCriterionResult,
 } from './technical-review-criteria';
+import {
+    WORK_ITEM_ACTIONS,
+} from '../work-items/work-item.constants';
+import {
+    WorkItemsService,
+} from '../work-items/work-items.service';
+import { DelegationsService } from '../delegations/delegations.service';
+import { NotificationEngineService } from '../notifications/notification-engine.service';
+import type { ResourceActor } from '../security/resource-access.service';
+import { normalizeRoles } from '../security/security-request';
+import { AssignTechnicalReviewerDto } from './dto/assign-technical-reviewer.dto';
+import { ReassignTechnicalReviewerDto } from './dto/reassign-technical-reviewer.dto';
 
 @Injectable()
 export class TechnicalReviewsService {
     constructor(
         private readonly prisma: PrismaService,
+        @Optional()
+        private readonly workItems?: WorkItemsService,
+        @Optional()
+        private readonly delegations?: DelegationsService,
+        @Optional()
+        private readonly notifications?: NotificationEngineService,
     ) { }
+
+    private transactionNotBegun(error: unknown): boolean {
+        if (!error || typeof error !== 'object') return false;
+        const candidate = error as { code?: unknown; message?: unknown; cause?: unknown; meta?: unknown };
+        if (String(candidate.code ?? '').toUpperCase() === 'ENOTBEGUN') return true;
+        if (typeof candidate.message === 'string' && candidate.message.toLowerCase().includes('transaction has not begun')) {
+            return true;
+        }
+        return this.transactionNotBegun(candidate.cause) || this.transactionNotBegun(candidate.meta);
+    }
+
+    private async retryTransaction<T>(
+        operation: (transaction: Prisma.TransactionClient) => Promise<T>,
+    ) {
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+            try {
+                return await this.prisma.$transaction(operation);
+            } catch (error) {
+                if (!this.transactionNotBegun(error) || attempt === 2) throw error;
+            }
+        }
+        throw new ConflictException('Không thể bắt đầu transaction phân công lại');
+    }
 
     private parseFormData(
         value: unknown,
@@ -1109,6 +1151,12 @@ export class TechnicalReviewsService {
                                 report_code: true,
                                 audit_plan_id: true,
                                 status: true,
+                                audit_plans: {
+                                    select: {
+                                        project_id: true,
+                                        audit_event_id: true,
+                                    },
+                                },
                             },
                         },
 
@@ -1118,6 +1166,13 @@ export class TechnicalReviewsService {
                                 username: true,
                                 full_name: true,
                                 email: true,
+                            },
+                        },
+                        assignments: {
+                            orderBy: { assigned_at: 'desc' },
+                            include: {
+                                reviewer: { select: { id: true, username: true, full_name: true, email: true } },
+                                actor: { select: { id: true, username: true, full_name: true } },
                             },
                         },
                     },
@@ -1199,6 +1254,13 @@ export class TechnicalReviewsService {
                                             email: true,
                                         },
                                     },
+                                    assignments: {
+                                        orderBy: { assigned_at: 'desc' },
+                                        include: {
+                                            reviewer: { select: { id: true, username: true, full_name: true, email: true } },
+                                            actor: { select: { id: true, username: true, full_name: true } },
+                                        },
+                                    },
                                 },
                             },
                         },
@@ -1241,6 +1303,111 @@ export class TechnicalReviewsService {
                 `Người thẩm xét không được là thành viên đoàn đánh giá (${auditMember.experts?.full_name ?? 'không xác định'}).`,
             );
         }
+    }
+
+    private async assertReviewerEligible(
+        reviewerId: string,
+    ) {
+        const reviewer = await this.prisma.users.findFirst({
+            where: {
+                id: reviewerId,
+                status: 'active',
+                user_roles: {
+                    some: {
+                        roles: {
+                            role_name: 'technical_reviewer',
+                        },
+                    },
+                },
+            },
+            select: {
+                id: true,
+                username: true,
+                full_name: true,
+                email: true,
+            },
+        });
+        if (!reviewer) {
+            throw new BadRequestException(
+                'Người được chọn không hoạt động hoặc không đủ eligibility Người thẩm xét kỹ thuật',
+            );
+        }
+        return reviewer;
+    }
+
+    private assertAssignmentActor(
+        actor: ResourceActor,
+        adminOverrideReason?: string,
+    ) {
+        const roles = normalizeRoles(actor.roles);
+        if (roles.includes('COORDINATOR')) return;
+        if (roles.includes('ADMIN') && adminOverrideReason?.trim()) return;
+        if (roles.includes('ADMIN')) {
+            throw new BadRequestException('ADMIN phải nhập lý do override khi phân công nghiệp vụ');
+        }
+        throw new BadRequestException('Chỉ Điều phối viên hoặc ADMIN override được phân công người thẩm xét');
+    }
+
+    async getReviewerCandidates(
+        planId: string,
+    ) {
+        const context = await this.loadPlanReviewContext(planId);
+        this.assertReportReady(context.report);
+        const conflictedIds = new Set(
+            (context.plan.audit_team_appointment?.members ?? [])
+                .map((member: any) => member.experts?.user_id)
+                .filter(Boolean),
+        );
+        const candidates = await this.prisma.users.findMany({
+            where: {
+                status: 'active',
+                id: { notIn: Array.from(conflictedIds) },
+                user_roles: { some: { roles: { role_name: 'technical_reviewer' } } },
+            },
+            select: {
+                id: true,
+                username: true,
+                full_name: true,
+                email: true,
+            },
+            orderBy: [{ full_name: 'asc' }, { username: 'asc' }],
+        });
+        return candidates.map((candidate) => ({
+            ...candidate,
+            eligible: true,
+            independent: true,
+        }));
+    }
+
+    async assertCanPerformReview(
+        reviewId: string,
+        actor: ResourceActor,
+    ) {
+        const actorId = actor.userId;
+        const roles = normalizeRoles(actor.roles);
+        if (!actorId || !roles.includes('TECHNICAL_REVIEWER')) {
+            throw new BadRequestException('Chỉ người thẩm xét đủ eligibility được xử lý F.11');
+        }
+        const review = await this.getReviewOrThrow(reviewId);
+        const context = await this.loadPlanReviewContext(review.reports.audit_plan_id);
+        this.assertReviewerIndependent(context.plan, review.reviewer_id);
+
+        if (review.reviewer_id === actorId) {
+            return { review, delegation: null };
+        }
+        const active = this.delegations
+            ? await this.delegations.activeForDelegate(actorId)
+            : [];
+        const delegation = active.find((item) =>
+            item.delegatorUserId === review.reviewer_id &&
+            item.actions.includes(WORK_ITEM_ACTIONS.TECHNICAL_REVIEW) &&
+            (!item.projectId || item.projectId === review.reports.audit_plans.project_id),
+        );
+        if (!delegation) {
+            throw new BadRequestException('Hồ sơ không được phân công hoặc ủy quyền hợp lệ cho người dùng hiện tại');
+        }
+        this.assertReviewerIndependent(context.plan, actorId);
+        return { review, delegation };
     }
 
     private assertReportReady(
@@ -1431,6 +1598,14 @@ export class TechnicalReviewsService {
             can_start:
                 eligibilityErrors.length ===
                 0,
+            can_assign:
+                eligibilityErrors.length === 0 && !review,
+            assignment_status:
+                review ? 'ASSIGNED' : 'UNASSIGNED',
+            current_assignment:
+                review?.assignments?.find((assignment: any) => assignment.status === 'CURRENT') ?? null,
+            assignment_history:
+                review?.assignments ?? [],
             eligibility_errors:
                 eligibilityErrors,
             review: review
@@ -1459,109 +1634,165 @@ export class TechnicalReviewsService {
         };
     }
 
-    async ensureForPlan(
+    async assignForPlan(
         planId: string,
-        reviewerId: string | undefined,
+        dto: AssignTechnicalReviewerDto,
+        actor: ResourceActor,
     ) {
-        if (!reviewerId) {
-            throw new BadRequestException(
-                'Không xác định được người thẩm xét',
-            );
-        }
+        if (!actor.userId) throw new BadRequestException('Không xác định được người phân công');
+        this.assertAssignmentActor(actor, dto.admin_override_reason);
+        const context = await this.loadPlanReviewContext(planId);
+        this.assertReportReady(context.report);
+        this.assertReviewerIndependent(context.plan, dto.reviewer_id);
+        await this.assertReviewerEligible(dto.reviewer_id);
 
-        const context =
-            await this.loadPlanReviewContext(
-                planId,
-            );
-
-        this.assertReportReady(
-            context.report,
-        );
-        this.assertReviewerIndependent(
-            context.plan,
-            reviewerId,
-        );
-
-        const existing =
-            context.report
-                ?.technical_reviews?.[0];
-
+        const existing = context.report?.technical_reviews?.[0];
         if (existing) {
-            if (
-                existing.reviewer_id !==
-                reviewerId
-            ) {
-                throw new ConflictException(
-                    'Hồ sơ đã được giao cho người thẩm xét khác',
-                );
-            }
-
-            return this.getWorkspaceByPlan(
-                planId,
-            );
+            if (existing.reviewer_id === dto.reviewer_id) return this.getWorkspaceByPlan(planId);
+            throw new ConflictException('Hồ sơ đã được giao; hãy dùng chức năng phân công lại');
         }
 
-        const reviewer =
-            await this.prisma.users.findUnique({
-                where: {
-                    id: reviewerId,
-                },
-                select: {
-                    id: true,
+        const reviewItems = await this.attachCurrentDocumentFiles(
+            context.report,
+            this.buildReviewItems(context.report),
+        );
+        const now = new Date().toISOString();
+        const result = await this.retryTransaction(async (transaction) => {
+            const created = await transaction.technical_reviews.create({
+                data: {
+                    report_id: context.report.id,
+                    reviewer_id: dto.reviewer_id,
+                    status: 'pending',
+                    general_comment: null,
+                    form_data: JSON.stringify({
+                        review_items: reviewItems,
+                        final_confirmation: { all_documents_accepted: false, confirmed_at: null },
+                        f11: { ...this.buildDefaultF11(), prepared_at: now, updated_at: now },
+                    }),
                 },
             });
-
-        if (!reviewer) {
-            throw new NotFoundException(
-                'Không tìm thấy người thẩm xét',
-            );
-        }
-
-        const reviewItems =
-            await this.attachCurrentDocumentFiles(
-                context.report,
-                this.buildReviewItems(
-                    context.report,
-                ),
-            );
-
-        const now =
-            new Date()
-                .toISOString();
-
-        await this.prisma.technical_reviews.create({
-            data: {
-                report_id:
-                    context.report.id,
-                reviewer_id:
-                    reviewerId,
-                status: 'pending',
-                general_comment:
-                    null,
-                form_data:
-                    JSON.stringify({
-                        review_items:
-                            reviewItems,
-                        final_confirmation: {
-                            all_documents_accepted:
-                                false,
-                            confirmed_at:
-                                null,
-                        },
-                        f11: {
-                            ...this.buildDefaultF11(),
-                            prepared_at:
-                                now,
-                            updated_at:
-                                now,
-                        },
-                    }),
-            },
+            const assignment = await transaction.technical_review_assignments.create({
+                data: {
+                    technical_review_id: created.id,
+                    reviewer_id: dto.reviewer_id,
+                    assigned_by: actor.userId!,
+                    due_at: dto.due_at ?? null,
+                    note: dto.note?.trim() || null,
+                    reason: dto.admin_override_reason?.trim() || null,
+                },
+            });
+            await this.workItems?.completeMatchingWorkItems({
+                actionCode: WORK_ITEM_ACTIONS.TECHNICAL_REVIEW_ASSIGN,
+                entityType: 'report',
+                entityId: context.report.id,
+            }, actor.userId, transaction);
+            const workItem = await this.workItems?.openWorkItem({
+                sourceKey: `technical-review:${created.id}:${assignment.id}`,
+                workType: 'TECHNICAL_REVIEW',
+                actionCode: WORK_ITEM_ACTIONS.TECHNICAL_REVIEW,
+                title: `Thẩm xét kỹ thuật ${context.report.report_code}`,
+                entityType: 'technical_review',
+                entityId: created.id,
+                projectId: context.plan.project_id,
+                auditEventId: context.plan.audit_event_id,
+                auditPlanId: context.plan.id,
+                assignedUserId: dto.reviewer_id,
+                dueAt: dto.due_at ?? null,
+                destinationPath: `/projects/${context.plan.project_id}?workspace=technical-review&technical_review_id=${created.id}&audit_plan_id=${planId}`,
+                context: { report_id: context.report.id, report_code: context.report.report_code, assignment_id: assignment.id },
+            }, transaction);
+            await transaction.audit_logs.create({
+                data: {
+                    user_id: actor.userId,
+                    action: dto.admin_override_reason ? 'technical_review.assign.admin_override' : 'technical_review.assign',
+                    entity_type: 'technical_review',
+                    entity_id: created.id,
+                    outcome: 'success',
+                    status_code: 201,
+                },
+            });
+            return { created, workItem };
         });
+        if (result.workItem && this.notifications) await this.notifications.notifyWorkAssigned(result.workItem);
+        return this.getWorkspaceByPlan(planId);
+    }
 
-        return this.getWorkspaceByPlan(
-            planId,
-        );
+    async reassign(
+        reviewId: string,
+        dto: ReassignTechnicalReviewerDto,
+        actor: ResourceActor,
+    ) {
+        if (!actor.userId) throw new BadRequestException('Không xác định được người phân công');
+        this.assertAssignmentActor(actor, dto.admin_override_reason);
+        const review = await this.getReviewOrThrow(reviewId);
+        if (review.status === 'completed') throw new ConflictException('Không thể phân công lại hồ sơ đã hoàn thành');
+        if (review.status !== 'pending') {
+            throw new ConflictException('Hồ sơ đã có dữ liệu thẩm xét; không được phân công lại theo luồng thông thường');
+        }
+        if (review.reviewer_id === dto.reviewer_id) throw new BadRequestException('Người thẩm xét mới phải khác người hiện tại');
+        const context = await this.loadPlanReviewContext(review.reports.audit_plan_id);
+        this.assertReportReady(context.report);
+        this.assertReviewerIndependent(context.plan, dto.reviewer_id);
+        await this.assertReviewerEligible(dto.reviewer_id);
+
+        const result = await this.retryTransaction(async (transaction) => {
+            const endedAt = new Date();
+            await transaction.technical_review_assignments.updateMany({
+                where: { technical_review_id: reviewId, status: 'CURRENT' },
+                data: { status: 'REASSIGNED', ended_at: endedAt, reason: dto.reason.trim() },
+            });
+            await transaction.work_items.updateMany({
+                where: {
+                    entity_type: 'technical_review',
+                    entity_id: reviewId,
+                    action_code: WORK_ITEM_ACTIONS.TECHNICAL_REVIEW,
+                    status: { in: ['OPEN', 'IN_PROGRESS'] },
+                },
+                data: { status: 'CANCELLED', cancelled_at: endedAt, updated_at: endedAt },
+            });
+            await transaction.technical_reviews.update({
+                where: { id: reviewId },
+                data: { reviewer_id: dto.reviewer_id },
+            });
+            const assignment = await transaction.technical_review_assignments.create({
+                data: {
+                    technical_review_id: reviewId,
+                    reviewer_id: dto.reviewer_id,
+                    assigned_by: actor.userId!,
+                    due_at: dto.due_at ?? null,
+                    note: dto.note?.trim() || null,
+                    reason: dto.reason.trim(),
+                },
+            });
+            const workItem = await this.workItems?.openWorkItem({
+                sourceKey: `technical-review:${reviewId}:${assignment.id}`,
+                workType: 'TECHNICAL_REVIEW',
+                actionCode: WORK_ITEM_ACTIONS.TECHNICAL_REVIEW,
+                title: `Thẩm xét kỹ thuật ${review.reports.report_code}`,
+                entityType: 'technical_review',
+                entityId: reviewId,
+                projectId: review.reports.audit_plans.project_id,
+                auditEventId: review.reports.audit_plans.audit_event_id,
+                auditPlanId: review.reports.audit_plan_id,
+                assignedUserId: dto.reviewer_id,
+                dueAt: dto.due_at ?? null,
+                destinationPath: `/projects/${review.reports.audit_plans.project_id}?workspace=technical-review&technical_review_id=${reviewId}&audit_plan_id=${review.reports.audit_plan_id}`,
+                context: { report_id: review.report_id, assignment_id: assignment.id, reassignment_reason: dto.reason.trim() },
+            }, transaction);
+            await transaction.audit_logs.create({
+                data: {
+                    user_id: actor.userId,
+                    action: dto.admin_override_reason ? 'technical_review.reassign.admin_override' : 'technical_review.reassign',
+                    entity_type: 'technical_review',
+                    entity_id: reviewId,
+                    outcome: 'success',
+                    status_code: 200,
+                },
+            });
+            return workItem;
+        });
+        if (result && this.notifications) await this.notifications.notifyWorkAssigned(result);
+        return this.findOne(reviewId);
     }
 
     async saveWorkspace(
@@ -1674,193 +1905,6 @@ export class TechnicalReviewsService {
 
         return this.normalizeReview(
             updated,
-        );
-    }
-
-    async create(
-        dto: CreateTechnicalReviewDto,
-    ) {
-        const existingReview =
-            await this.prisma.technical_reviews.findFirst(
-                {
-                    where: {
-                        report_id:
-                            dto.report_id,
-                    },
-                },
-            );
-
-        if (existingReview) {
-            throw new ConflictException(
-                'Báo cáo này đã có hồ sơ thẩm xét',
-            );
-        }
-
-        const reviewer =
-            await this.prisma.users.findUnique({
-                where: {
-                    id: dto.reviewer_id,
-                },
-
-                select: {
-                    id: true,
-                },
-            });
-
-        if (!reviewer) {
-            throw new NotFoundException(
-                'Không tìm thấy người thẩm xét',
-            );
-        }
-
-        const report =
-            await this.prisma.reports.findUnique({
-                where: {
-                    id: dto.report_id,
-                },
-
-                include: {
-                    audit_findings: {
-                        select: {
-                            id: true,
-                            finding_code: true,
-                            finding_type: true,
-                            status: true,
-                        },
-                    }, audit_plans: {
-                        include: {
-                            certification_projects:
-                                true,
-
-                            audit_event: true,
-
-                            audit_team_appointment: {
-                                include: {
-                                    members: {
-                                        include: {
-                                            experts: {
-                                                select: {
-                                                    id: true,
-                                                    user_id: true,
-                                                    full_name: true,
-                                                },
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            });
-
-        if (!report) {
-            throw new NotFoundException(
-                'Không tìm thấy báo cáo đánh giá',
-            );
-        }
-
-        this.assertReportReady(report);
-        this.assertReviewerIndependent(
-            report.audit_plans,
-            dto.reviewer_id,
-        );
-
-        const unresolvedNc =
-            report.audit_findings.filter((finding) =>
-                [
-                    'major_nc',
-                    'minor_nc',
-                ].includes(
-                    finding.finding_type,
-                ) &&
-                finding.status !==
-                'closed',
-            );
-
-        if (unresolvedNc.length > 0) {
-            throw new BadRequestException(
-                `Còn ${unresolvedNc.length} NC chưa được đóng`,
-            );
-        }
-        const reviewItems =
-            await this.attachCurrentDocumentFiles(
-                report,
-                this.buildReviewItems(report),
-            );
-
-        if (reviewItems.length === 0) {
-            throw new BadRequestException(
-                'Không xác định được hồ sơ cần thẩm xét',
-            );
-        }
-
-        const now =
-            new Date().toISOString();
-
-        const formData = {
-            review_items: reviewItems,
-
-            f11: {
-                ...this.buildDefaultF11(),
-                prepared_at: now,
-                updated_at: now,
-            },
-
-            final_confirmation: {
-                all_documents_accepted:
-                    false,
-
-                confirmed_at: null,
-            },
-        };
-
-        const created =
-            await this.prisma.technical_reviews.create(
-                {
-                    data: {
-                        report_id:
-                            dto.report_id,
-
-                        reviewer_id:
-                            dto.reviewer_id,
-
-                        status: 'pending',
-
-                        general_comment:
-                            dto.general_comment ??
-                            null,
-
-                        form_data:
-                            JSON.stringify(
-                                formData,
-                            ),
-                    },
-
-                    include: {
-                        reports: {
-                            select: {
-                                id: true,
-                                report_code: true,
-                                audit_plan_id: true,
-                                status: true,
-                            },
-                        },
-
-                        reviewer: {
-                            select: {
-                                id: true,
-                                username: true,
-                                full_name: true,
-                                email: true,
-                            },
-                        },
-                    },
-                },
-            );
-
-        return this.normalizeReview(
-            created,
         );
     }
 
@@ -2179,9 +2223,14 @@ export class TechnicalReviewsService {
         );
     }
 
-    async complete(id: string) {
-        const review =
-            await this.getReviewOrThrow(id);
+    async complete(
+        id: string,
+        actor: ResourceActor,
+    ) {
+        const authorization =
+            await this.assertCanPerformReview(id, actor);
+        const review = authorization.review;
+        const actingUserId = actor.userId!;
 
         if (
             review.status === 'completed'
@@ -2411,6 +2460,72 @@ export class TechnicalReviewsService {
                             },
                         },
                     );
+
+                await transaction.technical_review_assignments.updateMany({
+                    where: { technical_review_id: id, status: 'CURRENT' },
+                    data: { status: 'COMPLETED', ended_at: completedAt },
+                });
+
+                await this.workItems?.completeMatchingWorkItems(
+                    {
+                        actionCode: WORK_ITEM_ACTIONS.TECHNICAL_REVIEW,
+                        entityType: 'technical_review',
+                        entityId: id,
+                    },
+                    actingUserId,
+                    transaction,
+                );
+
+                if (authorization.delegation) {
+                    await transaction.delegated_action_logs.create({
+                        data: {
+                            delegation_id: authorization.delegation.id,
+                            actor_user_id: actingUserId,
+                            delegated_for_user_id: review.reviewer_id,
+                            action_code: WORK_ITEM_ACTIONS.TECHNICAL_REVIEW,
+                            entity_type: 'technical_review',
+                            entity_id: id,
+                            project_id: review.reports.audit_plans.project_id,
+                            technical_review_id: id,
+                        },
+                    });
+                }
+
+                await this.workItems?.openWorkItem(
+                    {
+                        sourceKey:
+                            `certification-decision:${id}`,
+                        workType:
+                            'CERTIFICATION_DECISION',
+                        actionCode:
+                            WORK_ITEM_ACTIONS.CERTIFICATION_DECISION,
+                        title:
+                            `Ra quyết định chứng nhận ${review.reports.report_code}`,
+                        entityType:
+                            'technical_review',
+                        entityId:
+                            id,
+                        projectId:
+                            review.reports.audit_plans.project_id,
+                        auditEventId:
+                            review.reports.audit_plans.audit_event_id,
+                        auditPlanId:
+                            review.reports.audit_plan_id,
+                        assignedRole:
+                            'DECISION_MAKER',
+                        priority:
+                            'HIGH',
+                        destinationPath:
+                            `/projects/${review.reports.audit_plans.project_id}?workspace=certification-decision&technical_review_id=${id}&audit_plan_id=${review.reports.audit_plan_id}`,
+                        context: {
+                            report_id:
+                                review.report_id,
+                            report_code:
+                                review.reports.report_code,
+                        },
+                    },
+                    transaction,
+                );
 
                 return this.normalizeReview(
                     completed,

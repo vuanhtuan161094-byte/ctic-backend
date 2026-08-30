@@ -104,7 +104,11 @@ const projectScreen = read('app/components/CertificationProjectDetailScreen.tsx'
 const documentCenter = read('app/components/AuditDocumentCenterModal.tsx', frontendRoot);
 
 check(controller.includes("@Get('plan/:planId/workspace')"), 'Có API lấy workspace thẩm xét theo PLAN');
-check(controller.includes("@Post('plan/:planId/ensure')"), 'Có API bắt đầu thẩm xét theo PLAN');
+check(
+  controller.includes("@Post('plan/:planId/assign')") &&
+    !controller.includes("@Post('plan/:planId/ensure')"),
+  'Có API phân công thẩm xét theo PLAN và không còn self-claim',
+);
 check(controller.includes("@Patch(':id/workspace')"), 'Có API lưu dự thảo F.11');
 check(controller.includes("@Post(':id/f11/generate')"), 'Có API sinh F.11 Word/PDF theo hồ sơ thẩm xét');
 check(controller.includes("@Patch(':id/sync-documents')"), 'Có API đồng bộ tài liệu thẩm xét');
@@ -148,7 +152,11 @@ check(workspace.includes('Hồ sơ thẩm xét'), 'Workspace có tab hồ sơ th
 check(workspace.includes('Thẩm xét sơ bộ'), 'Workspace có tab thẩm xét sơ bộ');
 check(workspace.includes('Thẩm xét kỹ thuật'), 'Workspace có tab thẩm xét kỹ thuật');
 check(workspace.includes('Kiến nghị & F.11 Word/PDF'), 'Workspace có tab kiến nghị và tài liệu F.11');
-check(workspace.includes('Bắt đầu thẩm xét'), 'Frontend có nút bắt đầu thẩm xét');
+check(
+  workspace.includes('Phân công người thẩm xét') &&
+    !workspace.includes('Bắt đầu thẩm xét'),
+  'Frontend dùng phân công người thẩm xét và không còn nút self-claim',
+);
 check(workspace.includes('Đồng bộ tài liệu'), 'Frontend có nút đồng bộ phiên bản hồ sơ');
 check(workspace.includes('Chấp nhận'), 'Frontend cho chấp nhận từng hạng mục');
 check(workspace.includes('Yêu cầu sửa'), 'Frontend cho yêu cầu sửa từng hạng mục');
@@ -159,7 +167,12 @@ check(workspace.includes('Phiên bản F.11-P.09 đã sinh'), 'Frontend hiển t
 check(workspace.includes('/technical-reviews/plan/${planId}/workspace'), 'Frontend gọi API workspace theo PLAN');
 check(workspace.includes('/f11/generate?format=${format}'), 'Frontend gọi API sinh F.11 đúng hồ sơ thẩm xét');
 check(projectScreen.includes('TechnicalReviewWorkspaceModal'), 'Thành phần hồ sơ đã nối workspace thẩm xét');
-check(projectScreen.includes('Mở thẩm xét'), 'Dòng báo cáo thẩm xét có nút riêng');
+check(
+  projectScreen.includes('key === "technical_review_report"')
+    && projectScreen.includes('setTechnicalReviewWorkspacePlanId(plan.id)')
+    && projectScreen.includes('Thẩm xét'),
+  'Dòng báo cáo thẩm xét có thao tác mở workspace riêng',
+);
 check(projectScreen.includes('technical_review_report_f11'), 'Bảng hồ sơ nhận diện mã biểu F.11');
 check(documentCenter.includes('technical_review_report_f11'), 'Kiểu tài liệu frontend nhận diện F.11');
 

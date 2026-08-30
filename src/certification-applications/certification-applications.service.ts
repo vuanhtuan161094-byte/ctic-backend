@@ -142,7 +142,10 @@ export class CertificationApplicationsService {
         });
     }
 
-    async create(dto: CreateCertificationApplicationDto) {
+    async create(
+        dto: CreateCertificationApplicationDto,
+        options?: { requireDeclaration?: boolean },
+    ) {
         const customer =
             await this.prisma.customers.findUnique({
                 where: {
@@ -162,7 +165,10 @@ export class CertificationApplicationsService {
             );
         }
 
-        if (!dto.declaration_accepted) {
+        if (
+            (options?.requireDeclaration ?? true) &&
+            !dto.declaration_accepted
+        ) {
             throw new BadRequestException(
                 'Khách hàng phải xác nhận cam kết thông tin đăng ký',
             );
@@ -452,6 +458,7 @@ export class CertificationApplicationsService {
         id: string,
         dto: CreateCertificationApplicationDto,
         currentUserId: string,
+        options?: { requireDeclaration?: boolean },
     ) {
         const existing = await this.prisma.certification_applications.findUnique({
             where: { id },
@@ -511,7 +518,10 @@ export class CertificationApplicationsService {
         if (duplicate) {
             throw new BadRequestException('Mã hồ sơ đăng ký đã tồn tại');
         }
-        if (!dto.declaration_accepted) {
+        if (
+            (options?.requireDeclaration ?? true) &&
+            !dto.declaration_accepted
+        ) {
             throw new BadRequestException(
                 'Khách hàng phải xác nhận cam kết thông tin đăng ký',
             );
@@ -677,15 +687,20 @@ export class CertificationApplicationsService {
                 if (latestReview.prepared_by_id) {
                     await tx.notifications.upsert({
                         where: {
-                            source_key: `application-review:${latestReview.id}:application-invalidated`,
+                            user_id_source_key_channel: {
+                                user_id: latestReview.prepared_by_id,
+                                source_key: `application-review:${latestReview.id}:application-invalidated`,
+                                channel: 'IN_APP',
+                            },
                         },
                         create: {
                             user_id: latestReview.prepared_by_id,
                             source_key: `application-review:${latestReview.id}:application-invalidated`,
                             notification_type: 'APPLICATION_REVIEW_INVALIDATED',
+                            category: 'WORKFLOW_UPDATE',
                             title: 'Bản xem xét cần thực hiện lại',
                             message: invalidationComment,
-                            severity: 'warning',
+                            severity: 'WARNING',
                             entity_type: 'application_review',
                             entity_id: latestReview.id,
                         },

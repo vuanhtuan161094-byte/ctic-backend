@@ -13,6 +13,8 @@ export const ALLOWED_DOCUMENT_EXTENSIONS = [
     '.pdf',
     '.doc',
     '.docx',
+    '.xls',
+    '.xlsx',
     '.jpg',
     '.jpeg',
     '.png',
@@ -27,6 +29,8 @@ export const MIME_BY_EXTENSION: Record<AllowedDocumentExtension, string> = {
     '.pdf': 'application/pdf',
     '.doc': 'application/msword',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.png': 'image/png',
@@ -35,6 +39,8 @@ export const MIME_BY_EXTENSION: Record<AllowedDocumentExtension, string> = {
 };
 
 const MIME_ALIASES_BY_EXTENSION: Partial<Record<AllowedDocumentExtension, readonly string[]>> = {
+    '.xls': ['application/vnd.ms-excel', 'application/msexcel', 'application/x-msexcel'],
+    '.xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'],
     '.zip': ['application/zip', 'application/x-zip-compressed'],
     '.rar': ['application/vnd.rar', 'application/x-rar-compressed', 'application/x-rar'],
 };
@@ -251,6 +257,78 @@ export function isDocxBuffer(buffer: Buffer) {
     return requiredEntries.every((entry) => names.has(entry));
 }
 
+export function isXlsxBuffer(buffer: Buffer) {
+    if (!startsWithBytes(buffer, [0x50, 0x4b, 0x03, 0x04])) {
+        return false;
+    }
+
+    const minimumEocdSize = 22;
+    if (buffer.length < minimumEocdSize) {
+        return false;
+    }
+
+    const searchStart = Math.max(0, buffer.length - 65_557);
+    let eocdOffset = -1;
+    for (let offset = buffer.length - minimumEocdSize; offset >= searchStart; offset -= 1) {
+        if (buffer.readUInt32LE(offset) === 0x06054b50) {
+            eocdOffset = offset;
+            break;
+        }
+    }
+
+    if (eocdOffset < 0 || eocdOffset + minimumEocdSize > buffer.length) {
+        return false;
+    }
+
+    const totalEntries = buffer.readUInt16LE(eocdOffset + 10);
+    const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+    const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+    if (
+        totalEntries <= 0 ||
+        totalEntries > 10_000 ||
+        centralDirectoryOffset + centralDirectorySize > eocdOffset
+    ) {
+        return false;
+    }
+
+    const names = new Set<string>();
+    let position = centralDirectoryOffset;
+    let totalUncompressedSize = 0;
+
+    for (let index = 0; index < totalEntries; index += 1) {
+        if (position + 46 > eocdOffset || buffer.readUInt32LE(position) !== 0x02014b50) {
+            return false;
+        }
+        const uncompressedSize = buffer.readUInt32LE(position + 24);
+        const fileNameLength = buffer.readUInt16LE(position + 28);
+        const extraLength = buffer.readUInt16LE(position + 30);
+        const commentLength = buffer.readUInt16LE(position + 32);
+        const nextPosition = position + 46 + fileNameLength + extraLength + commentLength;
+        if (nextPosition > eocdOffset || fileNameLength <= 0) {
+            return false;
+        }
+        const fileName = buffer
+            .subarray(position + 46, position + 46 + fileNameLength)
+            .toString('utf8')
+            .replace(/\\/g, '/');
+        if (fileName.startsWith('/') || fileName.split('/').includes('..')) {
+            return false;
+        }
+        names.add(fileName);
+        totalUncompressedSize += uncompressedSize;
+        if (totalUncompressedSize > 200 * 1024 * 1024) {
+            return false;
+        }
+        position = nextPosition;
+    }
+
+    return [
+        '[Content_Types].xml',
+        '_rels/.rels',
+        'xl/workbook.xml',
+    ].every((entry) => names.has(entry));
+}
+
 export function isZipBuffer(buffer: Buffer) {
     if (buffer.length < 22) return false;
 
@@ -295,7 +373,10 @@ export function contentMatchesExtension(
             return isJpegBuffer(buffer);
         case '.docx':
             return isDocxBuffer(buffer);
+        case '.xlsx':
+            return isXlsxBuffer(buffer);
         case '.doc':
+        case '.xls':
             return isLegacyDocBuffer(buffer);
         case '.zip':
             return isZipBuffer(buffer);

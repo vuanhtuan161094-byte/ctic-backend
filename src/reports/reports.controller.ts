@@ -30,6 +30,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { ResourceAccessService } from '../security/resource-access.service';
 import { getResourceActor } from '../security/security-request';
 import type { SecurityRequest } from '../security/security-request';
+import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { CreateReportDto } from './dto/create-report.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
@@ -52,6 +54,8 @@ export class ReportsController {
             ReportDocumentsService,
         private readonly resourceAccess:
             ResourceAccessService,
+        private readonly actionAuthorization:
+            ActionAuthorizationService,
     ) { }
 
     private getUserId(
@@ -72,8 +76,6 @@ export class ReportsController {
 
     @Post()
     @Roles(
-        'ADMIN',
-        'STAFF',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -103,6 +105,20 @@ export class ReportsController {
             },
             getResourceActor(request),
         );
+
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'audit_plan',
+                entityId: dto.audit_plan_id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'OPEN',
+        });
 
         return this.reportsService.create(
             dto,
@@ -237,8 +253,6 @@ export class ReportsController {
 
     @Post(':id/documents/generate')
     @Roles(
-        'ADMIN',
-        'STAFF',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -277,6 +291,25 @@ export class ReportsController {
         await this.resourceAccess.assertEntityAccess(
             { entity_type: 'report', entity_id: id },
             getResourceActor(request),
+        );
+
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'report',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'OPEN',
+        });
+
+        await this.reportsService.assertCanManageReport(
+            this.getUserId(request),
+            id,
         );
 
         return this.reportDocumentsService.generate(
@@ -332,8 +365,6 @@ export class ReportsController {
 
     @Patch(':id')
     @Roles(
-        'ADMIN',
-        'STAFF',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -365,6 +396,20 @@ export class ReportsController {
             getResourceActor(request),
         );
 
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'report',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'OPEN',
+        });
+
         return this.reportsService.update(
             id,
             dto,
@@ -374,8 +419,6 @@ export class ReportsController {
 
     @Post(':id/submit')
     @Roles(
-        'ADMIN',
-        'STAFF',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -405,6 +448,20 @@ export class ReportsController {
             { entity_type: 'report', entity_id: id },
             getResourceActor(request),
         );
+
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'report',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'OPEN',
+        });
 
         return this.reportsService.submit(
             id,

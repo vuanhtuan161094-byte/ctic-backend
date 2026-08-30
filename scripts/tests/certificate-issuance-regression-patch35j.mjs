@@ -52,8 +52,8 @@ check(service.includes('buildCertificateNumberProposal'), 'Có đề xuất số
 check(service.includes('`CERT-${year}-${sequence}`'), 'Số đề xuất dùng năm cấp và số thứ tự dự án, không gắn cứng thương hiệu CTIC');
 check(service.includes("entity_type: 'certificate'"), 'Workspace lấy tài liệu theo entity certificate');
 check(service.includes("certificate_status_histories.findMany"), 'Workspace trả lịch sử trạng thái chứng chỉ');
-check(service.includes('certificate_status_histories.createMany'), 'Thay thế chứng chỉ cũ có ghi lịch sử');
-check(service.includes("to_status: 'replaced'"), 'Lịch sử chứng chỉ cũ ghi trạng thái replaced');
+check(service.includes('.certificate_status_histories') && service.includes('.createMany'), 'Thay thế chứng chỉ cũ có ghi lịch sử');
+check(/to_status:\s*'replaced'/.test(service), 'Lịch sử chứng chỉ cũ ghi trạng thái replaced');
 check(service.includes('changedBy?: string'), 'Cấp chứng chỉ ghi nhận người thao tác khi thay thế bản cũ');
 
 check(controller.includes("@Get('plan/:planId/workspace')"), 'Controller có API workspace theo PLAN');
@@ -68,24 +68,33 @@ check(dossierService.includes('...certificates.map((item) => item.id)'), 'Dossie
 check(dossierService.includes("['certificate_pdf']"), 'Trạng thái hồ sơ kiểm tra PDF chứng chỉ');
 check(dossierService.includes("context.certificates.map((certificate) => certificate.id)"), 'Dossier kiểm tra PDF đúng certificate của kỳ');
 
-check(modal.includes('KHÔNG GIAN CẤP GIẤY CHỨNG NHẬN'), 'Frontend có workspace cấp chứng chỉ riêng');
+check(modal.includes('CHỨNG CHỈ TRONG HỒ SƠ CHỨNG NHẬN'), 'Frontend có workspace chứng chỉ trong hồ sơ');
 check(modal.includes('/certificates/plan/${planId}/workspace'), 'Frontend tải điều kiện cấp theo PLAN');
 check(modal.includes('await api.post<CertificateRecord>("/certificates"'), 'Frontend cấp chứng chỉ qua API nghiệp vụ');
 check(modal.includes('values.issue_date.format("YYYY-MM-DD")'), 'Frontend gửi ngày cấp chuẩn');
 check(modal.includes('values.expire_date.format("YYYY-MM-DD")'), 'Frontend gửi ngày hết hạn chuẩn');
 check(modal.includes('Ngày hết hạn phải sau ngày cấp'), 'Frontend kiểm tra thứ tự ngày hiệu lực');
-check(modal.includes('await api.post(`/certificates/${certificate.id}/pdf`, data)'), 'Frontend tải PDF qua API chứng chỉ chuyên dụng');
+check(modal.includes('await api.post(`/certificates/${documentOwnerCertificate.id}/pdf`, data)'), 'Frontend tải PDF qua API chứng chỉ chuyên dụng');
 check(modal.includes('accept="application/pdf,.pdf"'), 'Bộ chọn file chỉ nhận PDF');
 check(modal.includes('QR chỉ được đưa vào sử dụng sau khi PDF chính thức được tải lên'), 'UI chặn sử dụng QR trước khi có PDF');
-check(modal.includes('/public/certificates/${certificate.verification_code}/qr'), 'Workspace có QR tra cứu công khai');
-check(modal.includes('/public/certificates/${certificate.verification_code}/pdf'), 'Workspace có link PDF công khai');
+check(modal.includes('/public/certificates/${documentOwnerCertificate.verification_code}/qr'), 'Workspace có QR tra cứu công khai');
+check(modal.includes('/public/certificates/${documentOwnerCertificate.verification_code}/pdf'), 'Workspace có link PDF công khai');
 check(modal.includes('Tạo phiên bản PDF mới'), 'Cho phép cập nhật phiên bản PDF chứng chỉ');
 check(modal.includes('workspace.history'), 'Workspace hiển thị lịch sử trạng thái');
 
 check(detail.includes('CertificateIssuanceWorkspaceModal'), 'Hồ sơ chứng nhận đã tích hợp workspace cấp chứng chỉ');
 check(detail.includes('setCertificateIssuancePlanId(plan.id)'), 'Dòng Giấy chứng nhận mở đúng PLAN GĐ2');
-check(detail.includes('Mở chứng chỉ'), 'Thành phần hồ sơ có nút Mở chứng chỉ');
-check(detail.includes('? "certificate_pdf"'), 'Phiên bản hiện hành của dòng chứng chỉ lấy certificate_pdf');
+check(
+  detail.includes('key === "certificate"')
+    && detail.includes('setCertificateIssuancePlanId(plan.id)')
+    && detail.includes('Phát hành chứng chỉ'),
+  'Thành phần hồ sơ có thao tác mở workspace phát hành chứng chỉ',
+);
+check(
+  detail.includes('certificate: ["certificate", "certificate_pdf"]')
+    && detail.includes('const currentFiles = dossierFilesForItem(record).filter'),
+  'Phiên bản hiện hành của dòng chứng chỉ lấy certificate_pdf',
+);
 check(detail.includes('certificate: ["certificate", "certificate_pdf"]') || detail.includes('\"certificate\"].includes(normalize(record.document_key))'), 'Dòng chứng chỉ hỗ trợ hiển thị phiên bản hiện hành');
 
 check(certificatesScreen.includes('&& Boolean(certificatePdf)'), 'Trang Chứng chỉ chỉ bật link QR công khai khi đã có PDF');

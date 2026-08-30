@@ -3,10 +3,20 @@ import {
     ForbiddenException,
     Injectable,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
 
-import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
+import { PrismaService } from '../prisma/prisma.service';
+import { hasPreparedAuditPlan } from './audit-cycle-workflow';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
+import { WorkItemsService } from '../work-items/work-items.service';
+
+import {
+    resolveCanonicalAuditPlan,
+    resolveCanonicalOperationalPlans,
+} from './audit-plan-canonical';
 import { CompleteAuditPlanDto } from './dto/complete-audit-plan.dto';
 import { CreateAuditPlanDto } from './dto/create-audit-plan.dto';
 import { StartAuditPlanDto } from './dto/start-audit-plan.dto';
@@ -18,6 +28,8 @@ type JsonObject = Record<string, unknown>;
 export class AuditPlansService {
     constructor(
         private readonly prisma: PrismaService,
+        @Optional()
+        private readonly workItems?: WorkItemsService,
     ) { }
 
     private readonly detailInclude = {
@@ -197,11 +209,12 @@ export class AuditPlansService {
 
     private async generatePlanCode(
         year: number,
+        client: Prisma.TransactionClient | PrismaService = this.prisma,
     ): Promise<string> {
         const prefix = `PLAN-${year}-`;
 
         const latest =
-            await this.prisma.audit_plans.findFirst({
+            await client.audit_plans.findFirst({
                 where: {
                     plan_code: {
                         startsWith: prefix,
@@ -342,208 +355,278 @@ export class AuditPlansService {
     }
 
     async create(dto: CreateAuditPlanDto) {
-        const project =
-            await this.prisma.certification_projects.findUnique({
-                where: {
-                    id: dto.project_id,
-                },
-                include: {
-                    certification_applications: {
-                        include: {
-                            customers: true,
-                        },
-                    },
-                },
-            });
-
-        if (!project) {
-            throw new NotFoundException(
-                'Không tìm thấy dự án chứng nhận',
-            );
-        }
-
-        let auditEvent:
-            | Awaited<
-                ReturnType<
-                    typeof this.prisma.audit_program_events.findUnique
-                >
-            >
-            | any
-            | null = null;
-
-        if (dto.audit_event_id) {
-            auditEvent =
-                await this.prisma.audit_program_events.findUnique({
+        return this.prisma.$transaction(async (transaction) => {
+            const project =
+                await transaction.certification_projects.findUnique({
                     where: {
-                        id: dto.audit_event_id,
+                        id: dto.project_id,
                     },
                     include: {
-                        audit_programs: true,
+                        certification_applications: {
+                            include: {
+                                customers: true,
+                            },
+                        },
                     },
                 });
 
-            if (!auditEvent) {
+            if (!project) {
                 throw new NotFoundException(
-                    'Không tìm thấy cuộc đánh giá trong chương trình đánh giá',
+                    'Không tìm thấy dự án chứng nhận',
                 );
             }
 
-            if (
-                auditEvent.audit_programs.project_id !==
-                dto.project_id
-            ) {
-                throw new BadRequestException(
-                    'Cuộc đánh giá không thuộc dự án chứng nhận đã chọn',
-                );
+            let auditEvent: any | null = null;
+
+            if (dto.audit_event_id) {
+                // Serialize every operational PLAN create on its business event
+                // before reading that event or its plans. Acquiring the update
+                // lock first avoids concurrent transactions both taking shared
+                // locks and then deadlocking while upgrading them.
+                await transaction.$queryRaw`
+                    SELECT id
+                    FROM dbo.audit_program_events WITH (UPDLOCK, HOLDLOCK)
+                    WHERE id = ${dto.audit_event_id}
+                `;
+
+                auditEvent =
+                    await transaction.audit_program_events.findUnique({
+                        where: {
+                            id: dto.audit_event_id,
+                        },
+                        include: {
+                            audit_programs: true,
+                        },
+                    });
+
+                if (!auditEvent) {
+                    throw new NotFoundException(
+                        'Không tìm thấy cuộc đánh giá trong chương trình đánh giá',
+                    );
+                }
+
+                if (
+                    auditEvent.audit_programs.project_id !==
+                    dto.project_id
+                ) {
+                    throw new BadRequestException(
+                        'Cuộc đánh giá không thuộc dự án chứng nhận đã chọn',
+                    );
+                }
+
+                // Re-read operational plans in the same transaction so repeated or
+                // concurrent POST requests resolve to one canonical business plan.
+                const existingPlans =
+                    await transaction.audit_plans.findMany({
+                        where: {
+                            audit_event_id:
+                                dto.audit_event_id,
+                        },
+                        include: {
+                            ...this.detailInclude,
+                            audit_team_appointment: {
+                                select: {
+                                    id: true,
+                                    status: true,
+                                },
+                            },
+                        },
+                    });
+
+                const existingPlan =
+                    resolveCanonicalAuditPlan(
+                        existingPlans,
+                    );
+
+                if (existingPlan) {
+                    return this.normalizePlan(
+                        existingPlan,
+                    );
+                }
             }
-        }
 
-        const plannedStartDate =
-            dto.planned_start_date ??
-            auditEvent?.planned_start_date
-                ?.toISOString()
-                .slice(0, 10) ??
-            null;
+            const plannedStartDate =
+                dto.planned_start_date ??
+                auditEvent?.planned_start_date
+                    ?.toISOString()
+                    .slice(0, 10) ??
+                null;
 
-        const plannedEndDate =
-            dto.planned_end_date ??
-            auditEvent?.planned_end_date
-                ?.toISOString()
-                .slice(0, 10) ??
-            null;
+            const plannedEndDate =
+                dto.planned_end_date ??
+                auditEvent?.planned_end_date
+                    ?.toISOString()
+                    .slice(0, 10) ??
+                null;
 
-        this.validateDateRange(
-            plannedStartDate,
-            plannedEndDate,
-        );
-
-        const planYear = plannedStartDate
-            ? new Date(
+            this.validateDateRange(
                 plannedStartDate,
-            ).getFullYear()
-            : auditEvent?.audit_programs
-                ?.program_year ??
-            new Date().getFullYear();
-
-        const latestVersion =
-            await this.prisma.audit_plans.findFirst({
-                where: dto.audit_event_id
-                    ? {
-                        audit_event_id:
-                            dto.audit_event_id,
-                    }
-                    : {
-                        project_id:
-                            dto.project_id,
-                        audit_event_id: null,
-                    },
-                orderBy: {
-                    version_no: 'desc',
-                },
-                select: {
-                    version_no: true,
-                },
-            });
-
-        const versionNo =
-            (latestVersion?.version_no ?? 0) + 1;
-
-        const planCode =
-            await this.generatePlanCode(planYear);
-
-        const application =
-            project.certification_applications;
-
-        const customer = application.customers;
-
-        const auditType =
-            dto.audit_type ??
-            auditEvent?.event_type ??
-            null;
-
-        const organizationName =
-            auditEvent?.audit_programs
-                ?.organization_name ??
-            customer.company_name;
-
-        const defaultFormData =
-            this.buildDefaultFormData(
-                organizationName,
-                auditType,
+                plannedEndDate,
             );
 
-        const formData = dto.form_data
-            ? this.deepMerge(
-                defaultFormData,
-                dto.form_data,
-            )
-            : defaultFormData;
+            const planYear = plannedStartDate
+                ? new Date(
+                    plannedStartDate,
+                ).getFullYear()
+                : auditEvent?.audit_programs
+                    ?.program_year ??
+                new Date().getFullYear();
 
-        const plan =
-            await this.prisma.audit_plans.create({
-                data: {
-                    project_id: dto.project_id,
+            const latestVersion =
+                await transaction.audit_plans.findFirst({
+                    where: dto.audit_event_id
+                        ? {
+                            audit_event_id:
+                                dto.audit_event_id,
+                        }
+                        : {
+                            project_id:
+                                dto.project_id,
+                            audit_event_id: null,
+                        },
+                    orderBy: {
+                        version_no: 'desc',
+                    },
+                    select: {
+                        version_no: true,
+                    },
+                });
 
-                    audit_event_id:
-                        dto.audit_event_id,
+            const versionNo =
+                (latestVersion?.version_no ?? 0) + 1;
 
-                    plan_code: planCode,
+            const planCode =
+                await this.generatePlanCode(
+                    planYear,
+                    transaction,
+                );
 
-                    version_no: versionNo,
+            const application =
+                project.certification_applications;
+            const customer = application.customers;
+            const auditType =
+                dto.audit_type ??
+                auditEvent?.event_type ??
+                null;
+            const organizationName =
+                auditEvent?.audit_programs
+                    ?.organization_name ??
+                customer.company_name;
+            const defaultFormData =
+                this.buildDefaultFormData(
+                    organizationName,
+                    auditType,
+                );
+            const formData = dto.form_data
+                ? this.deepMerge(
+                    defaultFormData,
+                    dto.form_data,
+                )
+                : defaultFormData;
 
-                    audit_type: auditType,
+            const plan =
+                await transaction.audit_plans.create({
+                    data: {
+                        project_id: dto.project_id,
+                        audit_event_id:
+                            dto.audit_event_id,
+                        plan_code: planCode,
+                        version_no: versionNo,
+                        audit_type: auditType,
+                        planned_start_date:
+                            this.toNullableDate(
+                                plannedStartDate,
+                            ),
+                        planned_end_date:
+                            this.toNullableDate(
+                                plannedEndDate,
+                            ),
+                        location:
+                            dto.location ??
+                            auditEvent
+                                ?.audit_programs
+                                ?.address ??
+                            customer.address,
+                        audit_scope:
+                            dto.audit_scope ??
+                            auditEvent
+                                ?.audit_programs
+                                ?.certification_scope ??
+                            application.certification_scope,
+                        audit_criteria:
+                            dto.audit_criteria ??
+                            auditEvent
+                                ?.audit_programs
+                                ?.standard_name ??
+                            project.standard_name ??
+                            application.standard_name,
+                        audit_objectives:
+                            dto.audit_objectives ??
+                            this.getDefaultObjective(
+                                auditType,
+                            ),
+                        status:
+                            dto.status ?? 'draft',
+                        form_data:
+                            this.serializeFormData(
+                                formData,
+                            ),
+                    },
+                    include: this.detailInclude,
+                });
 
-                    planned_start_date:
-                        this.toNullableDate(
-                            plannedStartDate,
-                        ),
-
-                    planned_end_date:
-                        this.toNullableDate(
-                            plannedEndDate,
-                        ),
-
-                    location:
-                        dto.location ??
-                        auditEvent
-                            ?.audit_programs
-                            ?.address ??
-                        customer.address,
-
-                    audit_scope:
-                        dto.audit_scope ??
-                        auditEvent
-                            ?.audit_programs
-                            ?.certification_scope ??
-                        application.certification_scope,
-
-                    audit_criteria:
-                        dto.audit_criteria ??
-                        auditEvent
-                            ?.audit_programs
-                            ?.standard_name ??
-                        project.standard_name ??
-                        application.standard_name,
-
-                    audit_objectives:
-                        dto.audit_objectives ??
-                        this.getDefaultObjective(
+            if (
+                auditType
+                    ?.trim()
+                    .toLowerCase() !==
+                'project_team'
+            ) {
+                await this.workItems?.openWorkItem(
+                    {
+                        sourceKey:
+                            `audit-team-issue:${plan.id}`,
+                        workType:
+                            'F04_TEAM_APPOINTMENT',
+                        actionCode:
+                            WORK_ITEM_ACTIONS.AUDIT_TEAM_ISSUE,
+                        title:
+                            `Bổ nhiệm đoàn đánh giá ${plan.plan_code ?? ''}`.trim(),
+                        entityType:
+                            'audit_plan',
+                        entityId:
+                            plan.id,
+                        projectId:
+                            plan.project_id,
+                        auditEventId:
+                            plan.audit_event_id,
+                        auditPlanId:
+                            plan.id,
+                        cycleKey:
                             auditType,
-                        ),
+                        assignedRole:
+                            'COORDINATOR',
+                        priority:
+                            'HIGH',
+                        dueAt:
+                            plan.planned_start_date,
+                        destinationPath:
+                            `/projects/${plan.project_id}?workspace=audit-team&audit_plan_id=${plan.id}`,
+                        context: {
+                            plan_code:
+                                plan.plan_code,
+                            audit_type:
+                                auditType,
+                        },
+                    },
+                    transaction,
+                );
+            }
 
-                    status:
-                        dto.status ?? 'draft',
-
-                    form_data:
-                        this.serializeFormData(
-                            formData,
-                        ),
-                },
-
-                include: this.detailInclude,
-            });
-
-        return this.normalizePlan(plan);
+            return this.normalizePlan(plan);
+        }, {
+            isolationLevel:
+                Prisma.TransactionIsolationLevel.Serializable,
+        });
     }
 
     async findAll() {
@@ -558,12 +641,21 @@ export class AuditPlansService {
                         created_at: 'desc',
                     },
                 ],
-                include: this.detailInclude,
+                include: {
+                    ...this.detailInclude,
+                    audit_team_appointment: {
+                        select: {
+                            id: true,
+                            status: true,
+                        },
+                    },
+                },
             });
 
-        return plans.map((plan) =>
-            this.normalizePlan(plan),
-        );
+        return resolveCanonicalOperationalPlans(plans).plans.map(({
+            audit_team_appointment: _appointment,
+            ...plan
+        }) => this.normalizePlan(plan));
     }
 
     async findByProject(projectId: string) {
@@ -597,12 +689,21 @@ export class AuditPlansService {
                         version_no: 'desc',
                     },
                 ],
-                include: this.detailInclude,
+                include: {
+                    ...this.detailInclude,
+                    audit_team_appointment: {
+                        select: {
+                            id: true,
+                            status: true,
+                        },
+                    },
+                },
             });
 
-        return plans.map((plan) =>
-            this.normalizePlan(plan),
-        );
+        return resolveCanonicalOperationalPlans(plans).plans.map(({
+            audit_team_appointment: _appointment,
+            ...plan
+        }) => this.normalizePlan(plan));
     }
 
     async findByEvent(eventId: string) {
@@ -630,12 +731,21 @@ export class AuditPlansService {
                 orderBy: {
                     version_no: 'desc',
                 },
-                include: this.detailInclude,
+                include: {
+                    ...this.detailInclude,
+                    audit_team_appointment: {
+                        select: {
+                            id: true,
+                            status: true,
+                        },
+                    },
+                },
             });
 
-        return plans.map((plan) =>
-            this.normalizePlan(plan),
-        );
+        return resolveCanonicalOperationalPlans(plans).plans.map(({
+            audit_team_appointment: _appointment,
+            ...plan
+        }) => this.normalizePlan(plan));
     }
 
     async findOne(id: string) {
@@ -749,6 +859,56 @@ export class AuditPlansService {
                 },
                 include: this.detailInclude,
             });
+
+        if (
+            hasPreparedAuditPlan(
+                updated.form_data,
+            )
+        ) {
+            await this.workItems?.completeMatchingWorkItems(
+                {
+                    actionCode:
+                        WORK_ITEM_ACTIONS.AUDIT_PLAN_PREPARE,
+                    entityType:
+                        'audit_plan',
+                    entityId:
+                        id,
+                },
+            );
+
+            await this.workItems?.openWorkItem({
+                sourceKey:
+                    `audit-execution:${id}`,
+                workType:
+                    'AUDIT_EXECUTION',
+                actionCode:
+                    WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+                title:
+                    `Thực hiện đánh giá ${updated.plan_code ?? ''}`.trim(),
+                entityType:
+                    'audit_plan',
+                entityId:
+                    id,
+                projectId:
+                    updated.project_id,
+                auditEventId:
+                    updated.audit_event_id,
+                auditPlanId:
+                    id,
+                assignedRole:
+                    'LEAD_AUDITOR',
+                dueAt:
+                    updated.planned_start_date,
+                destinationPath:
+                    `/projects/${updated.project_id}?workspace=audit-execution&audit_plan_id=${id}`,
+                context: {
+                    plan_code:
+                        updated.plan_code,
+                    audit_type:
+                        updated.audit_type,
+                },
+            });
+        }
 
         return this.normalizePlan(updated);
     }
@@ -1054,11 +1214,6 @@ export class AuditPlansService {
         const user = await this.prisma.users.findUnique({
             where: { id: userId },
             include: {
-                user_roles: {
-                    include: {
-                        roles: true,
-                    },
-                },
                 expert_profile: {
                     select: {
                         id: true,
@@ -1071,18 +1226,6 @@ export class AuditPlansService {
             throw new ForbiddenException(
                 'Không tìm thấy tài khoản người thực hiện',
             );
-        }
-
-        const roleNames = user.user_roles.map((item) =>
-            this.normalizeText(item.roles.role_name),
-        );
-
-        if (
-            roleNames.some((role) =>
-                ['admin', 'staff', 'coordinator'].includes(role),
-            )
-        ) {
-            return;
         }
 
         const expertId = user.expert_profile?.id;
@@ -1574,6 +1717,19 @@ export class AuditPlansService {
                     form_data: JSON.stringify(nextFormData),
                 },
             });
+
+            await this.workItems?.completeMatchingWorkItems(
+                {
+                    actionCode:
+                        WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+                    entityType:
+                        'audit_plan',
+                    entityId:
+                        id,
+                },
+                userId,
+                transaction,
+            );
         });
 
         return this.findOne(id);

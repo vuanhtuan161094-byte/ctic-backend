@@ -3,6 +3,8 @@ import {
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveCanonicalOperationalPlans } from '../audit-plans/audit-plan-canonical';
+import { auditCycleBusinessLabel, dossierKeyForAuditCycle } from '../audit-plans/audit-cycle-workflow';
 
 export type AlertSeverity =
     | 'critical'
@@ -24,6 +26,76 @@ interface StatusGroup {
     status: string | null;
     _count: {
         _all: number;
+    };
+}
+
+type ProjectCycleEvent = {
+    id: string;
+    event_type: string;
+    status: string;
+    sequence_no: number;
+    planned_start_date: Date | null;
+    surveillance_information_snapshots: Array<{ status: string }>;
+    audit_plans: Array<{
+        id: string;
+        audit_event_id: string | null;
+        plan_code: string | null;
+        created_at: Date;
+        audit_team_appointment: { id: string; status: string } | null;
+        reports: Array<{
+            technical_reviews: Array<{ status: string }>;
+        }>;
+    }>;
+};
+
+export function currentProjectCycleState(
+    projectStatus: string | null | undefined,
+    events: ProjectCycleEvent[],
+) {
+    const normalize = (value?: string | null) => (value ?? '').trim().toLowerCase();
+    const active = events.filter((event) => !['completed', 'cancelled'].includes(normalize(event.status)));
+    const initialFinished = ['certificate_issued', 'completed', 'closed'].includes(normalize(projectStatus));
+    const candidates = initialFinished
+        ? active.filter((event) => dossierKeyForAuditCycle(event.event_type) !== 'initial_certification')
+        : active;
+    const event = [...(candidates.length ? candidates : active)].sort((left, right) => {
+        const statusPriority = (value: string) => ['in_progress', 'active'].includes(normalize(value)) ? 0 : 1;
+        return statusPriority(left.status) - statusPriority(right.status)
+            || (left.planned_start_date?.getTime() ?? Number.MAX_SAFE_INTEGER)
+                - (right.planned_start_date?.getTime() ?? Number.MAX_SAFE_INTEGER)
+            || left.sequence_no - right.sequence_no;
+    })[0] ?? null;
+
+    if (!event) return null;
+    const plan = resolveCanonicalOperationalPlans(event.audit_plans).plans[0] ?? null;
+    const dossierKey = dossierKeyForAuditCycle(event.event_type);
+    const snapshotConfirmed = event.surveillance_information_snapshots.some((snapshot) =>
+        ['confirmed', 'reviewed'].includes(normalize(snapshot.status)),
+    );
+    const appointmentIssued = ['issued', 'confirmed'].includes(
+        normalize(plan?.audit_team_appointment?.status),
+    );
+    const reports = plan?.reports ?? [];
+    const technicalReviewCompleted = reports.some((report) =>
+        report.technical_reviews.some((review) => ['completed', 'accepted'].includes(normalize(review.status))),
+    );
+    const surveillance = ['surveillance_1', 'surveillance_2'].includes(dossierKey);
+    const stage = surveillance && !snapshotConfirmed
+        ? 'Tiếp nhận & cập nhật'
+        : !appointmentIssued
+            ? 'Chuẩn bị & chỉ định đoàn'
+            : reports.length === 0
+                ? 'Kế hoạch & đánh giá'
+                : !technicalReviewCompleted
+                    ? 'Thẩm xét kỹ thuật'
+                    : 'Kết quả đánh giá';
+
+    return {
+        dossier_key: dossierKey,
+        cycle_label: auditCycleBusinessLabel(event.event_type),
+        stage_label: stage,
+        display_label: `${auditCycleBusinessLabel(event.event_type)} · ${stage}`,
+        event_id: event.id,
     };
 }
 
@@ -369,6 +441,42 @@ export class DashboardService {
                             },
                         },
                     },
+                    audit_programs: {
+                        select: {
+                            events: {
+                                select: {
+                                    id: true,
+                                    event_type: true,
+                                    status: true,
+                                    sequence_no: true,
+                                    planned_start_date: true,
+                                    surveillance_information_snapshots: {
+                                        orderBy: { version_no: 'desc' },
+                                        take: 1,
+                                        select: { status: true },
+                                    },
+                                    audit_plans: {
+                                        select: {
+                                            id: true,
+                                            audit_event_id: true,
+                                            plan_code: true,
+                                            created_at: true,
+                                            audit_team_appointment: {
+                                                select: { id: true, status: true },
+                                            },
+                                            reports: {
+                                                select: {
+                                                    technical_reviews: {
+                                                        select: { status: true },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
                 },
             }),
 
@@ -531,7 +639,13 @@ export class DashboardService {
             },
 
             recent_projects:
-                recentProjects,
+                recentProjects.map(({ audit_programs, ...project }) => ({
+                    ...project,
+                    current_cycle: currentProjectCycleState(
+                        project.status,
+                        audit_programs.flatMap((program) => program.events),
+                    ),
+                })),
 
             recent_certificates:
                 recentCertificates,

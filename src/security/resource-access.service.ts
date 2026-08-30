@@ -31,6 +31,8 @@ type CustomerResourceDatabaseClient =
         | 'audit_plans'
         | 'audit_findings'
         | 'corrective_actions'
+        | 'complaint_cases'
+        | 'appeal_cases'
     >;
 
 const ORGANIZATION_WIDE_ROLES =
@@ -347,6 +349,32 @@ export class ResourceAccessService {
                 null;
         }
 
+        if (
+            [
+                'complaint_case',
+                'complaint_cases',
+            ].includes(entityType)
+        ) {
+            const complaint = await database.complaint_cases.findUnique({
+                where: { id: ref.entity_id },
+                select: { customer_id: true },
+            });
+            return complaint?.customer_id ?? null;
+        }
+
+        if (
+            [
+                'appeal_case',
+                'appeal_cases',
+            ].includes(entityType)
+        ) {
+            const appeal = await database.appeal_cases.findUnique({
+                where: { id: ref.entity_id },
+                select: { customer_id: true },
+            });
+            return appeal?.customer_id ?? null;
+        }
+
         return null;
     }
 
@@ -404,9 +432,44 @@ export class ResourceAccessService {
         const projectIds =
             new Set<string>();
 
+        if (roles.has('CUSTOMER')) {
+            const customerIds =
+                await this.getAccessibleCustomerIds(
+                    actor,
+                );
+
+            if (customerIds.size > 0) {
+                const customerProjects =
+                    await this.prisma
+                        .certification_projects
+                        .findMany({
+                            where: {
+                                certification_applications: {
+                                    customer_id: {
+                                        in:
+                                            Array.from(
+                                                customerIds,
+                                            ),
+                                    },
+                                },
+                            },
+                            select: {
+                                id: true,
+                            },
+                        });
+
+                for (const project of customerProjects) {
+                    projectIds.add(
+                        project.id,
+                    );
+                }
+            }
+        }
+
         if (
             roles.has('LEAD_AUDITOR') ||
-            roles.has('AUDITOR')
+            roles.has('AUDITOR') ||
+            roles.has('TECHNICAL_EXPERT')
         ) {
             const expert =
                 await this.prisma.experts.findUnique({
@@ -458,11 +521,8 @@ export class ResourceAccessService {
                 'TECHNICAL_REVIEWER',
             )
         ) {
-            const [
-                reviews,
-                readyReports,
-            ] = await Promise.all([
-                this.prisma.technical_reviews.findMany({
+            const reviews =
+                await this.prisma.technical_reviews.findMany({
                     where: {
                         reviewer_id:
                             userId,
@@ -479,41 +539,11 @@ export class ResourceAccessService {
                             },
                         },
                     },
-                }),
-                this.prisma.reports.findMany({
-                    where: {
-                        status:
-                            'ready_for_technical_review',
-                        technical_reviews: {
-                            none: {},
-                        },
-                    },
-                    select: {
-                        audit_plans: {
-                            select: {
-                                project_id:
-                                    true,
-                            },
-                        },
-                    },
-                }),
-            ]);
+                });
 
             for (const review of reviews) {
                 projectIds.add(
                     review.reports.audit_plans.project_id,
-                );
-            }
-
-            // Hồ sơ chưa được giao chính thức nhưng đã sẵn sàng thẩm xét
-            // phải hiển thị cho nhóm TECHNICAL_REVIEWER để họ có thể mở
-            // workspace và thực hiện ensureForPlan(). Sau khi một reviewer
-            // nhận hồ sơ, technical_reviews sẽ được tạo và hồ sơ không còn
-            // nằm trong pool chưa giao này. Kiểm tra độc lập của reviewer
-            // vẫn được TechnicalReviewsService thực hiện khi nhận hồ sơ.
-            for (const report of readyReports) {
-                projectIds.add(
-                    report.audit_plans.project_id,
                 );
             }
         }
@@ -1276,6 +1306,27 @@ export class ResourceAccessService {
         ref: ResourceEntityRef,
         actor: ResourceActor,
     ) {
+        const entityType = this.normalizeEntityType(ref.entity_type);
+        const governanceCaseAccess = await this.governanceCaseAccess(ref, actor);
+        if (governanceCaseAccess !== null) {
+            if (governanceCaseAccess) return;
+            throw new ForbiddenException('Bạn không được phân công vào case này');
+        }
+        const competencyEvidenceReader = normalizeRoles(actor.roles).some(
+            (role) => [
+                'ADMIN',
+                'COORDINATOR',
+                'LEAD_AUDITOR',
+                'TECHNICAL_REVIEWER',
+            ].includes(role),
+        );
+        if (
+            ['expert_competency_evidence', 'expert_training_record', 'expert_monitoring_record'].includes(entityType) &&
+            competencyEvidenceReader
+        ) {
+            return;
+        }
+
         const accessible =
             await this.getAccessibleProjectIds(
                 actor,
@@ -1342,8 +1393,76 @@ export class ResourceAccessService {
                 documents,
             );
 
+        const directApplicationReviewIds =
+            documents
+                .filter((document) =>
+                    [
+                        'application_review',
+                        'application_reviews',
+                    ].includes(
+                        this.normalizeEntityType(
+                            document.entity_type,
+                        ),
+                    ),
+                )
+                .map((document) =>
+                    document.entity_id,
+                );
+        const directlyAssignedReviews =
+            actor.userId &&
+            directApplicationReviewIds.length > 0
+                ? await this.prisma
+                    .application_reviews
+                    .findMany({
+                        where: {
+                            id: {
+                                in:
+                                    directApplicationReviewIds,
+                            },
+                            reviewer_id:
+                                actor.userId,
+                        },
+                        select: {
+                            id: true,
+                        },
+                    })
+                : [];
+        const directlyAssignedReviewIds =
+            new Set(
+                directlyAssignedReviews.map(
+                    (review) =>
+                        review.id,
+                ),
+            );
+
+        const directlyAccessibleCaseKeys = new Set<string>();
+        await Promise.all(documents.map(async (document) => {
+            const access = await this.governanceCaseAccess(document, actor);
+            if (access) {
+                directlyAccessibleCaseKeys.add(this.entityKey(document.entity_type, document.entity_id));
+            }
+        }));
+
         return documents.filter(
             (document) => {
+                const entityType = this.normalizeEntityType(
+                    document.entity_type,
+                );
+                const competencyEvidenceReader = normalizeRoles(actor.roles).some(
+                    (role) => [
+                        'ADMIN',
+                        'COORDINATOR',
+                        'LEAD_AUDITOR',
+                        'TECHNICAL_REVIEWER',
+                    ].includes(role),
+                );
+                if (
+                    ['expert_competency_evidence', 'expert_training_record', 'expert_monitoring_record'].includes(entityType) &&
+                    competencyEvidenceReader
+                ) {
+                    return true;
+                }
+
                 const projectIds =
                     projectMap.get(
                         this.entityKey(
@@ -1353,6 +1472,22 @@ export class ResourceAccessService {
                     );
 
                 return Boolean(
+                    (
+                        directlyAccessibleCaseKeys.has(
+                            this.entityKey(document.entity_type, document.entity_id),
+                        ) ||
+                        [
+                            'application_review',
+                            'application_reviews',
+                        ].includes(
+                            this.normalizeEntityType(
+                                document.entity_type,
+                            ),
+                        ) &&
+                        directlyAssignedReviewIds.has(
+                            document.entity_id,
+                        )
+                    ) ||
                     projectIds &&
                     Array.from(
                         projectIds,
@@ -1365,5 +1500,50 @@ export class ResourceAccessService {
                 );
             },
         );
+    }
+
+    private async governanceCaseAccess(
+        ref: ResourceEntityRef,
+        actor: ResourceActor,
+    ): Promise<boolean | null> {
+        const entityType = this.normalizeEntityType(ref.entity_type);
+        const actorId = actor.userId?.trim();
+        if (![
+            'certification_change_case',
+            'special_audit_case',
+            'complaint_case',
+            'appeal_case',
+        ].includes(entityType)) return null;
+        if (this.hasOrganizationWideAccess(actor.roles)) return true;
+        if (!actorId) return false;
+
+        if (entityType === 'certification_change_case') {
+            return Boolean(await this.prisma.certification_change_cases.findFirst({
+                where: { id: ref.entity_id, OR: [{ owner_id: actorId }, { submitted_by: actorId }] },
+                select: { id: true },
+            }));
+        }
+        if (entityType === 'special_audit_case') {
+            return Boolean(await this.prisma.special_audit_cases.findFirst({
+                where: { id: ref.entity_id, OR: [{ owner_id: actorId }, { created_by: actorId }] },
+                select: { id: true },
+            }));
+        }
+        if (entityType === 'complaint_case') {
+            return Boolean(await this.prisma.complaint_cases.findFirst({
+                where: {
+                    id: ref.entity_id,
+                    OR: [{ owner_id: actorId }, { investigator_id: actorId }, { decision_owner_id: actorId }],
+                },
+                select: { id: true },
+            }));
+        }
+        return Boolean(await this.prisma.appeal_cases.findFirst({
+            where: {
+                id: ref.entity_id,
+                OR: [{ owner_id: actorId }, { reviewer_id: actorId }, { decision_owner_id: actorId }],
+            },
+            select: { id: true },
+        }));
     }
 }

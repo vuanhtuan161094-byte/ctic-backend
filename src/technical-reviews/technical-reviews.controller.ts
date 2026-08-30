@@ -34,10 +34,11 @@ import type { SecurityRequest } from '../security/security-request';
 import { TechnicalReviewsService } from './technical-reviews.service';
 import { AuditDocumentsService } from '../audit-documents/audit-documents.service';
 import { AttachReviewDocumentDto } from './dto/attach-review-document.dto';
-import { CreateTechnicalReviewDto } from './dto/create-technical-review.dto';
 import { UpdateReviewItemDto } from './dto/update-review-item.dto';
 import { UpdateTechnicalReviewReportDto } from './dto/update-technical-review-report.dto';
 import { SaveTechnicalReviewWorkspaceDto } from './dto/save-technical-review-workspace.dto';
+import { AssignTechnicalReviewerDto } from './dto/assign-technical-reviewer.dto';
+import { ReassignTechnicalReviewerDto } from './dto/reassign-technical-reviewer.dto';
 
 @Controller('technical-reviews')
 @ApiTags('15. Thẩm xét kỹ thuật')
@@ -68,6 +69,7 @@ export class TechnicalReviewsController {
     @Get('plan/:planId/workspace')
     @Roles(
         'ADMIN',
+        'COORDINATOR',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )
@@ -89,23 +91,30 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'audit_plan', entity_id: planId },
-            getResourceActor(request),
-        );
-
-        return this.technicalReviewsService
-            .getWorkspaceByPlan(planId);
+        const actor = getResourceActor(request);
+        const roles = (actor.roles ?? []).map((role) => role.trim().toUpperCase());
+        const workspace = await this.technicalReviewsService.getWorkspaceByPlan(planId);
+        let canPerform = false;
+        if (workspace.review && roles.includes('TECHNICAL_REVIEWER')) {
+            await this.technicalReviewsService.assertCanPerformReview(workspace.review.id, actor);
+            canPerform = true;
+        } else {
+            await this.resourceAccess.assertEntityAccess(
+                { entity_type: 'audit_plan', entity_id: planId },
+                actor,
+            );
+        }
+        return { ...workspace, can_perform: canPerform };
     }
 
-    @Post('plan/:planId/ensure')
+    @Get('plan/:planId/candidates')
     @Roles(
         'ADMIN',
-        'TECHNICAL_REVIEWER',
+        'COORDINATOR',
     )
-    @Permissions('technical_reviews.perform')
+    @Permissions('technical_review.assign')
     @ApiOperation({
-        summary: 'Bắt đầu hoặc mở lại hồ sơ thẩm xét kỹ thuật của PLAN',
+        summary: 'Lấy danh sách người thẩm xét đủ eligibility và độc lập',
     })
     @ApiParam({
         name: 'planId',
@@ -114,7 +123,7 @@ export class TechnicalReviewsController {
     @ApiCreatedResponse({
         description: 'Đã tạo/mở hồ sơ thẩm xét và gán cho người dùng hiện tại',
     })
-    async ensureForPlan(
+    async reviewerCandidates(
         @Param('planId')
         planId: string,
 
@@ -126,11 +135,43 @@ export class TechnicalReviewsController {
             getResourceActor(request),
         );
 
-        return this.technicalReviewsService
-            .ensureForPlan(
-                planId,
-                this.getUserId(request),
-            );
+        return this.technicalReviewsService.getReviewerCandidates(planId);
+    }
+
+    @Post('plan/:planId/assign')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('technical_review.assign')
+    @ApiOperation({ summary: 'Phân công người thẩm xét sau readiness gate' })
+    async assignForPlan(
+        @Param('planId') planId: string,
+        @Body() dto: AssignTechnicalReviewerDto,
+        @Req() request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_plan', entity_id: planId },
+            getResourceActor(request),
+        );
+        return this.technicalReviewsService.assignForPlan(
+            planId,
+            dto,
+            getResourceActor(request),
+        );
+    }
+
+    @Patch(':id/reassign')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('technical_review.assign')
+    @ApiOperation({ summary: 'Phân công lại hồ sơ thẩm xét chưa bắt đầu' })
+    reassign(
+        @Param('id') id: string,
+        @Body() dto: ReassignTechnicalReviewerDto,
+        @Req() request: SecurityRequest,
+    ) {
+        return this.technicalReviewsService.reassign(
+            id,
+            dto,
+            getResourceActor(request),
+        );
     }
 
     @Patch(':id/workspace')
@@ -159,8 +200,8 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        await this.technicalReviewsService.assertCanPerformReview(
+            id,
             getResourceActor(request),
         );
 
@@ -202,8 +243,8 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        await this.technicalReviewsService.assertCanPerformReview(
+            id,
             getResourceActor(request),
         );
 
@@ -253,8 +294,8 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        await this.technicalReviewsService.assertCanPerformReview(
+            id,
             getResourceActor(request),
         );
 
@@ -296,8 +337,8 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        await this.technicalReviewsService.assertCanPerformReview(
+            id,
             getResourceActor(request),
         );
 
@@ -307,38 +348,6 @@ export class TechnicalReviewsController {
                 documentKey,
                 dto,
             );
-    }
-
-    @Post()
-    @Roles(
-        'ADMIN',
-        'TECHNICAL_REVIEWER',
-    )
-    @Permissions('technical_reviews.perform')
-    @ApiOperation({
-        summary: 'Tạo hồ sơ thẩm xét kỹ thuật',
-    })
-    @ApiCreatedResponse({
-        description: 'Tạo hồ sơ thẩm xét thành công',
-    })
-    @ApiBadRequestResponse({
-        description: 'Báo cáo chưa đáp ứng điều kiện thẩm xét',
-    })
-    async create(
-        @Body()
-        dto: CreateTechnicalReviewDto,
-
-        @Req()
-        request: SecurityRequest,
-    ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'report', entity_id: dto.report_id },
-            getResourceActor(request),
-        );
-
-        return this.technicalReviewsService.create(
-            dto,
-        );
     }
 
     @Get()
@@ -439,8 +448,8 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        await this.technicalReviewsService.assertCanPerformReview(
+            id,
             getResourceActor(request),
         );
 
@@ -597,8 +606,8 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        await this.technicalReviewsService.assertCanPerformReview(
+            id,
             getResourceActor(request),
         );
 
@@ -636,11 +645,9 @@ export class TechnicalReviewsController {
         @Req()
         request: SecurityRequest,
     ) {
-        await this.resourceAccess.assertEntityAccess(
-            { entity_type: 'technical_review', entity_id: id },
+        return this.technicalReviewsService.complete(
+            id,
             getResourceActor(request),
         );
-
-        return this.technicalReviewsService.complete(id);
     }
 }

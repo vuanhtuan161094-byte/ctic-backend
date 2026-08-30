@@ -10,11 +10,7 @@ import {
     Req,
     UseGuards,
 } from '@nestjs/common';
-
-import type {
-    Request,
-} from 'express';
-
+import type { Request } from 'express';
 import {
     ApiBadRequestResponse,
     ApiBearerAuth,
@@ -34,19 +30,23 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 
 import { CreateExpertCompetencyDto } from './dto/create-expert-competency.dto';
+import { CreateExpertCompetencyEvidenceDto } from './dto/create-expert-competency-evidence.dto';
+import { CreateExpertCompetencyReviewDto } from './dto/create-expert-competency-review.dto';
+import { ReactivateExpertCompetencyDto } from './dto/reactivate-expert-competency.dto';
+import { RenewExpertCompetencyDto } from './dto/renew-expert-competency.dto';
 import { SuspendExpertCompetencyDto } from './dto/suspend-expert-competency.dto';
 import { UpdateExpertCompetencyDto } from './dto/update-expert-competency.dto';
+import { VoidExpertCompetencyEvidenceDto } from './dto/void-expert-competency-evidence.dto';
 import { ExpertCompetenciesService } from './expert-competencies.service';
 
-type AuthenticatedRequest =
-    Request & {
-        user: {
-            userId: string;
-            username: string;
-            roles: string[];
-            permissions?: string[];
-        };
+type AuthenticatedRequest = Request & {
+    user: {
+        userId: string;
+        username: string;
+        roles: string[];
+        permissions?: string[];
     };
+};
 
 @Controller('expert-competencies')
 @ApiTags('21. Năng lực chuyên gia')
@@ -58,8 +58,7 @@ type AuthenticatedRequest =
 )
 export class ExpertCompetenciesController {
     constructor(
-        private readonly service:
-            ExpertCompetenciesService,
+        private readonly service: ExpertCompetenciesService,
     ) { }
 
     @Post()
@@ -69,10 +68,13 @@ export class ExpertCompetenciesController {
     @Roles('ADMIN')
     @Permissions('competencies.manage')
     create(
-        @Body()
-        dto: CreateExpertCompetencyDto,
+        @Body() dto: CreateExpertCompetencyDto,
+        @Req() request: AuthenticatedRequest,
     ): Promise<unknown> {
-        return this.service.create(dto);
+        return this.service.create(
+            dto,
+            request.user.userId,
+        );
     }
 
     @Get()
@@ -92,23 +94,12 @@ export class ExpertCompetenciesController {
     )
     @Permissions('competencies.read')
     findAll(
-        @Query('expert_id')
-        expertId?: string,
-
-        @Query('management_system')
-        managementSystem?: string,
-
-        @Query('role')
-        role?: string,
-
-        @Query('status')
-        status?: string,
-
-        @Query('iaf_code')
-        iafCode?: string,
-
-        @Query('nace_code')
-        naceCode?: string,
+        @Query('expert_id') expertId?: string,
+        @Query('management_system') managementSystem?: string,
+        @Query('role') role?: string,
+        @Query('status') status?: string,
+        @Query('iaf_code') iafCode?: string,
+        @Query('nace_code') naceCode?: string,
     ): Promise<unknown> {
         return this.service.findAll(
             expertId,
@@ -132,21 +123,17 @@ export class ExpertCompetenciesController {
     )
     @Permissions('competencies.read')
     findByExpert(
-        @Param(
-            'expertId',
-            ParseUUIDPipe,
-        )
-        expertId: string,
+        @Param('expertId', ParseUUIDPipe) expertId: string,
     ): Promise<unknown> {
-        return this.service.findByExpert(
-            expertId,
-        );
+        return this.service.findByExpert(expertId);
     }
 
     @Get(':id')
-    @ApiOperation({ summary: 'Lấy chi tiết hồ sơ năng lực' })
+    @ApiOperation({
+        summary: 'Lấy chi tiết năng lực, bằng chứng, tái đánh giá và lịch sử quyết định',
+    })
     @ApiParam({ name: 'id', format: 'uuid' })
-    @ApiOkResponse({ description: 'Chi tiết hồ sơ năng lực' })
+    @ApiOkResponse({ description: 'Chi tiết quản trị năng lực' })
     @ApiNotFoundResponse({ description: 'Không tìm thấy hồ sơ năng lực' })
     @Roles(
         'ADMIN',
@@ -156,17 +143,13 @@ export class ExpertCompetenciesController {
     )
     @Permissions('competencies.read')
     findOne(
-        @Param(
-            'id',
-            ParseUUIDPipe,
-        )
-        id: string,
+        @Param('id', ParseUUIDPipe) id: string,
     ): Promise<unknown> {
         return this.service.findOne(id);
     }
 
     @Patch(':id')
-    @ApiOperation({ summary: 'Cập nhật hồ sơ năng lực' })
+    @ApiOperation({ summary: 'Cập nhật hồ sơ năng lực ở trạng thái dự thảo' })
     @ApiParam({ name: 'id', format: 'uuid' })
     @ApiOkResponse({ description: 'Đã cập nhật hồ sơ năng lực' })
     @ApiBadRequestResponse({ description: 'Dữ liệu cập nhật không hợp lệ' })
@@ -174,18 +157,14 @@ export class ExpertCompetenciesController {
     @Roles('ADMIN')
     @Permissions('competencies.manage')
     update(
-        @Param(
-            'id',
-            ParseUUIDPipe,
-        )
-        id: string,
-
-        @Body()
-        dto: UpdateExpertCompetencyDto,
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: UpdateExpertCompetencyDto,
+        @Req() request: AuthenticatedRequest,
     ): Promise<unknown> {
         return this.service.update(
             id,
             dto,
+            request.user.userId,
         );
     }
 
@@ -198,14 +177,8 @@ export class ExpertCompetenciesController {
     @Roles('ADMIN')
     @Permissions('competencies.manage')
     approve(
-        @Param(
-            'id',
-            ParseUUIDPipe,
-        )
-        id: string,
-
-        @Req()
-        request: AuthenticatedRequest,
+        @Param('id', ParseUUIDPipe) id: string,
+        @Req() request: AuthenticatedRequest,
     ): Promise<unknown> {
         return this.service.approve(
             id,
@@ -222,18 +195,102 @@ export class ExpertCompetenciesController {
     @Roles('ADMIN')
     @Permissions('competencies.manage')
     suspend(
-        @Param(
-            'id',
-            ParseUUIDPipe,
-        )
-        id: string,
-
-        @Body()
-        dto: SuspendExpertCompetencyDto,
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: SuspendExpertCompetencyDto,
+        @Req() request: AuthenticatedRequest,
     ): Promise<unknown> {
         return this.service.suspend(
             id,
             dto,
+            request.user.userId,
+        );
+    }
+
+    @Post(':id/reactivate')
+    @ApiOperation({ summary: 'Khôi phục năng lực đang bị đình chỉ' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    reactivate(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: ReactivateExpertCompetencyDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.service.reactivate(
+            id,
+            dto,
+            request.user.userId,
+        );
+    }
+
+    @Post(':id/renew')
+    @ApiOperation({ summary: 'Gia hạn hiệu lực năng lực và ghi lịch sử quyết định' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    renew(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: RenewExpertCompetencyDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.service.renew(
+            id,
+            dto,
+            request.user.userId,
+        );
+    }
+
+    @Post(':id/evidence')
+    @ApiOperation({ summary: 'Thêm bằng chứng năng lực có cấu trúc' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    addEvidence(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: CreateExpertCompetencyEvidenceDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.service.addEvidence(
+            id,
+            dto,
+            request.user.userId,
+        );
+    }
+
+    @Post(':id/evidence/:evidenceId/void')
+    @ApiOperation({ summary: 'Vô hiệu bằng chứng nhưng giữ nguyên audit trail' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @ApiParam({ name: 'evidenceId', format: 'uuid' })
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    voidEvidence(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Param('evidenceId', ParseUUIDPipe) evidenceId: string,
+        @Body() dto: VoidExpertCompetencyEvidenceDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.service.voidEvidence(
+            id,
+            evidenceId,
+            dto,
+            request.user.userId,
+        );
+    }
+
+    @Post(':id/reviews')
+    @ApiOperation({ summary: 'Ghi nhận kết quả tái đánh giá/giám sát năng lực' })
+    @ApiParam({ name: 'id', format: 'uuid' })
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    addReview(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: CreateExpertCompetencyReviewDto,
+        @Req() request: AuthenticatedRequest,
+    ): Promise<unknown> {
+        return this.service.addReview(
+            id,
+            dto,
+            request.user.userId,
         );
     }
 }

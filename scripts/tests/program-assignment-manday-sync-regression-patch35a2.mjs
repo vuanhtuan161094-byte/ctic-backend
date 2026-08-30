@@ -40,7 +40,16 @@ console.log('\n=== PATCH 35A.2 — PHÂN CÔNG CHƯƠNG TRÌNH & ĐỒNG BỘ MA
 
 check('Backend có bộ đánh giá phân công theo chương trình', planEvaluatorStart >= 0);
 check('Phân công kế hoạch yêu cầu chỉ định đoàn cấp hồ sơ đã ban hành', planEvaluator.includes("status: 'issued'") && planEvaluator.includes('projectTeamAuditType'));
-check('Phân công kế hoạch chặn chuyên gia ngoài đoàn cấp hồ sơ', planEvaluator.includes('projectTeamExpertIds.has(member.expert_id)'));
+check(
+  'Phân công kế hoạch chặn chuyên gia ngoài F.04 áp dụng',
+  planEvaluator.includes('projectTeamRoleByExpertId.get(member.expert_id)')
+    && planEvaluator.includes('Có chuyên gia không thuộc đoàn đã được chỉ định ở cấp hồ sơ'),
+);
+check(
+  'Vai trò GĐ1/GĐ2 kế thừa nguyên trạng từ F.04',
+  planEvaluator.includes('inheritedRole !== this.normalizeCompetencyValue(member.team_role)')
+    && planEvaluator.includes('phải giữ nguyên theo quyết định chỉ định đoàn cấp hồ sơ'),
+);
 check('Đối chiếu năng lực theo standard_code', planEvaluator.includes('competency.standard_code') && planEvaluator.includes('program.standard_code'));
 check('Đối chiếu năng lực theo management_system', planEvaluator.includes('competency.management_system') && planEvaluator.includes('program.management_system'));
 check('Không đối chiếu lại IAF trong bộ đánh giá cấp kế hoạch', !/iaf/i.test(planEvaluator));
@@ -51,13 +60,28 @@ check('Kết quả năng lực thành viên được cập nhật khi kiểm tra
 check('API suitability trả required_programs', teamService.includes('required_programs: programs.map'));
 check('API suitability trả program_capabilities từng chuyên gia', teamService.includes('program_capabilities: programCapabilities'));
 check('Tạo chỉ định tách kiểm tra hồ sơ và kế hoạch', teamService.includes('if (isProjectContext)') && teamService.includes('await this.evaluatePlanProgramAllocation('));
-check('Tạo, cập nhật, kiểm tra và ban hành đều dùng kiểm tra chương trình', (teamService.match(/evaluatePlanProgramAllocation\(/g) ?? []).length >= 5);
+check(
+  'Tạo, cập nhật và kiểm tra dùng kiểm tra chương trình; ban hành dùng authority readiness chung',
+  (teamService.match(/evaluatePlanProgramAllocation\(/g) ?? []).length >= 4
+    && /teamReadiness\.assertReadyForIssue\(id\)/.test(teamService),
+);
 check('Ban hành kế hoạch dùng kiểm tra chương trình', teamService.includes('appointment.audit_plans.planned_start_date ?? appointment.appointment_date'));
 
 check('Frontend có trường program_keys', scheduleUi.includes('program_keys?: string[]'));
 check('Kế hoạch chỉ lấy chuyên gia thuộc đoàn cấp hồ sơ', scheduleUi.includes('activeExperts.filter((expert) => projectTeamExpertIds.has(expert.id))'));
 check('Frontend thông báo IAF/NACE đã khóa ở cấp hồ sơ', scheduleUi.includes('IAF/NACE đã được kiểm tra và khóa tại chỉ định đoàn cấp hồ sơ'));
-check('Kế hoạch hiển thị trường Chương trình/tiêu chuẩn phụ trách', scheduleUi.includes('label="Chương trình/tiêu chuẩn phụ trách"'));
+check(
+  'Hệ thống đối chiếu chương trình và điều phối viên không gán chi tiết quá trình',
+  scheduleUi.includes('label="Chương trình/tiêu chuẩn hệ thống đối chiếu"')
+    && scheduleUi.includes('Điều phối viên không phân công phòng ban/quá trình'),
+);
+check(
+  'Frontend phân biệt F.04 kế thừa với F.04 riêng của giám sát/tái chứng nhận',
+  scheduleUi.includes('const selectedInheritsProjectTeam = selectedIsStage1 || selectedIsInitialStage2')
+    && scheduleUi.includes('const selectedIsFormalEventAppointment = !selectedIsProjectContext && !selectedInheritsProjectTeam')
+    && scheduleUi.includes('Giám sát/tái chứng nhận có quyết định chỉ định đoàn riêng cho từng đợt'),
+);
+check('Vai trò thành viên kế thừa không thể bị điều phối viên sửa', scheduleUi.includes('disabled={selectedInheritsProjectTeam}'));
 check('Danh sách chương trình không hiển thị IAF/NACE', scheduleUi.includes('label: programDisplayLabel(program)'));
 check('Frontend chặn phân công khi chưa ban hành đoàn cấp hồ sơ', scheduleUi.includes('planTeamPrerequisiteBlocked'));
 check('Frontend đối chiếu chương trình với vai trò chuyên gia', scheduleUi.includes('capabilitySupportsRole'));

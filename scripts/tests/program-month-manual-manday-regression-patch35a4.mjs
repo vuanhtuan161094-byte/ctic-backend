@@ -137,13 +137,14 @@ check(
 );
 check(
   programPanel.includes("Chưa khóa ngày cụ thể")
-    && programPanel.includes("Tháng dự kiến là mốc điều phối"),
-  "Giao diện giải thích rõ tháng dự kiến không phải lịch xác nhận",
+    && programPanel.includes('planning_precision: "MONTH"'),
+  "Giao diện và payload giữ kế hoạch ở độ chính xác theo tháng",
 );
 check(
   programPanel.includes("const openPlanEditor")
     && programPanel.includes("const createPlanFromEvent = async ()")
-    && programPanel.includes("planned_start_date: planStartDate.format"),
+    && programPanel.includes("planned_start_date: planStartDate.format")
+    && programPanel.includes("exact_dates_selected_manually: true"),
   "Tạo kế hoạch mở bước chọn ngày cụ thể riêng",
 );
 check(

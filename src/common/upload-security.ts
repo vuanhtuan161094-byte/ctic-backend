@@ -32,6 +32,7 @@ export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 const EXTENSIONS_BY_FILE_KIND: Record<string, AllowedDocumentExtension[]> = {
     generated_docx: ['.docx'],
+    generated_xlsx: ['.xlsx'],
     generated_pdf: ['.pdf'],
     signed_scan: ['.pdf'],
     attachment: [...ALLOWED_DOCUMENT_EXTENSIONS],
@@ -47,7 +48,7 @@ function toBadRequest(error: unknown): BadRequestException {
     const code = error instanceof Error ? error.message : '';
 
     const messageByCode: Record<string, string> = {
-        UNSUPPORTED_EXTENSION: 'Chỉ chấp nhận tệp PDF, Word, JPG, PNG, ZIP hoặc RAR',
+        UNSUPPORTED_EXTENSION: 'Chỉ chấp nhận tệp PDF, Word, Excel, JPG, PNG, ZIP hoặc RAR',
         EXTENSION_NOT_ALLOWED_FOR_KIND: 'Định dạng tệp không phù hợp với loại hồ sơ đã chọn',
         MIME_EXTENSION_MISMATCH: 'Phần mở rộng và MIME type của tệp không khớp',
         FILE_NOT_FOUND: 'Không tìm thấy tệp vừa tải lên',

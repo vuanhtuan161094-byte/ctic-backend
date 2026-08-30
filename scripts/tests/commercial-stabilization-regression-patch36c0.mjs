@@ -24,6 +24,9 @@ function read(rel) {
 }
 
 const pkg = JSON.parse(read('package.json'));
+const prestartDev = pkg.scripts['prestart:dev'] ?? '';
+const prestartProd = pkg.scripts['prestart:prod'] ?? '';
+const verify = pkg.scripts.verify ?? '';
 const schemaService = read('src/prisma/database-schema.service.ts');
 const prismaModule = read('src/prisma/prisma.module.ts');
 const main = read('src/main.ts');
@@ -44,8 +47,17 @@ check(pkg.scripts['db:doctor']?.includes('database-doctor-patch36c0') || pkg.scr
 check(pkg.scripts['db:repair']?.includes('repair-critical-schema-patch36c0'), 'Có lệnh db:repair');
 check((pkg.scripts['db:stabilize']?.includes('prisma migrate deploy') && pkg.scripts['db:stabilize']?.includes('database-doctor-patch36c0')) || pkg.scripts['db:stabilize']?.includes('database-stabilize-patch36c1'), 'db:stabilize deploy/adopt + repair + verify');
 check((pkg.scripts['stabilize']?.includes('db:stabilize') && pkg.scripts['stabilize']?.includes('test:regression')) || pkg.scripts['stabilize']?.includes('stabilize:commercial'), 'Có một lệnh stabilize chạy chuỗi kiểm tra');
-check(pkg.scripts['prestart:dev']?.includes('database-doctor-patch36c0') || pkg.scripts['prestart:dev']?.includes('db:contract'), 'start:dev fail-fast nếu DB lệch schema');
-check(pkg.scripts['prestart:prod']?.includes('--strict') && (pkg.scripts['prestart:prod']?.includes('database-doctor-patch36c0') || pkg.scripts['prestart:prod']?.includes('db:contract')), 'production kiểm runtime + schema trước khi start');
+check(
+  prestartDev.includes('runtime-compatibility-check-patch36c0') &&
+    prestartDev.includes('prisma generate') &&
+    prestartDev.includes('verify-prisma-client-patch35a4.cjs') &&
+    prestartDev.includes('db:preflight') &&
+    !prestartDev.includes('db:contract') &&
+    !prestartDev.includes('database-doctor'),
+  'start:dev giữ prestart nhẹ: runtime + Prisma generate/verify + DB preflight',
+);
+check(prestartProd.includes('--strict') && prestartProd.includes('db:contract'), 'production kiểm runtime + full schema contract trước khi start');
+check(verify.includes('test:regression') && verify.includes('db:contract'), 'verification gate luôn chạy regression + full schema contract');
 check(pkg.scripts['env:lan']?.includes('configure-lan-patch36c0'), 'Có lệnh cấu hình LAN không đè secret');
 
 for (const required of [
@@ -61,7 +73,12 @@ for (const required of [
 }
 
 check(prismaModule.includes('DatabaseSchemaService') && /exports:\s*\[[\s\S]*DatabaseSchemaService/.test(prismaModule), 'DatabaseSchemaService được provider/export toàn hệ thống');
-check(main.includes('await databaseSchema') && main.includes('.assertCompatible()'), 'Backend kiểm schema trước app.listen');
+check(
+  main.indexOf('await databaseSchema') >= 0 &&
+    main.indexOf('.assertCompatible()') > main.indexOf('await databaseSchema') &&
+    main.indexOf('app.listen') > main.indexOf('.assertCompatible()'),
+  'DatabaseSchemaService kiểm schema runtime trước app.listen',
+);
 check(main.includes("'unhandledRejection'") && main.includes('[FATAL] Backend không thể khởi động'), 'Startup có fatal handler rõ ràng');
 check(main.includes('PUBLIC_BASE_URL đang trỏ localhost') && main.includes('npm run env:lan'), 'Startup cảnh báo QR/link sai khi chạy LAN');
 check(health.includes("database_schema: 'compatible'"), 'Health readiness báo schema tương thích');

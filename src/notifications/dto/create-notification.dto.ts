@@ -27,6 +27,29 @@ export class CreateNotificationDto {
     @MaxLength(50)
     notification_type!: string;
 
+    @ApiPropertyOptional({
+        enum: [
+            'WORKFLOW_UPDATE',
+            'CERTIFICATE_STATUS_CHANGED',
+        ],
+        default: 'WORKFLOW_UPDATE',
+    })
+    @IsOptional()
+    @IsIn([
+        'WORK_ASSIGNED',
+        'WORK_DUE_SOON',
+        'WORK_OVERDUE',
+        'WORK_ESCALATED',
+        'WORKFLOW_UPDATE',
+        'CAP_DUE',
+        'TECHNICAL_REVIEW_READY',
+        'CERTIFICATION_DECISION_READY',
+        'CERTIFICATE_ISSUE_READY',
+        'CERTIFICATE_EXPIRING',
+        'CERTIFICATE_STATUS_CHANGED',
+    ])
+    category?: string;
+
     @ApiProperty({ example: 'Lịch đánh giá sắp tới' })
     @IsString()
     @IsNotEmpty()
@@ -39,13 +62,18 @@ export class CreateNotificationDto {
     message!: string;
 
     @ApiPropertyOptional({
-        enum: ['info', 'warning', 'critical'],
-        default: 'info',
-        example: 'warning',
+        enum: ['INFO', 'NORMAL', 'WARNING', 'CRITICAL'],
+        default: 'INFO',
+        example: 'WARNING',
     })
     @IsOptional()
     @IsIn([
+        'INFO',
+        'NORMAL',
+        'WARNING',
+        'CRITICAL',
         'info',
+        'normal',
         'warning',
         'critical',
     ])

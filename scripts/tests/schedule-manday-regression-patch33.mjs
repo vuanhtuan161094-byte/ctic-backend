@@ -40,7 +40,12 @@ check('Tổng 2 + 1,5 khớp kế hoạch 3,5 MD', Math.abs((2 + 1.5) - 3.5) < 0
 check('Nhận diện ngày phân công trước kế hoạch', Date.parse('2026-08-06') < Date.parse('2026-08-07'));
 
 check('Backend có kiểm tra man-day theo nửa ngày', service.includes('isHalfDayIncrement'));
-check('Backend chặn ban hành khi tổng MD không khớp', service.includes('Chưa thể ban hành: kế hoạch yêu cầu'));
+check(
+  'Backend chặn cả thiếu và vượt khi tổng MD không khớp',
+  service.includes('Math.abs(allocatedMandays - requiredMandays) > 0.001')
+    && service.includes('allocatedMandays < requiredMandays')
+    && service.includes('nhưng đang bố trí vượt'),
+);
 check('Backend trả lỗi ngày kèm mã kế hoạch và khoảng hợp lệ', service.includes('Hãy chọn ngày trong khoảng'));
 check('Backend loại trừ chỉ định hiện tại khi kiểm tra trùng', service.includes('excludeAppointmentId'));
 

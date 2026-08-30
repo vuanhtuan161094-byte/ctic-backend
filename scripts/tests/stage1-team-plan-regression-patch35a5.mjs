@@ -9,6 +9,7 @@ const root = process.cwd();
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
 const allocationService = read("src/audit-team-appointments/audit-manday-allocation.service.ts");
+const appointmentService = read("src/audit-team-appointments/audit-team-appointments.service.ts");
 const frontendRootCandidates = [
   path.resolve(root, "..", "frontend"),
   path.resolve(root, "..", "ctic-frontend"),
@@ -68,8 +69,10 @@ check(
 check(
   allocationService.includes("let allocatedMandays = 0")
     && allocationService.includes("allocatedMandays += mandays")
-    && allocationService.includes("allocatedMandays + 0.001 < requiredMandays"),
-  "Backend kiểm tra tổng MD GĐ1 theo mức tối thiểu, cho phép bố trí vượt",
+    && allocationService.includes("Math.abs(allocatedMandays - requiredMandays) > 0.001")
+    && allocationService.includes("allocatedMandays < requiredMandays")
+    && allocationService.includes("nhưng đang bố trí vượt"),
+  "Backend bắt buộc tổng MD GĐ1 bằng đúng mức duyệt, chặn cả thiếu và vượt",
 );
 check(
   allocationService.includes("tham gia Giai đoạn 1 nên phải được phân tối thiểu 0,5 MD")
@@ -81,9 +84,9 @@ check(
   "Vai trò hỗ trợ tiếp tục bị khóa 0 MD tại GĐ1",
 );
 check(
-  scheduleScreen.includes("có thể bổ sung đánh giá viên khi cần")
-    && scheduleScreen.includes("Đánh giá viên có thể tham gia và được phân man-day Giai đoạn 1"),
-  "Frontend cho phép đánh giá viên tham gia GĐ1",
+  scheduleScreen.includes("GĐ1 có thể gồm nhiều thành viên trong F.04")
+    && scheduleScreen.includes("Thêm thành viên từ đoàn đã chỉ định"),
+  "Frontend cho phép nhiều thành viên F.04 tham gia GĐ1",
 );
 check(
   !scheduleScreen.includes('teamRole === "TEAM_LEADER" ? selectedRequiredMandays ?? 0 : 0')
@@ -91,8 +94,10 @@ check(
   "Đổi vai trò không còn tự dồn toàn bộ MD cho trưởng đoàn",
 );
 check(
-  scheduleScreen.includes('inheritedMembers.filter((member) => normalize(member.team_role) === "team_leader")'),
-  "Dự thảo GĐ1 mới mặc định chỉ kế thừa trưởng đoàn",
+  scheduleScreen.includes("const selectedInheritsProjectTeam = selectedIsStage1 || selectedIsInitialStage2")
+    && scheduleScreen.includes("disabled={selectedInheritsProjectTeam}")
+    && scheduleScreen.includes("projectTeamRoleByExpertId.get(expertId)"),
+  "Vai trò GĐ1 và GĐ2 kế thừa F.04 và không bị điều phối viên sửa",
 );
 check(
   /selectedIsStage1\s*\?\s*0\.5\s*:\s*inclusiveDayCount/s.test(scheduleScreen),
@@ -115,16 +120,26 @@ check(
   "Sửa PLAN không làm thay đổi tháng dự kiến của chương trình 3 năm",
 );
 check(
-  programPanel.includes('const suggestedMemberCount = eventType === "stage1"')
+  programPanel.includes('const suggestedMemberCount = ["stage1", "stage2"].includes(eventType)')
     && programPanel.includes("suggestedCalendarDays")
     && programPanel.includes("Math.ceil(numberValue(event.planned_mandays) / suggestedMemberCount)"),
   "Khi tạo PLAN, hệ thống gợi ý độ dài theo MD thay vì mặc định một ngày",
 );
 check(
-  programPanel.includes('eventType === "stage1"\n      ? 1')
-    && programPanel.includes("Mặc định giả định trưởng đoàn thực hiện"),
-  "Gợi ý GĐ1 mặc định bảo thủ theo một trưởng đoàn nhưng cho phép rút ngắn",
+  programPanel.includes("? countableProjectMemberCount")
+    && programPanel.includes("người trong F.04")
+    && programPanel.includes("ngày GĐ1 chỉ tạo cảnh báo mềm khi trùng onsite"),
+  "Gợi ý GĐ1 dùng số thành viên F.04 thay vì giả định một trưởng đoàn",
 );
+check(
+  appointmentService.includes("return !this.isStage1Plan(plan)")
+    && appointmentService.includes("findStage1WarningConflicts")
+    && appointmentService.includes("type: 'stage1_remote_workload'")
+    && appointmentService.includes("if (!this.isStage1Plan(plan))")
+    && appointmentService.includes("throw new ConflictException"),
+  "GĐ1 remote chỉ cảnh báo mềm; xung đột onsite với onsite vẫn khóa cứng",
+);
+check(scheduleScreen.includes("Lưu & xác nhận điều phối"), "GĐ2 giữ luồng điều phối một bước");
 check(
   programPanel.includes("Khung ngày gợi ý hiện chưa đủ khả năng bố trí")
     && programPanel.includes("Khi phân công thực tế, hệ thống sẽ kiểm tra lại theo từng người"),

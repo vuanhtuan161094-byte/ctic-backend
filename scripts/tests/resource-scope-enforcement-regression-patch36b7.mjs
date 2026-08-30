@@ -95,9 +95,10 @@ check(
 
 const technicalReviewSource = read('src/technical-reviews/technical-reviews.controller.ts');
 check(
-  technicalReviewSource.includes("entity_type: 'report', entity_id: dto.report_id") &&
-    technicalReviewSource.includes("entity_type: 'technical_review', entity_id: id"),
-  'Technical reviewer bị kiểm scope cả khi nhận hồ sơ và khi thao tác review',
+  technicalReviewSource.includes("entity_type: 'technical_review', entity_id: id") &&
+    technicalReviewSource.includes('assertCanPerformReview(') &&
+    !technicalReviewSource.includes("@Post()\n"),
+  'Technical reviewer đọc theo resource scope và thao tác qua assignment/delegation guard',
 );
 
 const reportsSource = read('src/reports/reports.controller.ts');

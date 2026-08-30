@@ -60,8 +60,8 @@ const backendEnv = read(path.join(backendRoot, '.env.example'));
 
 check(brandingBackend.includes("CERTIFICATION_BODY_SHORT_NAME") && brandingBackend.includes("'CB'"), 'Backend có branding helper trung tính');
 check(main.includes('getPlatformBranding()') && main.includes('platformBranding.platformTitle'), 'Swagger lấy tên platform từ branding helper');
-check(auditDocuments.includes('getPlatformBranding()'), 'Tài liệu đánh giá dùng branding helper chung');
-check(certificationResults.includes('getPlatformBranding()'), 'F.12/F.13 dùng branding helper chung');
+check(auditDocuments.includes('getPlatformBranding('), 'Tài liệu đánh giá dùng branding helper chung');
+check(certificationResults.includes('getPlatformBranding('), 'F.12/F.13 dùng branding helper chung');
 check(!/CTIC review application/.test(reviewCriteria), 'Tiêu chí F.11 không còn gắn tên CTIC');
 check(backendEnv.includes('CERTIFICATION_BODY_NAME=') && backendEnv.includes('PLATFORM_TITLE='), '.env.example backend có cấu hình tổ chức/platform');
 

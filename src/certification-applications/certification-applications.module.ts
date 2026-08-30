@@ -4,6 +4,7 @@ import { CertificationApplicationsController } from './certification-application
 
 @Module({
   providers: [CertificationApplicationsService],
-  controllers: [CertificationApplicationsController]
+  controllers: [CertificationApplicationsController],
+  exports: [CertificationApplicationsService],
 })
 export class CertificationApplicationsModule {}

@@ -4,11 +4,10 @@ import {
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-
 import { PrismaService } from '../prisma/prisma.service';
 import { SecurityAuditService } from '../security/security-audit.service';
 import {
+    CreateCertificationBodyCapabilityBatchDto,
     CreateCertificationBodyCapabilityDto,
     UpdateCertificationBodyCapabilityDto,
 } from './dto/certification-body-capability.dto';
@@ -24,6 +23,12 @@ type IndustryScope = {
     management_system?: string;
     scope_description?: string;
     is_primary?: boolean;
+};
+
+type RequestedProgram = {
+    code: string;
+    name: string;
+    edition: string | null;
 };
 
 export type CapabilityEvaluationItem = {
@@ -47,10 +52,10 @@ export type CapabilityEvaluation = {
     items: CapabilityEvaluationItem[];
 };
 
-const MANAGEMENT_SYSTEM_PROGRAMS: Record<string, { code: string; name: string }> = {
-    QMS: { code: 'ISO_9001', name: 'ISO 9001' },
-    EMS: { code: 'ISO_14001', name: 'ISO 14001' },
-    OHSMS: { code: 'ISO_45001', name: 'ISO 45001' },
+const MANAGEMENT_SYSTEM_PROGRAMS: Record<string, { code: string; name: string; digits: string }> = {
+    QMS: { code: 'ISO_9001', name: 'ISO 9001', digits: '9001' },
+    EMS: { code: 'ISO_14001', name: 'ISO 14001', digits: '14001' },
+    OHSMS: { code: 'ISO_45001', name: 'ISO 45001', digits: '45001' },
 };
 
 export function normalizeProgramCode(value: string): string {
@@ -65,7 +70,8 @@ export function normalizeProgramCode(value: string): string {
 }
 
 export function programForManagementSystem(value?: string) {
-    return MANAGEMENT_SYSTEM_PROGRAMS[String(value ?? '').trim().toUpperCase()] ?? null;
+    const program = MANAGEMENT_SYSTEM_PROGRAMS[String(value ?? '').trim().toUpperCase()] ?? null;
+    return program ? { code: program.code, name: program.name } : null;
 }
 
 @Injectable()
@@ -100,9 +106,36 @@ export class CertificationBodyCapabilitiesService {
         return { from, to };
     }
 
+    private async getStandardEdition(id: string) {
+        const standard = await this.prisma.standard_editions.findUnique({
+            where: { id },
+            include: { scheme: true },
+        });
+        if (!standard) {
+            throw new BadRequestException('Phiên bản tiêu chuẩn không tồn tại');
+        }
+        return standard;
+    }
+
+    private programFromStandard(standard: { standard_code: string; standard_name: string; edition: string }) {
+        const edition = standard.edition.trim();
+        const escapedEdition = edition.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const normalizedCode = standard.standard_code
+            .trim()
+            .replace(new RegExp(`\\s*[:\\-/]?\\s*${escapedEdition}$`, 'i'), '')
+            .trim() || standard.standard_code.trim();
+        return {
+            code: normalizeProgramCode(normalizedCode),
+            name: edition ? `${normalizedCode}:${edition}` : normalizedCode,
+        };
+    }
+
     async findAll() {
         return this.prisma.certification_body_capabilities.findMany({
-            include: { iaf_scope: true },
+            include: {
+                iaf_scope: true,
+                standard_edition: { include: { scheme: true } },
+            },
             orderBy: [
                 { program_code: 'asc' },
                 { iaf_scope: { iaf_code: 'asc' } },
@@ -111,7 +144,12 @@ export class CertificationBodyCapabilitiesService {
     }
 
     async create(dto: CreateCertificationBodyCapabilityDto, userId: string) {
-        const programCode = normalizeProgramCode(dto.program_code);
+        const standard = dto.standard_edition_id
+            ? await this.getStandardEdition(dto.standard_edition_id)
+            : null;
+        const derivedProgram = standard ? this.programFromStandard(standard) : null;
+        const programCode = derivedProgram?.code ?? normalizeProgramCode(dto.program_code);
+        const programName = derivedProgram?.name ?? dto.program_name.trim();
         if (!programCode) {
             throw new BadRequestException('Chương trình/tiêu chuẩn không hợp lệ');
         }
@@ -122,16 +160,19 @@ export class CertificationBodyCapabilitiesService {
             throw new BadRequestException('Mã IAF không tồn tại hoặc đã ngừng hoạt động');
         }
         const existing = await this.prisma.certification_body_capabilities.findFirst({
-            where: { program_code: programCode, iaf_scope_id: dto.iaf_scope_id },
+            where: dto.standard_edition_id
+                ? { standard_edition_id: dto.standard_edition_id, iaf_scope_id: dto.iaf_scope_id }
+                : { standard_edition_id: null, program_code: programCode, iaf_scope_id: dto.iaf_scope_id },
         });
         if (existing) {
-            throw new ConflictException('Năng lực cho chương trình và IAF này đã tồn tại');
+            throw new ConflictException('Năng lực cho tiêu chuẩn và IAF này đã tồn tại');
         }
         const period = this.normalizePeriod(dto.effective_from, dto.effective_to);
         const capability = await this.prisma.certification_body_capabilities.create({
             data: {
                 program_code: programCode,
-                program_name: dto.program_name.trim(),
+                program_name: programName,
+                standard_edition_id: dto.standard_edition_id ?? null,
                 iaf_scope_id: dto.iaf_scope_id,
                 status: dto.status ?? 'ACTIVE',
                 effective_from: period.from,
@@ -140,7 +181,10 @@ export class CertificationBodyCapabilitiesService {
                 created_by: userId,
                 updated_by: userId,
             },
-            include: { iaf_scope: true },
+            include: {
+                iaf_scope: true,
+                standard_edition: { include: { scheme: true } },
+            },
         });
         await this.securityAudit.write({
             userId,
@@ -151,6 +195,70 @@ export class CertificationBodyCapabilitiesService {
             statusCode: 201,
         });
         return capability;
+    }
+
+    async createBatch(dto: CreateCertificationBodyCapabilityBatchDto, userId: string) {
+        const standard = await this.getStandardEdition(dto.standard_edition_id);
+        const ids = [...new Set(dto.iaf_scope_ids)];
+        const scopes = await this.prisma.iaf_scopes.findMany({
+            where: { id: { in: ids }, is_active: true },
+            orderBy: { iaf_code: 'asc' },
+        });
+        if (scopes.length !== ids.length) {
+            throw new BadRequestException('Có mã IAF không tồn tại hoặc đã ngừng hoạt động');
+        }
+        const period = this.normalizePeriod(dto.effective_from, dto.effective_to);
+        const program = this.programFromStandard(standard);
+
+        const result = await this.prisma.$transaction(async (tx) => {
+            const existing = await tx.certification_body_capabilities.findMany({
+                where: {
+                    standard_edition_id: dto.standard_edition_id,
+                    iaf_scope_id: { in: ids },
+                },
+                select: { iaf_scope_id: true },
+            });
+            const existingIds = new Set(existing.map((item) => item.iaf_scope_id));
+            const missing = ids.filter((id) => !existingIds.has(id));
+            if (missing.length) {
+                await tx.certification_body_capabilities.createMany({
+                    data: missing.map((iafScopeId) => ({
+                        program_code: program.code,
+                        program_name: program.name,
+                        standard_edition_id: dto.standard_edition_id,
+                        iaf_scope_id: iafScopeId,
+                        status: dto.status ?? 'ACTIVE',
+                        effective_from: period.from,
+                        effective_to: period.to,
+                        notes: dto.notes?.trim() || null,
+                        created_by: userId,
+                        updated_by: userId,
+                    })),
+                });
+            }
+            const rows = await tx.certification_body_capabilities.findMany({
+                where: {
+                    standard_edition_id: dto.standard_edition_id,
+                    iaf_scope_id: { in: ids },
+                },
+                include: {
+                    iaf_scope: true,
+                    standard_edition: { include: { scheme: true } },
+                },
+                orderBy: { iaf_scope: { iaf_code: 'asc' } },
+            });
+            return { rows, created_count: missing.length, existing_count: existingIds.size };
+        });
+
+        await this.securityAudit.write({
+            userId,
+            action: 'CB_CAPABILITY_BATCH_CREATED',
+            entityType: 'standard_edition',
+            entityId: dto.standard_edition_id,
+            outcome: 'success',
+            statusCode: 201,
+        });
+        return result;
     }
 
     async update(id: string, dto: UpdateCertificationBodyCapabilityDto, userId: string) {
@@ -164,9 +272,14 @@ export class CertificationBodyCapabilitiesService {
             const iaf = await this.prisma.iaf_scopes.findUnique({ where: { id: iafScopeId } });
             if (!iaf?.is_active) throw new BadRequestException('Mã IAF không tồn tại hoặc đã ngừng hoạt động');
         }
-        const programCode = dto.program_code
+
+        const standardEditionId = dto.standard_edition_id ?? current.standard_edition_id;
+        const standard = standardEditionId ? await this.getStandardEdition(standardEditionId) : null;
+        const derivedProgram = standard ? this.programFromStandard(standard) : null;
+        const programCode = derivedProgram?.code ?? (dto.program_code
             ? normalizeProgramCode(dto.program_code)
-            : current.program_code;
+            : current.program_code);
+        const programName = derivedProgram?.name ?? dto.program_name?.trim() ?? current.program_name;
         const period = this.normalizePeriod(
             dto.effective_from ?? current.effective_from.toISOString().slice(0, 10),
             dto.effective_to === undefined
@@ -175,18 +288,20 @@ export class CertificationBodyCapabilitiesService {
         );
         const duplicate = await this.prisma.certification_body_capabilities.findFirst({
             where: {
-                program_code: programCode,
-                iaf_scope_id: iafScopeId,
+                ...(standardEditionId
+                    ? { standard_edition_id: standardEditionId, iaf_scope_id: iafScopeId }
+                    : { standard_edition_id: null, program_code: programCode, iaf_scope_id: iafScopeId }),
                 id: { not: id },
             },
         });
-        if (duplicate) throw new ConflictException('Năng lực cho chương trình và IAF này đã tồn tại');
+        if (duplicate) throw new ConflictException('Năng lực cho tiêu chuẩn và IAF này đã tồn tại');
 
         const capability = await this.prisma.certification_body_capabilities.update({
             where: { id },
             data: {
                 program_code: programCode,
-                program_name: dto.program_name?.trim(),
+                program_name: programName,
+                standard_edition_id: standardEditionId,
                 iaf_scope_id: iafScopeId,
                 status: dto.status,
                 effective_from: period.from,
@@ -194,7 +309,10 @@ export class CertificationBodyCapabilitiesService {
                 notes: dto.notes === undefined ? undefined : dto.notes.trim() || null,
                 updated_by: userId,
             },
-            include: { iaf_scope: true },
+            include: {
+                iaf_scope: true,
+                standard_edition: { include: { scheme: true } },
+            },
         });
         await this.securityAudit.write({
             userId,
@@ -207,13 +325,23 @@ export class CertificationBodyCapabilitiesService {
         return capability;
     }
 
-    private requestedPrograms(standardName: string) {
-        const known = Object.values(MANAGEMENT_SYSTEM_PROGRAMS).filter((program) =>
-            standardName.includes(program.code.replace('ISO_', '')),
-        );
+    private requestedPrograms(standardName: string): RequestedProgram[] {
+        const known: RequestedProgram[] = [];
+        for (const program of Object.values(MANAGEMENT_SYSTEM_PROGRAMS)) {
+            const match = standardName.match(new RegExp(`${program.digits}\\s*(?::|[-])?\\s*((?:19|20)\\d{2})?`, 'i'));
+            if (!match) continue;
+            known.push({
+                code: program.code,
+                name: program.name,
+                edition: match[1] || null,
+            });
+        }
         if (known.length) return known;
         const fragments = standardName.split(/[+,;]/).map((item) => item.trim()).filter(Boolean);
-        return fragments.map((name) => ({ code: normalizeProgramCode(name), name }));
+        return fragments.map((name) => {
+            const edition = name.match(/(?:19|20)\d{2}/)?.[0] ?? null;
+            return { code: normalizeProgramCode(name), name, edition };
+        });
     }
 
     private parseScopes(value: string | null): IndustryScope[] | null {
@@ -224,6 +352,22 @@ export class CertificationBodyCapabilitiesService {
         } catch {
             return null;
         }
+    }
+
+    private capabilityMatchesEdition(
+        capability: {
+            program_code: string;
+            standard_edition_id?: string | null;
+            standard_edition?: { standard_code: string; edition: string } | null;
+        },
+        program: RequestedProgram,
+    ) {
+        if (!program.edition) return true;
+        return Boolean(
+            capability.standard_edition &&
+            normalizeProgramCode(capability.standard_edition.standard_code) === program.code &&
+            capability.standard_edition.edition.trim() === program.edition,
+        );
     }
 
     async evaluateReview(reviewId: string, at = new Date()): Promise<CapabilityEvaluation> {
@@ -255,7 +399,7 @@ export class CertificationBodyCapabilitiesService {
             };
         }
 
-        const requiredPairs = new Map<string, { program: { code: string; name: string }; iafCode: string }>();
+        const requiredPairs = new Map<string, { program: RequestedProgram; iafCode: string }>();
         for (const program of programs) {
             const matchingScopes = scopes.filter((scope) =>
                 programForManagementSystem(scope.management_system)?.code === program.code,
@@ -263,7 +407,7 @@ export class CertificationBodyCapabilitiesService {
             if (!matchingScopes.length) {
                 items.push({
                     program_code: program.code,
-                    program_name: program.name,
+                    program_name: program.edition ? `${program.name}:${program.edition}` : program.name,
                     iaf_code: null,
                     result: 'REVIEW_REQUIRED',
                     reason: `Chưa xác định phạm vi ngành cho ${program.name}`,
@@ -278,7 +422,7 @@ export class CertificationBodyCapabilitiesService {
                 ) {
                     items.push({
                         program_code: program.code,
-                        program_name: program.name,
+                        program_name: program.edition ? `${program.name}:${program.edition}` : program.name,
                         iaf_code: scope.iaf_code?.trim() || null,
                         result: 'REVIEW_REQUIRED',
                         reason: 'Phân loại ngành chưa đầy đủ hoặc chưa được xác nhận',
@@ -287,7 +431,7 @@ export class CertificationBodyCapabilitiesService {
                     continue;
                 }
                 const iafCode = scope.iaf_code.trim();
-                requiredPairs.set(`${program.code}:${iafCode}`, { program, iafCode });
+                requiredPairs.set(`${program.code}:${program.edition ?? '*'}:${iafCode}`, { program, iafCode });
             }
         }
 
@@ -298,28 +442,48 @@ export class CertificationBodyCapabilitiesService {
                     program_code: { in: [...new Set(pairs.map((pair) => pair.program.code))] },
                     iaf_scope: { iaf_code: { in: [...new Set(pairs.map((pair) => pair.iafCode))] } },
                 },
-                include: { iaf_scope: true },
+                include: {
+                    iaf_scope: true,
+                    standard_edition: true,
+                },
             });
             const date = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
             for (const pair of pairs) {
-                const capability = capabilities.find((candidate) =>
+                const sameProgramAndIaf = capabilities.filter((candidate) =>
                     candidate.program_code === pair.program.code &&
                     candidate.iaf_scope.iaf_code === pair.iafCode,
-                ) ?? null;
+                );
+                const exactEdition = pair.program.edition
+                    ? sameProgramAndIaf.filter((candidate) => this.capabilityMatchesEdition(candidate, pair.program))
+                    : [];
+                const legacy = sameProgramAndIaf.filter((candidate) => !candidate.standard_edition_id);
+                const pool = exactEdition.length
+                    ? exactEdition
+                    : pair.program.edition
+                        ? legacy
+                        : sameProgramAndIaf;
+                const capability = pool.find((candidate) =>
+                    candidate.status === 'ACTIVE' &&
+                    candidate.effective_from <= date &&
+                    (!candidate.effective_to || candidate.effective_to >= date),
+                ) ?? pool[0] ?? null;
                 const valid = Boolean(
                     capability &&
                     capability.status === 'ACTIVE' &&
                     capability.effective_from <= date &&
                     (!capability.effective_to || capability.effective_to >= date),
                 );
+                const programLabel = pair.program.edition
+                    ? `${pair.program.name}:${pair.program.edition}`
+                    : pair.program.name;
                 items.push({
                     program_code: pair.program.code,
-                    program_name: pair.program.name,
+                    program_name: programLabel,
                     iaf_code: pair.iafCode,
                     result: valid ? 'CAPABLE' : 'NOT_CAPABLE',
                     reason: valid
-                        ? 'Có năng lực đang hiệu lực cho chương trình và mã IAF'
-                        : 'Không có năng lực ACTIVE đang hiệu lực cho chương trình và mã IAF',
+                        ? `Có năng lực đang hiệu lực cho ${programLabel} và IAF ${pair.iafCode}`
+                        : `Không có năng lực đang hiệu lực cho ${programLabel} và IAF ${pair.iafCode}`,
                     capability: capability ? {
                         id: capability.id,
                         status: capability.status,

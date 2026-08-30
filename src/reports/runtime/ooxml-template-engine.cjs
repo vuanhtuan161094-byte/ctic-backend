@@ -293,6 +293,44 @@ function renderDocxTemplate({ templatePath, outputPath, data }) {
     return outputPath;
 }
 
+
+function xlsxText(value) {
+    const normalized = value === null || value === undefined || String(value).trim() === ''
+        ? '—'
+        : String(value).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return escapeXml(normalized).replace(/\n/g, '&#10;');
+}
+
+function replaceXlsxToken(xml, token, value) {
+    const pattern = new RegExp(`{{\\s*${escapeRegex(token)}\\s*}}`, 'g');
+    return xml.replace(pattern, xlsxText(value));
+}
+
+function renderXlsxXml(xml, data) {
+    const flat = flattenScalars(data);
+    let output = xml;
+    for (const [token, value] of Object.entries(flat)) {
+        output = replaceXlsxToken(output, token, value);
+    }
+    return output.replace(/{{\s*[A-Za-z0-9_.]+\s*}}/g, '—');
+}
+
+function renderXlsxTemplate({ templatePath, outputPath, data }) {
+    const entries = readZipEntries(templatePath).map((entry) => {
+        const shouldRender = entry.name === 'xl/sharedStrings.xml' || /^xl\/worksheets\/sheet\d+\.xml$/.test(entry.name);
+        if (!shouldRender) {
+            return entry;
+        }
+        const xml = entry.data.toString('utf8');
+        return {
+            ...entry,
+            data: Buffer.from(renderXlsxXml(xml, data), 'utf8'),
+        };
+    });
+    writeZipEntries(entries, outputPath);
+    return outputPath;
+}
+
 function listTemplateTokens(templatePath) {
     const tokens = new Set();
     for (const entry of readZipEntries(templatePath)) {
@@ -309,5 +347,6 @@ module.exports = {
     listTemplateTokens,
     readZipEntries,
     renderDocxTemplate,
+    renderXlsxTemplate,
     writeZipEntries,
 };

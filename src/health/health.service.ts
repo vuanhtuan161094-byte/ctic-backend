@@ -16,6 +16,10 @@ import {
     getStorageConfig,
 } from '../common/storage-config';
 
+import {
+    getReleaseMetadata,
+} from '../common/release-metadata';
+
 export interface HealthStatusResponse {
     status: 'ok';
     service: string;
@@ -33,6 +37,12 @@ export interface LivenessResponse {
     status: 'ok';
     service: string;
     uptime_seconds: number;
+    timestamp: string;
+}
+
+export interface PublicReadinessResponse {
+    status: 'ok';
+    service: string;
     timestamp: string;
 }
 
@@ -116,6 +126,9 @@ export class HealthService {
             );
         }
 
+        const release =
+            getReleaseMetadata();
+
         return {
             status: 'ok',
 
@@ -123,9 +136,7 @@ export class HealthService {
                 'ctic-backend',
 
             version:
-                process.env
-                    .npm_package_version ??
-                '0.0.1',
+                release.version,
 
             environment:
                 process.env.NODE_ENV ??
@@ -152,6 +163,15 @@ export class HealthService {
             timestamp:
                 new Date()
                     .toISOString(),
+        };
+    }
+
+    async getPublicReadiness(): Promise<PublicReadinessResponse> {
+        const readiness = await this.getReadiness();
+        return {
+            status: readiness.status,
+            service: readiness.service,
+            timestamp: readiness.timestamp,
         };
     }
 

@@ -38,7 +38,7 @@
     "db:stabilize": "node scripts/database-stabilize-patch36c1a.cjs",
     "env:lan": "node scripts/configure-lan-patch36c0.cjs",
     "stabilize": "npm run stabilize:commercial",
-    "prestart:prod": "node scripts/runtime-compatibility-check-patch36c0.cjs --strict && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:preflight && npm run db:contract && npm run db:runtime-permissions -- --strict",
+    "prestart:prod": "npm run prod:env:check && node scripts/runtime-compatibility-check-patch36c0.cjs --strict && prisma generate && node scripts/verify-prisma-client-patch35a4.cjs && npm run db:preflight && npm run db:contract && npm run db:runtime-permissions -- --strict",
     "db:preflight": "node scripts/database-preflight-patch36c0a.cjs",
     "db:recover:local": "node scripts/database-preflight-patch36c0a.cjs --auto-start-local-sql",
     "db:adopt-existing": "node scripts/adopt-existing-database-patch36c1a.cjs",
@@ -47,7 +47,16 @@
     "stabilize:commercial": "node scripts/commercial-stabilize-patch36c1a.cjs",
     "db:migration-permissions": "node scripts/migration-credentials-preflight-patch36c1a.cjs",
     "db:runtime-permissions": "node scripts/runtime-database-permissions-patch36c1a.cjs",
-    "verify": "npm run runtime:check && npm run prisma:validate && npm run prisma:generate && npm run build && npm test -- --runInBand && npm run test:regression && npm run db:preflight && npm run db:contract"
+    "verify": "npm run runtime:check && npm run prisma:validate && npm run prisma:generate && npm run build && npm test -- --runInBand && npm run test:regression && npm run db:preflight && npm run db:contract",
+    "test:e2e:surveillance-information": "node scripts/tests/run-surveillance-information-snapshot-e2e.cjs",
+    "test:e2e:certificate-lifecycle": "node scripts/tests/run-p09-real-e2e.cjs",
+    "prod:env:check": "node scripts/production/validate-production-env.cjs",
+    "prod:http-smoke": "node scripts/production/http-security-smoke.cjs",
+    "prod:performance:smoke": "node scripts/production/performance-smoke.cjs",
+    "release:manifest": "node scripts/production/create-release-manifest.cjs",
+    "security:audit:prod": "npm audit --omit=dev --audit-level=high",
+    "uat:master": "node scripts/uat/run-master-uat.cjs",
+    "uat:master:no-p09": "node scripts/uat/run-master-uat.cjs --skip-p09"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

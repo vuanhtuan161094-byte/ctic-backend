@@ -12,19 +12,13 @@ import {
 
 export class UpdateCertificateStatusDto {
     @ApiProperty({
-        example: 'suspended',
+        example: 'expired',
         enum: [
-            'active',
-            'suspended',
-            'withdrawn',
             'expired',
         ],
-        description: 'Trạng thái mới của chứng chỉ',
+        description: 'Chỉ dành cho xác nhận hết hạn quản trị; các lifecycle status phải đi qua quyết định.',
     })
     @IsIn([
-        'active',
-        'suspended',
-        'withdrawn',
         'expired',
     ])
     status!: string;

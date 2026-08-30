@@ -27,6 +27,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { ResourceAccessService } from '../security/resource-access.service';
 import { getResourceActor } from '../security/security-request';
 import type { SecurityRequest } from '../security/security-request';
+import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { CertificationDecisionsService } from './certification-decisions.service';
 import { CreateCertificationDecisionDto } from './dto/create-certification-decision.dto';
@@ -45,13 +47,12 @@ export class CertificationDecisionsController {
             CertificationDecisionsService,
         private readonly resourceAccess:
             ResourceAccessService,
+        private readonly actionAuthorization:
+            ActionAuthorizationService,
     ) { }
 
     @Post()
-    @Roles(
-        'ADMIN',
-        'DECISION_MAKER',
-    )
+    @Roles('DECISION_MAKER')
     @Permissions('certification_decisions.issue')
     @ApiOperation({
         summary: 'Ban hành quyết định chứng nhận F.13-P.09',
@@ -66,17 +67,31 @@ export class CertificationDecisionsController {
     @ApiConflictResponse({
         description: 'Hồ sơ thẩm xét hoặc số quyết định đã được sử dụng',
     })
-    create(
+    async create(
         @Body()
         dto: CreateCertificationDecisionDto,
 
         @Req()
         request: SecurityRequest,
     ) {
+        const actor = getResourceActor(request);
         const createdBy =
             request.user?.userId ??
             request.user?.id ??
             request.user?.sub;
+
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.CERTIFICATION_DECISION,
+            resource: {
+                entityType: 'technical_review',
+                entityId: dto.technical_review_id,
+            },
+            assignment: {
+                assignedRole: 'DECISION_MAKER',
+            },
+            workflowState: 'OPEN',
+        });
 
         return this.certificationDecisionsService.create(
             dto,

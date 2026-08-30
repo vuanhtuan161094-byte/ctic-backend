@@ -83,6 +83,27 @@ function parseSqlContract(text) {
   }
   const alter = /ALTER\s+TABLE\s+(?:\[?dbo\]?\.)?\[?([A-Za-z0-9_]+)\]?\s+ADD\s+\[?([A-Za-z_][A-Za-z0-9_]*)\]?/gi;
   while ((m = alter.exec(text))) add(m[1], m[2]);
+  const alterBlock = /ALTER\s+TABLE\s+(?:\[?dbo\]?\.)?\[?([A-Za-z0-9_]+)\]?\s+ADD\s+([\s\S]*?);/gi;
+  while ((m = alterBlock.exec(text))) {
+    const table = m[1];
+    let depth = 0;
+    let current = '';
+    const clauses = [];
+    for (const ch of m[2]) {
+      if (ch === '(') depth += 1;
+      if (ch === ')') depth -= 1;
+      if (ch === ',' && depth === 0) {
+        clauses.push(current);
+        current = '';
+      } else current += ch;
+    }
+    clauses.push(current);
+    for (const clause of clauses) {
+      const cm = clause.trim().match(/^\[?([A-Za-z_][A-Za-z0-9_]*)\]?\s+/);
+      if (!cm || ['constraint', 'foreign', 'check'].includes(cm[1].toLowerCase())) continue;
+      add(table, cm[1]);
+    }
+  }
   return result;
 }
 

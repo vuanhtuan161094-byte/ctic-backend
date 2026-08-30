@@ -28,7 +28,7 @@ function read(base, relative) {
   return fs.readFileSync(path.join(base, relative), 'utf8');
 }
 
-console.log('=== PATCH 35I — TỰ TÍNH MD THEO NGÀY, TỰ PHÂN BỔ & CHO PHÉP VƯỢT KẾ HOẠCH ===');
+console.log('=== PATCH 35I — TỰ TÍNH MD THEO NGÀY, TỰ PHÂN BỔ & CÂN ĐÚNG KẾ HOẠCH ===');
 
 check(Boolean(frontendRoot), 'Tìm được thư mục frontend trên Windows');
 if (!frontendRoot) process.exit(1);
@@ -44,9 +44,13 @@ check(allocationService.includes('allocationTargetStage2Units('), 'Backend dùng
 check(allocationService.includes('plannedMandays / MANDAY_UNIT'), 'Hạn mức ma trận từng người lấy từ MD đã bố trí');
 check(allocationService.includes('allocation_target_stage2_mandays'), 'API trả riêng tổng MD bố trí cho ma trận');
 check(allocationService.includes('plan_difference_mandays'), 'API trả phần chênh so với kế hoạch tối thiểu');
-check(allocationService.includes('allocatedMandays + 0.001 < requiredMandays'), 'GĐ1 chỉ chặn khi thiếu MD, không chặn khi vượt');
-check(appointmentService.includes('allocatedMandays + 0.001 < requiredMandays'), 'Kiểm tra ban hành chung chỉ chặn khi thiếu MD');
-check(!appointmentService.includes("Math.abs(allocatedMandays - requiredMandays) > 0.001"), 'Đã bỏ điều kiện bắt buộc tổng MD phải bằng đúng kế hoạch');
+check(allocationService.includes('Math.abs(allocatedMandays - requiredMandays) > 0.001'), 'GĐ1 bắt buộc tổng MD bằng đúng kế hoạch');
+check(
+  appointmentService.includes('Math.abs(allocatedMandays - requiredMandays) > 0.001')
+    && appointmentService.includes('allocatedMandays < requiredMandays')
+    && appointmentService.includes('nhưng đang bố trí vượt'),
+  'Kiểm tra ban hành chung chặn cả thiếu và vượt MD',
+);
 check(allocationService.includes('ensureAllocationForIssue('), 'Có cơ chế tự khôi phục ma trận trước khi ban hành');
 check(appointmentService.includes('ensureAllocationForIssue(id, userId)'), 'Ban hành GĐ2 tự bảo đảm ma trận tồn tại và hợp lệ');
 check(allocationService.includes('Mọi man-day đã bố trí phải được gắn trực tiếp với chương trình'), 'Mọi MD bố trí vẫn bắt buộc gắn Thành viên + Chương trình');
@@ -55,18 +59,21 @@ check(schedule.includes('onSuggestedMandaysChange?.(inclusiveDayCount(normalized
 check(schedule.includes('Có thể điều chỉnh lại theo bước 0,5 MD'), 'Frontend giải thích MD tự tính vẫn được điều chỉnh');
 check(schedule.includes('/manday-allocation/auto'), 'Lưu dự thảo GĐ2 tự gọi lại thuật toán phân bổ ma trận');
 check(schedule.includes('preservedProgramWeights'), 'Tự phân bổ lại vẫn giữ trọng số chương trình trước đó');
-check(schedule.includes('Đã cập nhật dự thảo và tự động phân bổ lại man-day theo chương trình'), 'Người dùng nhận thông báo rõ sau khi tự phân bổ lại');
-check(schedule.includes('selectedAppointmentAllocatedMandays + 0.001 >= selectedRequiredMandays'), 'Nút ban hành cho phép tổng MD bằng hoặc lớn hơn kế hoạch');
-check(schedule.includes('Đã bố trí cao hơn mức kế hoạch'), 'Giao diện coi phần MD vượt kế hoạch là hợp lệ');
-check(schedule.includes('Kế hoạch tối thiểu'), 'Giao diện đổi cách gọi MD kế hoạch thành mức tối thiểu');
-check(schedule.includes('tổng phải tối thiểu'), 'Khung ngày PLAN giải thích tổng MD có thể cao hơn kế hoạch');
+check(panel.includes('Đã tự động phân bổ man-day theo chương trình'), 'Người dùng nhận thông báo rõ sau khi tự phân bổ lại');
+check(schedule.includes('Math.abs(selectedAppointmentAllocatedMandays - selectedRequiredMandays) < 0.001'), 'Nút ban hành chỉ hợp lệ khi tổng MD bằng đúng kế hoạch');
+check(schedule.includes('Đang vượt') && schedule.includes('Hãy giảm'), 'Giao diện yêu cầu giảm phần MD vượt kế hoạch');
+check(schedule.includes('Yêu cầu chính xác'), 'Giao diện thể hiện MD là yêu cầu chính xác');
+check(schedule.includes('tổng phải đúng'), 'Khung ngày PLAN yêu cầu tổng MD bằng đúng kế hoạch');
+check(schedule.includes('Lưu & xác nhận điều phối'), 'GĐ2 giữ luồng một bước Lưu & xác nhận điều phối');
 
 check(panel.includes('allocation_target_stage2_mandays'), 'Ma trận hiển thị riêng tổng MD bố trí');
-check(panel.includes('Kế hoạch tối thiểu:'), 'Ma trận hiển thị MD kế hoạch tối thiểu');
 check(panel.includes('MD bố trí:'), 'Ma trận hiển thị MD bố trí theo lịch');
-check(panel.includes('Vượt kế hoạch:'), 'Ma trận hiển thị phần vượt kế hoạch là hợp lệ');
 check(panel.includes('Chênh lệch ma trận:'), 'Ma trận vẫn bắt buộc cân đúng tổng MD đã bố trí');
-check(panel.includes('tổng ma trận luôn bằng tổng MD đã bố trí cho các thành viên'), 'Trọng số không làm mất phần MD bố trí vượt kế hoạch');
+check(
+  allocationService.includes('allocatedUnits === allocationTargetStage2Units')
+    && panel.includes('data.balanced ? "Đã cân bằng" : "Chưa cân bằng"'),
+  'Ma trận chỉ cân khi tổng phân bổ bằng đúng tổng MD mục tiêu',
+);
 
 // Các điều kiện cũ vẫn phải còn.
 check(schedule.includes('Ngày công phải theo bước 0,5 MD'), 'MD vẫn theo bước 0,5');

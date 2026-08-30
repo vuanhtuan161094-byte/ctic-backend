@@ -61,6 +61,7 @@ export class AuditDocumentsController {
         'COORDINATOR',
         'LEAD_AUDITOR',
         'AUDITOR',
+        'TECHNICAL_EXPERT',
         'TECHNICAL_REVIEWER',
         'DECISION_MAKER',
     )

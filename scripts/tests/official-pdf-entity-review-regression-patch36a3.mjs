@@ -22,7 +22,7 @@ assert.match(reviewService, /documentKey ===[\s\S]*'audit_program'[\s\S]*'audit_
 assert.match(reviewService, /documentKey ===[\s\S]*'audit_plan'[\s\S]*'stage2_audit_plan'[\s\S]*'audit_plan_f05'/);
 assert.match(reviewService, /documentKey ===[\s\S]*'nc_cap'[\s\S]*'corrective_action_request_f10'/);
 assert.match(reviewService, /const missingOfficialPdfs =[\s\S]*file\.file_kind === 'signed_scan'/);
-assert.match(reviewService, /Chưa có PDF đã ký\/chốt cho các hồ sơ/);
+assert.match(reviewService, /if \(missingOfficialPdfs\.length > 0\)[\s\S]*throw new BadRequestException/);
 
 if (frontendRoot && fs.existsSync(frontendRoot)) {
   const projectDetail = read(path.join(frontendRoot, 'app/components/CertificationProjectDetailScreen.tsx'));
@@ -33,12 +33,21 @@ if (frontendRoot && fs.existsSync(frontendRoot)) {
     /entityType: item\.entity_type \|\| "certification_project"[\s\S]*entityId: item\.entity_id \|\| projectId/,
     'Official PDFs must not silently fall back to the project entity.',
   );
-  assert.match(projectDetail, /Hãy hoàn thành nghiệp vụ này trước khi tải PDF đã ký\/chốt/);
-  assert.match(projectDetail, /key !== "certificate"/);
+  assert.match(
+    projectDetail,
+    /if \(!item\.entity_type \|\| !item\.entity_id\) \{[\s\S]{0,500}hoàn thành nghiệp vụ[\s\S]{0,120}PDF chính thức[\s\S]{0,200}return;/i,
+    'Official PDF upload must remain gated until its business entity exists.',
+  );
+  assert.match(projectDetail, /PDF đã ký\/xác nhận/);
+  assert.match(
+    projectDetail,
+    /const canUploadOfficialPdf =[\s\S]{0,200}!\[[^\]]*"certificate"[^\]]*\]\.includes\(key\)/,
+    'Certificate PDFs must remain outside the generic official-PDF upload flow.',
+  );
   assert.match(reviewModal, /const officialPdfCount =/);
   assert.match(reviewModal, /const allOfficialPdfsReady =/);
   assert.match(reviewModal, /disabled=\{!allItemsAccepted \|\| !allCriteriaAnswered \|\| !allOfficialPdfsReady\}/);
-  assert.match(reviewModal, /PDF đã ký\/chốt cho \$\{requiredReviewItems\.length\} hạng mục bắt buộc/);
+  assert.match(reviewModal, /PDF chính thức cho \$\{requiredReviewItems\.length\} hạng mục bắt buộc/);
 }
 
 console.log('Patch 36A.3 official PDF entity/review regression: PASS');

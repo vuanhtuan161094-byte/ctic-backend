@@ -28,6 +28,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { ResourceAccessService } from '../security/resource-access.service';
 import { getResourceActor } from '../security/security-request';
 import type { SecurityRequest } from '../security/security-request';
+import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { AuditFindingsService } from './audit-findings.service';
 import { CloseAuditFindingDto } from './dto/close-audit-finding.dto';
@@ -49,6 +51,8 @@ export class AuditFindingsController {
             AuditFindingsService,
         private readonly resourceAccess:
             ResourceAccessService,
+        private readonly actionAuthorization:
+            ActionAuthorizationService,
     ) { }
 
     private getUserId(
@@ -63,7 +67,6 @@ export class AuditFindingsController {
 
     @Post()
     @Roles(
-        'ADMIN',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -88,6 +91,20 @@ export class AuditFindingsController {
             { entity_type: 'report', entity_id: dto.report_id },
             getResourceActor(request),
         );
+
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'report',
+                entityId: dto.report_id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'OPEN',
+        });
 
         return this.auditFindingsService.create(
             dto,
@@ -177,7 +194,6 @@ export class AuditFindingsController {
         ':findingId/corrective-actions/:actionId/review',
     )
     @Roles(
-        'ADMIN',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -219,6 +235,20 @@ export class AuditFindingsController {
             getResourceActor(request),
         );
 
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.CAP_REVIEW,
+            resource: {
+                entityType: 'audit_finding',
+                entityId: findingId,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'RESPONSE_SUBMITTED',
+        });
+
         return this.auditFindingsService
             .reviewCorrectiveAction(
                 findingId,
@@ -230,7 +260,6 @@ export class AuditFindingsController {
 
     @Patch(':id/close')
     @Roles(
-        'ADMIN',
         'AUDITOR',
         'LEAD_AUDITOR',
     )
@@ -263,6 +292,20 @@ export class AuditFindingsController {
             { entity_type: 'audit_finding', entity_id: id },
             getResourceActor(request),
         );
+
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.CAP_REVIEW,
+            resource: {
+                entityType: 'audit_finding',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'IN_PROGRESS',
+        });
 
         return this.auditFindingsService.close(
             id,

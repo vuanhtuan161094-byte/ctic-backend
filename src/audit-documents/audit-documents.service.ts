@@ -369,8 +369,8 @@ export class AuditDocumentsService {
         };
     }
 
-    private brandingSnapshot() {
-        const branding = getPlatformBranding();
+    private brandingSnapshot(plan?: { platform_branding?: Parameters<typeof getPlatformBranding>[0] }) {
+        const branding = getPlatformBranding(plan?.platform_branding);
 
         return {
             certification_body_short_name:
@@ -487,7 +487,11 @@ export class AuditDocumentsService {
             );
         }
 
-        return plan as any;
+        const platformBranding = 'organization_profiles' in this.prisma
+            ? await this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' } })
+            : null;
+
+        return Object.assign(plan, { platform_branding: platformBranding }) as any;
     }
 
     private async loadProgram(programId: string | null | undefined) {
@@ -1034,7 +1038,7 @@ export class AuditDocumentsService {
         );
 
         return {
-            ...this.brandingSnapshot(),
+            ...this.brandingSnapshot(plan),
             customer_code:
                 program?.customer_code ?? customer.customer_code,
             organization_name_vi:
@@ -1141,7 +1145,7 @@ export class AuditDocumentsService {
                 plan,
             ).map((row) => ({ schedule: row })),
             confirmation_text:
-                `Phúc đáp kế hoạch đánh giá ngày ${issueDate} của ${this.brandingSnapshot().certification_body_name}, tổ chức được chứng nhận xác nhận và phản hồi các nội dung của kế hoạch đánh giá./ In response to the audit plan dated ${issueDate}, the certified organization confirms and comments on the audit plan contents.`,
+                `Phúc đáp kế hoạch đánh giá ngày ${issueDate} của ${this.brandingSnapshot(plan).certification_body_name}, tổ chức được chứng nhận xác nhận và phản hồi các nội dung của kế hoạch đánh giá./ In response to the audit plan dated ${issueDate}, the certified organization confirms and comments on the audit plan contents.`,
         };
     }
 
@@ -2907,6 +2911,11 @@ export class AuditDocumentsService {
             programKey,
             findingId,
         );
+        if (document.missingFields.length > 0) {
+            throw new BadRequestException(
+                `Không thể sinh tài liệu khi còn thiếu trường bắt buộc: ${document.missingFields.join(', ')}`,
+            );
+        }
         const definition = document.definition;
         const templatePath = this.templatePath(
             definition.templateFile,

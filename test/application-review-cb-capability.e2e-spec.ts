@@ -137,6 +137,7 @@ describeDatabase('Application Review + CB Capability real database E2E', () => {
         }
         await prisma.certification_application_sites.deleteMany({ where: { application_id: ids.application } });
         await prisma.certification_applications.deleteMany({ where: { id: ids.application } });
+        await prisma.customer_user_access_history.deleteMany({ where: { customer_id: ids.customer } });
         await prisma.customer_user_access.deleteMany({ where: { customer_id: ids.customer } });
         await prisma.customers.deleteMany({ where: { id: ids.customer } });
         if (createdNaceIafMappingIds.length) {

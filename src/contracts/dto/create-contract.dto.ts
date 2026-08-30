@@ -1,13 +1,13 @@
 import {
     IsDateString,
     IsNotEmpty,
-    IsNumber,
     IsOptional,
     IsString,
     IsUUID,
     MaxLength,
-    Min,
+    Matches,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import {
     ApiProperty,
     ApiPropertyOptional,
@@ -61,18 +61,34 @@ export class CreateContractDto {
     end_date?: string;
 
     @ApiPropertyOptional({
-        example: 50000000,
+        example: '50000000.00',
         description: 'Tổng giá trị hợp đồng',
-        minimum: 0,
     })
     @IsOptional()
-    @IsNumber()
-    @Min(0)
-    total_value?: number;
+    @Transform(({ value }) => value === undefined || value === null ? value : String(value))
+    @IsString()
+    @Matches(/^\d{1,15}(?:\.\d{1,4})?$/)
+    total_value?: string;
 
     @ApiPropertyOptional({ example: 'VND', description: 'Mã tiền tệ ISO 4217', maxLength: 3 })
     @IsOptional()
     @IsString()
     @MaxLength(3)
     currency?: string;
+
+    @ApiPropertyOptional({ format: 'uuid', description: 'Báo giá ACCEPTED cùng khách hàng' })
+    @IsOptional()
+    @IsUUID()
+    quotation_id?: string;
+
+    @ApiPropertyOptional({ maxLength: 1000 })
+    @IsOptional()
+    @IsString()
+    @MaxLength(1000)
+    payment_terms?: string;
+
+    @ApiPropertyOptional({ format: 'date' })
+    @IsOptional()
+    @IsDateString()
+    renewal_date?: string;
 }

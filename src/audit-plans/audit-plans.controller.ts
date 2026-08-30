@@ -28,6 +28,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { ResourceAccessService } from '../security/resource-access.service';
 import { getResourceActor } from '../security/security-request';
 import type { SecurityRequest } from '../security/security-request';
+import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { AuditPlansService } from './audit-plans.service';
 import { CompleteAuditPlanDto } from './dto/complete-audit-plan.dto';
@@ -49,6 +51,8 @@ export class AuditPlansController {
             AuditPlansService,
         private readonly resourceAccess:
             ResourceAccessService,
+        private readonly actionAuthorization:
+            ActionAuthorizationService,
     ) { }
 
     private getUserId(
@@ -92,8 +96,6 @@ export class AuditPlansController {
 
     @Post(':id/start')
     @Roles(
-        'ADMIN',
-        'STAFF',
         'LEAD_AUDITOR',
         'AUDITOR',
     )
@@ -130,6 +132,20 @@ export class AuditPlansController {
             getResourceActor(request),
         );
 
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'audit_plan',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'OPEN',
+        });
+
         return this.auditPlansService.start(
             id,
             dto,
@@ -139,8 +155,6 @@ export class AuditPlansController {
 
     @Post(':id/complete')
     @Roles(
-        'ADMIN',
-        'STAFF',
         'LEAD_AUDITOR',
         'AUDITOR',
     )
@@ -176,6 +190,20 @@ export class AuditPlansController {
             },
             getResourceActor(request),
         );
+
+        const actor = getResourceActor(request);
+        await this.actionAuthorization.assertCanPerformAction({
+            user: actor,
+            actionCode: WORK_ITEM_ACTIONS.AUDIT_EXECUTE,
+            resource: {
+                entityType: 'audit_plan',
+                entityId: id,
+            },
+            assignment: {
+                assignedUserId: actor.userId,
+            },
+            workflowState: 'IN_PROGRESS',
+        });
 
         return this.auditPlansService.complete(
             id,

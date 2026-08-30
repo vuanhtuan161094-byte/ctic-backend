@@ -43,6 +43,7 @@ export class DatabaseSchemaService {
                     CASE WHEN OBJECT_ID(N'dbo.audit_program_manday_requirements', N'U') IS NULL THEN 0 ELSE 1 END AS table_audit_program_manday_requirements,
                     CASE WHEN OBJECT_ID(N'dbo.audit_member_program_mandays', N'U') IS NULL THEN 0 ELSE 1 END AS table_audit_member_program_mandays,
                     CASE WHEN OBJECT_ID(N'dbo.audit_manday_allocation_versions', N'U') IS NULL THEN 0 ELSE 1 END AS table_audit_manday_allocation_versions,
+                    CASE WHEN OBJECT_ID(N'dbo.surveillance_information_snapshots', N'U') IS NULL THEN 0 ELSE 1 END AS table_surveillance_information_snapshots,
 
                     CASE WHEN COL_LENGTH(N'dbo.document_files', N'sha256') IS NULL THEN 0 ELSE 1 END AS document_files_sha256,
                     CASE WHEN COL_LENGTH(N'dbo.audit_logs', N'request_id') IS NULL THEN 0 ELSE 1 END AS audit_logs_request_id,
@@ -90,6 +91,7 @@ export class DatabaseSchemaService {
             ['table_audit_program_manday_requirements', 'dbo.audit_program_manday_requirements'],
             ['table_audit_member_program_mandays', 'dbo.audit_member_program_mandays'],
             ['table_audit_manday_allocation_versions', 'dbo.audit_manday_allocation_versions'],
+            ['table_surveillance_information_snapshots', 'dbo.surveillance_information_snapshots'],
         ];
 
         const requiredColumns: Array<[string, string]> = [

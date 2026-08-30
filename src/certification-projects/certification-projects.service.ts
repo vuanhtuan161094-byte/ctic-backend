@@ -8,6 +8,9 @@ import type { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { CertificationBodyCapabilitiesService } from '../certification-body-capabilities/certification-body-capabilities.service';
+import { resolveCanonicalOperationalPlans } from '../audit-plans/audit-plan-canonical';
+import { decisionRequiresCertificateVersion, normalizeDecisionType } from '../certificates/certificate-lifecycle';
+import { surveillanceNextAction } from '../surveillance-information/surveillance-workflow';
 import { CreateCertificationProjectDto } from './dto/create-certification-project.dto';
 import { CreateCompleteCertificationProjectDto } from './dto/create-complete-certification-project.dto';
 
@@ -17,6 +20,179 @@ type ReviewIndustryScope = {
     management_system: string;
     scope_description: string;
 };
+
+export type DossierItemStatus = 'completed' | 'pending' | 'not_applicable';
+
+export type DossierNextActionCode =
+    | 'UPDATE_INFORMATION'
+    | 'REVIEW_CHANGE'
+    | 'APPOINT_TEAM'
+    | 'PLAN_AUDIT'
+    | 'EXECUTE_AUDIT'
+    | 'COMPLETE_NC_CAP'
+    | 'TECHNICAL_REVIEW'
+    | 'MAKE_DECISION'
+    | 'NOTIFY_RESULT'
+    | 'ISSUE_CERTIFICATE';
+
+type DossierNextAction = {
+    code: DossierNextActionCode;
+    label: string;
+    event_id: string | null;
+    plan_id: string | null;
+    item_key: string;
+    responsible_roles: string[];
+    responsible_label: string;
+};
+
+const dossierNextActionDefinitions: Array<{
+    code: DossierNextActionCode;
+    label: string;
+    itemKeys: string[];
+    responsibleRoles: string[];
+    responsibleLabel: string;
+}> = [
+    { code: 'UPDATE_INFORMATION', label: 'Cập nhật thông tin', itemKeys: ['surveillance_information_update'], responsibleRoles: ['ADMIN', 'STAFF', 'COORDINATOR'], responsibleLabel: 'Điều phối viên' },
+    { code: 'APPOINT_TEAM', label: 'Chỉ định đoàn đánh giá', itemKeys: ['audit_team_assignment'], responsibleRoles: ['ADMIN', 'COORDINATOR'], responsibleLabel: 'Điều phối viên' },
+    { code: 'PLAN_AUDIT', label: 'Lập kế hoạch', itemKeys: ['stage1_audit_plan', 'stage2_audit_plan', 'audit_plan'], responsibleRoles: ['ADMIN', 'LEAD_AUDITOR'], responsibleLabel: 'Trưởng đoàn đánh giá' },
+    { code: 'EXECUTE_AUDIT', label: 'Thực hiện đánh giá', itemKeys: ['audit_checklist', 'opening_closing_attendance', 'stage1_audit_report', 'stage2_audit_report', 'audit_report', 'audit_log'], responsibleRoles: ['LEAD_AUDITOR', 'AUDITOR'], responsibleLabel: 'Đoàn đánh giá' },
+    { code: 'COMPLETE_NC_CAP', label: 'Hoàn thiện NC/CAP', itemKeys: ['nc_cap'], responsibleRoles: ['LEAD_AUDITOR', 'AUDITOR'], responsibleLabel: 'Trưởng đoàn đánh giá' },
+    { code: 'TECHNICAL_REVIEW', label: 'Thẩm xét kỹ thuật', itemKeys: ['technical_review_report'], responsibleRoles: ['TECHNICAL_REVIEWER'], responsibleLabel: 'Chuyên gia thẩm xét kỹ thuật' },
+    { code: 'MAKE_DECISION', label: 'Ra quyết định', itemKeys: ['certification_decision'], responsibleRoles: ['DECISION_MAKER'], responsibleLabel: 'Người ra quyết định chứng nhận' },
+    { code: 'NOTIFY_RESULT', label: 'Thông báo kết quả', itemKeys: ['audit_result_notification'], responsibleRoles: ['ADMIN', 'DECISION_MAKER'], responsibleLabel: 'Bộ phận thông báo kết quả' },
+    { code: 'ISSUE_CERTIFICATE', label: 'Phát hành chứng chỉ', itemKeys: ['certificate'], responsibleRoles: ['DECISION_MAKER'], responsibleLabel: 'Người ra quyết định chứng nhận' },
+];
+
+export function deriveDossierNextAction(
+    items: ReadonlyArray<{ document_key: string; status: DossierItemStatus }>,
+    eventId: string | null,
+    planId: string | null,
+    preferred?: Partial<DossierNextAction> | null,
+): DossierNextAction | null {
+    if (preferred?.code === 'REVIEW_CHANGE') {
+        return {
+            code: 'REVIEW_CHANGE',
+            label: preferred.label ?? 'Xem xét thay đổi',
+            event_id: preferred.event_id ?? eventId,
+            plan_id: preferred.plan_id ?? planId,
+            item_key: preferred.item_key ?? 'surveillance_information_update',
+            responsible_roles: preferred.responsible_roles ?? ['ADMIN', 'STAFF', 'COORDINATOR'],
+            responsible_label: preferred.responsible_label ?? 'Điều phối viên',
+        };
+    }
+
+    if (preferred?.code) {
+        const definition = dossierNextActionDefinitions.find(
+            (item) => item.code === preferred.code,
+        );
+        if (definition) {
+            return {
+                code: definition.code,
+                label: preferred.label ?? definition.label,
+                event_id: preferred.event_id ?? eventId,
+                plan_id: preferred.plan_id ?? planId,
+                item_key: preferred.item_key ?? definition.itemKeys[0],
+                responsible_roles: preferred.responsible_roles ?? definition.responsibleRoles,
+                responsible_label: preferred.responsible_label ?? definition.responsibleLabel,
+            };
+        }
+    }
+
+    for (const definition of dossierNextActionDefinitions) {
+        const item = items.find((candidate) =>
+            definition.itemKeys.includes(candidate.document_key)
+            && candidate.status !== 'completed'
+            && candidate.status !== 'not_applicable',
+        );
+        if (!item) continue;
+        return {
+            code: definition.code,
+            label: definition.label,
+            event_id: eventId,
+            plan_id: planId,
+            item_key: item.document_key,
+            responsible_roles: definition.responsibleRoles,
+            responsible_label: definition.responsibleLabel,
+        };
+    }
+
+    return null;
+}
+
+export function projectExceptionAlertsFromDossier(
+    dossier: {
+        project?: { customer?: { company_name?: string | null } | null } | null;
+        dossiers?: Array<{ dossier_key: string; next_action?: Partial<DossierNextAction> | null }>;
+        diagnostics?: Array<{ canonical_plan_code?: string | null; duplicate_plan_codes?: Array<string | null> }>;
+    },
+    isAdmin: boolean,
+) {
+    const alerts: Array<{
+        alert_type: string;
+        severity: 'warning';
+        message: string;
+        reference_id: string | null;
+        due_date: null;
+    }> = [];
+
+    for (const group of dossier.dossiers ?? []) {
+        if (!['surveillance_1', 'surveillance_2'].includes(group.dossier_key)) continue;
+        const action = group.next_action;
+        if (!action || !['REVIEW_CHANGE', 'APPOINT_TEAM'].includes(action.code ?? '')) continue;
+        const cycleLabel = group.dossier_key === 'surveillance_2' ? 'GS2' : 'GS1';
+        const customerName = dossier.project?.customer?.company_name ?? 'khách hàng';
+        alerts.push({
+            alert_type: action.code === 'REVIEW_CHANGE'
+                ? 'surveillance_change_review'
+                : 'surveillance_team_appointment',
+            severity: 'warning',
+            message: action.code === 'REVIEW_CHANGE'
+                ? `${cycleLabel} - ${customerName} cần xem xét thay đổi`
+                : `${cycleLabel} - ${customerName} cần chỉ định đoàn`,
+            reference_id: action.plan_id ?? action.event_id ?? null,
+            due_date: null,
+        });
+    }
+
+    if (isAdmin) {
+        for (const diagnostic of dossier.diagnostics ?? []) {
+            const duplicates = (diagnostic.duplicate_plan_codes ?? []).filter(Boolean);
+            alerts.push({
+                alert_type: 'duplicate_operational_plan',
+                severity: 'warning',
+                message: `Phát hiện PLAN vận hành trùng; đang sử dụng ${diagnostic.canonical_plan_code ?? 'PLAN canonical'}${duplicates.length ? `, cần xử lý ${duplicates.join(', ')}` : ''}.`,
+                reference_id: null,
+                due_date: null,
+            });
+        }
+    }
+
+    return alerts;
+}
+
+export function summarizeDossierItems(
+    items: ReadonlyArray<{ status: DossierItemStatus }>,
+) {
+    const totalItems = items.length;
+    const satisfiedItems = items.filter(
+        (item) => item.status === 'completed' || item.status === 'not_applicable',
+    ).length;
+    const pendingItems = items.filter((item) => item.status === 'pending').length;
+
+    return {
+        total_items: totalItems,
+        completed_items: satisfiedItems,
+        pending_items: pendingItems,
+        completion_percentage: totalItems === 0
+            ? 0
+            : Math.round((satisfiedItems / totalItems) * 100),
+        dossier_status: totalItems > 0 && satisfiedItems === totalItems
+            ? 'completed'
+            : satisfiedItems > 0
+                ? 'in_progress'
+                : 'not_started',
+    };
+}
 
 @Injectable()
 export class CertificationProjectsService {
@@ -32,6 +208,47 @@ export class CertificationProjectsService {
         return value
             ?.trim()
             .toUpperCase() ?? '';
+    }
+
+    private async schemeConfigurationSnapshot(
+        tx: Prisma.TransactionClient,
+        standardName: string,
+        at = new Date(),
+    ): Promise<string | null> {
+        const normalized = this.normalize(standardName);
+        if (!normalized || !('standard_editions' in tx)) return null;
+        const standards = await tx.standard_editions.findMany({
+            where: {
+                status: 'ACTIVE', effective_from: { lte: at },
+                OR: [{ withdrawn_at: null }, { withdrawn_at: { gt: at } }],
+                scheme: { status: 'ACTIVE' },
+            },
+            include: {
+                scheme: {
+                    include: {
+                        configurations: {
+                            where: {
+                                status: 'ACTIVE', effective_from: { lte: at },
+                                OR: [{ effective_to: null }, { effective_to: { gte: at } }],
+                            },
+                            orderBy: { effective_from: 'desc' },
+                            take: 1,
+                        },
+                    },
+                },
+            },
+        });
+        const matched = standards.filter((standard) => {
+            const exactLabel = `${standard.standard_code}:${standard.edition}`.toUpperCase();
+            return normalized.includes(exactLabel) || normalized.includes(standard.standard_name.toUpperCase());
+        });
+        if (!matched.length) return null;
+        return JSON.stringify(matched.map((standard) => ({
+            scheme: { id: standard.scheme.id, code: standard.scheme.code, name: standard.scheme.name },
+            standard: { id: standard.id, code: standard.standard_code, name: standard.standard_name, edition: standard.edition },
+            configuration: standard.scheme.configurations[0] ?? null,
+            resolved_at: at.toISOString(),
+        })));
     }
 
     private standardFromManagementSystem(
@@ -360,7 +577,27 @@ export class CertificationProjectsService {
                     },
                     contracts: true,
                     certification_agreements: true,
-                    audit_plans: true,
+                    audit_plans: {
+                        include: {
+                            audit_event: {
+                                select: {
+                                    id: true,
+                                    event_type: true,
+                                    sequence_no: true,
+                                    planned_mandays: true,
+                                    planned_start_date: true,
+                                    planned_end_date: true,
+                                    status: true,
+                                },
+                            },
+                            audit_team_appointment: {
+                                select: {
+                                    id: true,
+                                    status: true,
+                                },
+                            },
+                        },
+                    },
                 },
             });
 
@@ -370,7 +607,22 @@ export class CertificationProjectsService {
             );
         }
 
-        return project;
+        const canonicalResolution =
+            resolveCanonicalOperationalPlans(
+                project.audit_plans,
+            );
+
+        return {
+            ...project,
+            audit_plans:
+                canonicalResolution.plans.map(({
+                    audit_team_appointment:
+                        _appointment,
+                    ...plan
+                }) => plan),
+            audit_plan_diagnostics:
+                canonicalResolution.diagnostics,
+        };
     }
     // Tổng hợp hồ sơ dự án theo từng kỳ đánh giá trong chu kỳ chứng nhận
     async getDossier(id: string) {
@@ -424,13 +676,42 @@ export class CertificationProjectsService {
 
         const programs = await this.prisma.audit_programs.findMany({
             where: { project_id: id },
+            include: {
+                events: { orderBy: { sequence_no: 'asc' } },
+            },
             orderBy: { program_year: 'asc' },
         });
 
-        const plans = await this.prisma.audit_plans.findMany({
+        const allPlans = await this.prisma.audit_plans.findMany({
             where: { project_id: id },
+            include: {
+                audit_event: {
+                    select: {
+                        id: true,
+                        event_type: true,
+                        sequence_no: true,
+                        planned_mandays: true,
+                        planned_start_date: true,
+                        planned_end_date: true,
+                        status: true,
+                    },
+                },
+                audit_team_appointment: {
+                    select: {
+                        id: true,
+                        status: true,
+                    },
+                },
+            },
             orderBy: { created_at: 'asc' },
         });
+
+        const canonicalPlanResolution =
+            resolveCanonicalOperationalPlans(
+                allPlans,
+            );
+        const plans =
+            canonicalPlanResolution.plans;
 
         const planIds = plans.map((plan) => plan.id);
         const teamAppointments = planIds.length > 0
@@ -518,7 +799,7 @@ export class CertificationProjectsService {
         const normalize = (value?: string | null) =>
             (value ?? '').trim().toLowerCase();
 
-        type ItemStatus = 'completed' | 'pending' | 'not_applicable';
+        type ItemStatus = DossierItemStatus;
         type DossierItemResult = {
             item_no: number;
             document_key: string;
@@ -528,6 +809,7 @@ export class CertificationProjectsService {
             reference_id?: string | null;
             entity_type?: string | null;
             entity_id?: string | null;
+            action_event_id?: string | null;
         };
 
         const hasFileFor = (
@@ -583,6 +865,19 @@ export class CertificationProjectsService {
                 entity_type: 'certification_application',
                 entity_id: application.id,
             },
+            {
+                item_no: 4,
+                document_key: 'audit_monitoring',
+                document_name: 'Theo dõi quá trình đánh giá F.17',
+                storage_type: 'system_record',
+                status: hasFileFor(
+                    ['audit_monitoring_f17'],
+                    [project.id],
+                    true,
+                ) ? 'completed' : 'pending',
+                entity_type: 'certification_project',
+                entity_id: project.id,
+            },
         ];
 
         const typeOfPlan = (plan: (typeof plans)[number]) => normalize(plan.audit_type);
@@ -618,8 +913,105 @@ export class CertificationProjectsService {
             'surveillance_year_2',
         ]) ?? genericSurveillancePlans[1] ?? null;
 
+        const programEvents = programs.flatMap((program) => program.events);
+        const latestProgram = [...programs].sort((left, right) =>
+            right.program_year - left.program_year || right.version_no - left.version_no,
+        )[0] ?? null;
+        const latestProgramEvents = latestProgram?.events ?? [];
+        const normalizedEventType = (event: (typeof programEvents)[number]) => normalize(event.event_type);
+        const latestGenericSurveillanceEvents = latestProgramEvents.filter(
+            (event) => normalizedEventType(event) === 'surveillance',
+        );
+        const eventByPlan = (plan: (typeof plans)[number] | null) =>
+            plan?.audit_event_id
+                ? programEvents.find((event) => event.id === plan.audit_event_id) ?? null
+                : null;
+        const stage1Event = eventByPlan(stage1Plan)
+            ?? latestProgramEvents.find((event) => [
+                'stage1',
+                'stage_1',
+                'initial_stage1',
+            ].includes(normalizedEventType(event)))
+            ?? null;
+        const stage2Event = eventByPlan(stage2Plan)
+            ?? latestProgramEvents.find((event) => [
+                'stage2',
+                'stage_2',
+                'initial_stage2',
+                'initial',
+            ].includes(normalizedEventType(event)))
+            ?? null;
+        const surveillance1Event = eventByPlan(surveillance1Plan)
+            ?? latestProgramEvents.find((event) => [
+                'surveillance1',
+                'surveillance_1',
+                'surveillance_year_1',
+            ].includes(normalizedEventType(event)))
+            ?? latestGenericSurveillanceEvents[0]
+            ?? null;
+        const surveillance2Event = eventByPlan(surveillance2Plan)
+            ?? latestProgramEvents.find((event) => [
+                'surveillance2',
+                'surveillance_2',
+                'surveillance_year_2',
+            ].includes(normalizedEventType(event)))
+            ?? latestGenericSurveillanceEvents[1]
+            ?? null;
+        const recertificationEvent = latestProgramEvents.find((event) => [
+            'recertification',
+            'recertification_audit',
+            'recert',
+        ].includes(normalizedEventType(event))) ?? null;
+
+        const initialPlanTypes = new Set([
+            'stage1', 'stage_1', 'initial_stage1',
+            'stage2', 'stage_2', 'initial_stage2', 'initial',
+        ]);
+        const surveillance1PlanTypes = new Set([
+            'surveillance1', 'surveillance_1', 'surveillance_year_1',
+        ]);
+        const surveillance2PlanTypes = new Set([
+            'surveillance2', 'surveillance_2', 'surveillance_year_2',
+        ]);
+        const initialCyclePlans = plans.filter((plan) => initialPlanTypes.has(typeOfPlan(plan)));
+        const surveillance1CyclePlans = plans.filter((plan) =>
+            surveillance1PlanTypes.has(typeOfPlan(plan))
+            || Boolean(surveillance1Event && plan.audit_event_id === surveillance1Event.id)
+            || (typeOfPlan(plan) === 'surveillance' && plan.id === genericSurveillancePlans[0]?.id),
+        );
+        const surveillance2CyclePlans = plans.filter((plan) =>
+            surveillance2PlanTypes.has(typeOfPlan(plan))
+            || Boolean(surveillance2Event && plan.audit_event_id === surveillance2Event.id)
+            || (typeOfPlan(plan) === 'surveillance' && plan.id === genericSurveillancePlans[1]?.id),
+        );
+        const recertificationCyclePlans = plans.filter((plan) =>
+            ['recertification', 'recertification_audit', 'recert'].includes(typeOfPlan(plan)),
+        );
+
+        const surveillanceEventIds = [surveillance1Event?.id, surveillance2Event?.id]
+            .filter((eventId): eventId is string => Boolean(eventId));
+        const surveillanceSnapshots = surveillanceEventIds.length > 0
+            ? await this.prisma.surveillance_information_snapshots.findMany({
+                where: {
+                    audit_event_id: { in: surveillanceEventIds },
+                },
+                orderBy: [
+                    { version_no: 'desc' },
+                    { created_at: 'desc' },
+                ],
+            })
+            : [];
+        const snapshotForEvent = (eventId?: string | null) =>
+            eventId
+                ? surveillanceSnapshots.find((snapshot) => snapshot.audit_event_id === eventId) ?? null
+                : null;
+
         const planSet = (...candidatePlans: Array<(typeof plans)[number] | null>) =>
-            candidatePlans.filter((plan): plan is (typeof plans)[number] => Boolean(plan));
+            Array.from(new Map(
+                candidatePlans
+                    .filter((plan): plan is (typeof plans)[number] => Boolean(plan))
+                    .map((plan) => [plan.id, plan]),
+            ).values());
 
         const dossierContext = (dossierPlans: (typeof plans)[number][]) => {
             const dossierPlanIds = dossierPlans.map((plan) => plan.id);
@@ -661,26 +1053,10 @@ export class CertificationProjectsService {
             };
         };
 
-        const summaryOf = (items: DossierItemResult[]) => {
-            const applicable = items.filter((item) => item.status !== 'not_applicable');
-            const completed = applicable.filter((item) => item.status === 'completed');
-            return {
-                total_items: applicable.length,
-                completed_items: completed.length,
-                pending_items: applicable.length - completed.length,
-                completion_percentage: applicable.length === 0
-                    ? 0
-                    : Math.round((completed.length / applicable.length) * 100),
-                dossier_status: applicable.length > 0 && completed.length === applicable.length
-                    ? 'completed'
-                    : completed.length > 0
-                        ? 'in_progress'
-                        : 'not_started',
-            };
-        };
+        const summaryOf = (items: DossierItemResult[]) => summarizeDossierItems(items);
 
         const createInitialDossier = () => {
-            const dossierPlans = planSet(stage1Plan, stage2Plan);
+            const dossierPlans = planSet(stage1Plan, stage2Plan, ...initialCyclePlans);
             const context = dossierContext(dossierPlans);
             const stage1Report = stage1Plan
                 ? context.reports.find((report) => report.audit_plan_id === stage1Plan.id) ?? null
@@ -717,6 +1093,21 @@ export class CertificationProjectsService {
             const decisionIssued = context.decisions.some(
                 (item) => ['issued', 'approved'].includes(normalize(item.status)),
             );
+            const issuedDecision = context.decisions.find(
+                (item) => ['issued', 'approved'].includes(normalize(item.status)),
+            ) ?? null;
+            const issuedDecisionType = issuedDecision
+                ? normalizeDecisionType(String(issuedDecision.decision_type ?? ''))
+                : null;
+            const requiresCertificateVersion = Boolean(
+                issuedDecision
+                && normalize(issuedDecision.decision_result) === 'approved'
+                && issuedDecisionType
+                && decisionRequiresCertificateVersion(issuedDecisionType),
+            );
+            const certificateNotApplicable = Boolean(
+                decisionIssued && !requiresCertificateVersion,
+            );
             const primaryUploadEntityId = stage2Plan?.id ?? stage1Plan?.id ?? project.id;
             const allowLegacyProjectFiles = true;
 
@@ -750,6 +1141,7 @@ export class CertificationProjectsService {
                     reference_id: stage1Plan?.id ?? null,
                     entity_type: stage1Plan ? 'audit_plan' : null,
                     entity_id: stage1Plan?.id ?? null,
+                    action_event_id: stage1Event?.id ?? null,
                 },
                 {
                     item_no: 4,
@@ -770,6 +1162,7 @@ export class CertificationProjectsService {
                     reference_id: stage2Plan?.id ?? null,
                     entity_type: stage2Plan ? 'audit_plan' : null,
                     entity_id: stage2Plan?.id ?? null,
+                    action_event_id: stage2Event?.id ?? null,
                 },
                 {
                     item_no: 6,
@@ -830,16 +1223,6 @@ export class CertificationProjectsService {
                 },
                 {
                     item_no: 11,
-                    document_key: 'audit_result_notification',
-                    document_name: 'Thông báo kết quả đánh giá',
-                    storage_type: 'system_record',
-                    status: notificationSent ? 'completed' : 'pending',
-                    reference_id: context.notifications[0]?.id ?? null,
-                    entity_type: context.notifications[0] ? 'audit_result_notification' : null,
-                    entity_id: context.notifications[0]?.id ?? null,
-                },
-                {
-                    item_no: 12,
                     document_key: 'certification_decision',
                     document_name: 'Quyết định chứng nhận',
                     storage_type: 'system_record',
@@ -849,17 +1232,29 @@ export class CertificationProjectsService {
                     entity_id: context.decisions[0]?.id ?? null,
                 },
                 {
+                    item_no: 12,
+                    document_key: 'audit_result_notification',
+                    document_name: 'Thông báo kết quả đánh giá',
+                    storage_type: 'system_record',
+                    status: notificationSent ? 'completed' : 'pending',
+                    reference_id: context.notifications[0]?.id ?? null,
+                    entity_type: context.notifications[0] ? 'audit_result_notification' : null,
+                    entity_id: context.notifications[0]?.id ?? null,
+                },
+                {
                     item_no: 13,
                     document_key: 'certificate',
                     document_name: 'Giấy chứng nhận',
                     storage_type: 'system_record',
-                    status: context.certificates.length > 0
-                        && hasFileFor(
-                            ['certificate_pdf'],
-                            context.certificates.map((certificate) => certificate.id),
-                        )
-                        ? 'completed'
-                        : 'pending',
+                    status: certificateNotApplicable
+                        ? 'not_applicable'
+                        : context.certificates.length > 0
+                            && hasFileFor(
+                                ['certificate_pdf'],
+                                context.certificates.map((certificate) => certificate.id),
+                            )
+                            ? 'completed'
+                            : 'pending',
                     reference_id: context.certificates[0]?.id ?? null,
                     entity_type: context.certificates[0] ? 'certificate' : null,
                     entity_id: context.certificates[0]?.id ?? null,
@@ -877,19 +1272,6 @@ export class CertificationProjectsService {
                     entity_type: stage2Plan ? 'audit_plan' : 'certification_project',
                     entity_id: primaryUploadEntityId,
                 },
-                {
-                    item_no: 15,
-                    document_key: 'audit_monitoring',
-                    document_name: 'Theo dõi quá trình đánh giá F.17',
-                    storage_type: 'system_record',
-                    status: hasFileFor(
-                        ['audit_monitoring_f17'],
-                        context.scopedEntityIds,
-                        allowLegacyProjectFiles,
-                    ) ? 'completed' : 'pending',
-                    entity_type: 'certification_project',
-                    entity_id: project.id,
-                },
             ];
 
             return {
@@ -901,6 +1283,15 @@ export class CertificationProjectsService {
                 plan_ids: context.planIds,
                 plan_codes: dossierPlans.map((plan) => plan.plan_code).filter(Boolean),
                 planned_start_date: stage1Plan?.planned_start_date ?? stage2Plan?.planned_start_date ?? null,
+                planned_end_date: stage2Plan?.planned_end_date ?? stage1Plan?.planned_end_date ?? null,
+                planned_mandays: stage2Plan?.audit_event?.planned_mandays
+                    ?? stage1Plan?.audit_event?.planned_mandays
+                    ?? null,
+                next_action: deriveDossierNextAction(
+                    items,
+                    stage1Event?.id ?? stage2Event?.id ?? null,
+                    stage1Plan?.id ?? stage2Plan?.id ?? null,
+                ),
                 summary: summaryOf(items),
                 items,
             };
@@ -912,9 +1303,14 @@ export class CertificationProjectsService {
             dossierLabel: string,
             dossierDescription: string,
             sequenceNo: number,
-            plan: (typeof plans)[number] | null,
+            dossierPlans: (typeof plans)[number][],
+            surveillanceEvent: (typeof programEvents)[number] | null = null,
         ) => {
-            const dossierPlans = plan ? [plan] : [];
+            const plan = dossierPlans[0] ?? null;
+            const isSurveillanceDossier = [
+                'surveillance1',
+                'surveillance2',
+            ].includes(normalize(dossierType));
             const context = dossierContext(dossierPlans);
             const report = context.reports[0] ?? null;
             const issuedAppointment = context.appointments.find(
@@ -932,10 +1328,23 @@ export class CertificationProjectsService {
             );
             const notification = context.notifications[0] ?? null;
             const notificationSent = normalize(notification?.status) === 'sent';
-            const noCertificationChanges = Boolean(notification)
-                && notification?.has_certification_changes === false;
             const decisionIssued = context.decisions.some(
                 (item) => ['issued', 'approved'].includes(normalize(item.status)),
+            );
+            const issuedDecision = context.decisions.find(
+                (item) => ['issued', 'approved'].includes(normalize(item.status)),
+            ) ?? null;
+            const issuedDecisionType = issuedDecision
+                ? normalizeDecisionType(String(issuedDecision.decision_type ?? ''))
+                : null;
+            const requiresCertificateVersion = Boolean(
+                issuedDecision
+                && normalize(issuedDecision.decision_result) === 'approved'
+                && issuedDecisionType
+                && decisionRequiresCertificateVersion(issuedDecisionType),
+            );
+            const certificateNotApplicable = Boolean(
+                decisionIssued && !requiresCertificateVersion,
             );
             const uploadEntityId = plan?.id ?? project.id;
 
@@ -949,6 +1358,7 @@ export class CertificationProjectsService {
                     reference_id: issuedAppointment?.id ?? null,
                     entity_type: issuedAppointment ? 'audit_team_appointment' : null,
                     entity_id: issuedAppointment?.id ?? null,
+                    action_event_id: surveillanceEvent?.id ?? null,
                 },
                 {
                     item_no: 2,
@@ -959,6 +1369,7 @@ export class CertificationProjectsService {
                     reference_id: plan?.id ?? null,
                     entity_type: plan ? 'audit_plan' : null,
                     entity_id: plan?.id ?? null,
+                    action_event_id: surveillanceEvent?.id ?? null,
                 },
                 {
                     item_no: 3,
@@ -1017,6 +1428,16 @@ export class CertificationProjectsService {
                 },
                 {
                     item_no: 8,
+                    document_key: 'certification_decision',
+                    document_name: 'Quyết định duy trì/thay đổi chứng nhận',
+                    storage_type: 'system_record',
+                    status: decisionIssued ? 'completed' : 'pending',
+                    reference_id: context.decisions[0]?.id ?? null,
+                    entity_type: context.decisions[0] ? 'certification_decision' : null,
+                    entity_id: context.decisions[0]?.id ?? null,
+                },
+                {
+                    item_no: 9,
                     document_key: 'audit_result_notification',
                     document_name: 'Thông báo kết quả đánh giá',
                     storage_type: 'system_record',
@@ -1026,23 +1447,11 @@ export class CertificationProjectsService {
                     entity_id: notification?.id ?? null,
                 },
                 {
-                    item_no: 9,
-                    document_key: 'certification_decision',
-                    document_name: 'Quyết định duy trì/thay đổi chứng nhận',
-                    storage_type: 'system_record',
-                    status: noCertificationChanges
-                        ? 'not_applicable'
-                        : decisionIssued ? 'completed' : 'pending',
-                    reference_id: context.decisions[0]?.id ?? null,
-                    entity_type: context.decisions[0] ? 'certification_decision' : null,
-                    entity_id: context.decisions[0]?.id ?? null,
-                },
-                {
                     item_no: 10,
                     document_key: 'certificate',
                     document_name: 'Giấy chứng nhận sửa đổi (nếu có)',
                     storage_type: 'system_record',
-                    status: noCertificationChanges
+                    status: certificateNotApplicable
                         ? 'not_applicable'
                         : context.certificates.length > 0
                             && hasFileFor(
@@ -1067,20 +1476,60 @@ export class CertificationProjectsService {
                     entity_type: plan ? 'audit_plan' : 'certification_project',
                     entity_id: uploadEntityId,
                 },
-                {
-                    item_no: 12,
-                    document_key: 'audit_monitoring',
-                    document_name: 'Theo dõi quá trình đánh giá F.17',
-                    storage_type: 'system_record',
-                    status: hasFileFor(
-                        ['audit_monitoring_f17'],
-                        context.scopedEntityIds,
-                        true,
-                    ) ? 'completed' : 'pending',
-                    entity_type: 'certification_project',
-                    entity_id: project.id,
-                },
             ];
+
+            if (surveillanceEvent && isSurveillanceDossier) {
+                const informationSnapshot = snapshotForEvent(surveillanceEvent.id);
+                items.forEach((item) => {
+                    item.item_no += 1;
+                });
+                items.unshift({
+                    item_no: 1,
+                    document_key: 'surveillance_information_update',
+                    document_name: 'Phiếu cập nhật thông tin trước giám sát',
+                    storage_type: 'system_record',
+                    status: informationSnapshot
+                        && ['confirmed', 'reviewed'].includes(normalize(informationSnapshot.status))
+                        ? 'completed'
+                        : 'pending',
+                    reference_id: surveillanceEvent.id,
+                    entity_type: 'audit_program_event',
+                    entity_id: surveillanceEvent.id,
+                });
+            }
+
+            const informationSnapshot = surveillanceEvent && isSurveillanceDossier
+                ? snapshotForEvent(surveillanceEvent.id)
+                : null;
+            const surveillanceAction = surveillanceEvent && isSurveillanceDossier
+                ? surveillanceNextAction({
+                    snapshot: informationSnapshot
+                        ? {
+                            status: informationSnapshot.status,
+                            change_impact: informationSnapshot.change_impact,
+                            changes: (() => {
+                                try {
+                                    return JSON.parse(informationSnapshot.changes_json) as Array<{
+                                        category?: string | null;
+                                        affects_manday?: boolean | null;
+                                    }>;
+                                } catch {
+                                    return [];
+                                }
+                            })(),
+                        }
+                        : null,
+                    eventId: surveillanceEvent.id,
+                    planId: plan?.id ?? null,
+                    appointmentExists: Boolean(issuedAppointment),
+                })
+                : null;
+            const nextAction = deriveDossierNextAction(
+                items,
+                surveillanceEvent?.id ?? plan?.audit_event_id ?? null,
+                plan?.id ?? null,
+                surveillanceAction,
+            );
 
             return {
                 dossier_key: dossierKey,
@@ -1091,6 +1540,11 @@ export class CertificationProjectsService {
                 plan_ids: context.planIds,
                 plan_codes: dossierPlans.map((item) => item.plan_code).filter(Boolean),
                 planned_start_date: plan?.planned_start_date ?? null,
+                planned_end_date: plan?.planned_end_date ?? null,
+                planned_mandays: plan?.audit_event?.planned_mandays
+                    ?? surveillanceEvent?.planned_mandays
+                    ?? null,
+                next_action: nextAction,
                 summary: summaryOf(items),
                 items,
             };
@@ -1103,7 +1557,8 @@ export class CertificationProjectsService {
             'Hồ sơ giám sát lần 1',
             'Hồ sơ đánh giá giám sát năm thứ nhất; không áp dụng giai đoạn 1.',
             2,
-            surveillance1Plan,
+            planSet(surveillance1Plan, ...surveillance1CyclePlans),
+            surveillance1Event,
         );
         const surveillance2Dossier = createSingleAuditDossier(
             'surveillance_2',
@@ -1111,73 +1566,24 @@ export class CertificationProjectsService {
             'Hồ sơ giám sát lần 2',
             'Hồ sơ đánh giá giám sát năm thứ hai; không áp dụng giai đoạn 1.',
             3,
-            surveillance2Plan,
+            planSet(surveillance2Plan, ...surveillance2CyclePlans),
+            surveillance2Event,
         );
-
-        const corePlanIds = new Set([
-            ...initialDossier.plan_ids,
-            ...surveillance1Dossier.plan_ids,
-            ...surveillance2Dossier.plan_ids,
-            ...(projectTeamPlan
-                ? [
-                    projectTeamPlan.id,
-                ]
-                : []),
-        ]);
-        const extraPlanLabels: Record<string, { label: string; description: string }> = {
-            special: {
-                label: 'Hồ sơ đánh giá đặc biệt',
-                description: 'Đánh giá phát sinh theo yêu cầu hoặc để xử lý sự kiện đặc biệt.',
-            },
-            special_audit: {
-                label: 'Hồ sơ đánh giá đặc biệt',
-                description: 'Đánh giá phát sinh theo yêu cầu hoặc để xử lý sự kiện đặc biệt.',
-            },
-            extension: {
-                label: 'Hồ sơ mở rộng phạm vi',
-                description: 'Đánh giá phục vụ mở rộng phạm vi chứng nhận.',
-            },
-            scope_extension: {
-                label: 'Hồ sơ mở rộng phạm vi',
-                description: 'Đánh giá phục vụ mở rộng phạm vi chứng nhận.',
-            },
-            supplementary: {
-                label: 'Hồ sơ đánh giá bổ sung',
-                description: 'Đánh giá bổ sung để hoàn thiện bằng chứng hoặc xử lý yêu cầu phát sinh.',
-            },
-            follow_up: {
-                label: 'Hồ sơ đánh giá bổ sung',
-                description: 'Đánh giá bổ sung để hoàn thiện bằng chứng hoặc xử lý yêu cầu phát sinh.',
-            },
-            recertification: {
-                label: 'Hồ sơ tái chứng nhận',
-                description: 'Kỳ tái chứng nhận; nên được dùng để khởi tạo chu kỳ chứng nhận kế tiếp.',
-            },
-        };
-
-        const extraDossiers = plans
-            .filter((plan) => !corePlanIds.has(plan.id))
-            .map((plan, index) => {
-                const normalizedType = typeOfPlan(plan);
-                const metadata = extraPlanLabels[normalizedType] ?? {
-                    label: `Hồ sơ ${normalizedType.replaceAll('_', ' ') || 'đánh giá phát sinh'}`,
-                    description: 'Hồ sơ đánh giá phát sinh ngoài ba kỳ cơ bản của chu kỳ.',
-                };
-                return createSingleAuditDossier(
-                    `extra_${plan.id}`,
-                    normalizedType || 'extra',
-                    metadata.label,
-                    metadata.description,
-                    4 + index,
-                    plan,
-                );
-            });
+        const recertificationDossier = createSingleAuditDossier(
+            'recertification',
+            'recertification',
+            'Hồ sơ tái chứng nhận',
+            'Hồ sơ đánh giá tái chứng nhận cuối chu kỳ; không áp dụng giai đoạn 1.',
+            4,
+            planSet(...recertificationCyclePlans),
+            recertificationEvent,
+        );
 
         const dossiers = [
             initialDossier,
             surveillance1Dossier,
             surveillance2Dossier,
-            ...extraDossiers,
+            recertificationDossier,
         ];
 
         const allItems = [
@@ -1215,6 +1621,8 @@ export class CertificationProjectsService {
                 },
                 application_review: application.application_reviews[0] ?? null,
             },
+            diagnostics:
+                canonicalPlanResolution.diagnostics,
             // Giữ trường items để tương thích với các phiên bản giao diện cũ.
             items: [...commonItems, ...initialDossier.items],
             files: files.map((file) => ({
@@ -1234,6 +1642,7 @@ export class CertificationProjectsService {
     async getAlerts(
         id: string,
         warningDays = 30,
+        roles: string[] = [],
     ) {
         const dossier =
             await this.getDossier(id);
@@ -1274,11 +1683,20 @@ export class CertificationProjectsService {
 
                 select: {
                     id: true,
+                    audit_event_id: true,
+                    plan_code: true,
+                    created_at: true,
+                    audit_team_appointment: {
+                        select: {
+                            id: true,
+                            status: true,
+                        },
+                    },
                 },
             });
 
         const planIds =
-            plans.map((plan) => plan.id);
+            resolveCanonicalOperationalPlans(plans).plans.map((plan) => plan.id);
 
         const reports =
             planIds.length > 0
@@ -1445,55 +1863,10 @@ export class CertificationProjectsService {
             due_date: Date | null;
         }> = [];
 
-        // Hồ sơ còn thiếu theo từng kỳ đánh giá
-        const alertDossierItems = [
-            ...((dossier as any).common_items ?? []),
-            ...(((dossier as any).dossiers ?? []).flatMap((group: any) =>
-                (group.items ?? []).map((item: any) => ({
-                    ...item,
-                    document_name: `${group.dossier_label}: ${item.document_name}`,
-                })),
-            )),
-        ];
-
-        for (
-            const item of
-            alertDossierItems
-        ) {
-            if (
-                item.status !== 'pending'
-            ) {
-                continue;
-            }
-
-            if (
-                [
-                    'nc_cap',
-                    'audit_result_notification',
-                ].includes(
-                    item.document_key,
-                )
-            ) {
-                continue;
-            }
-
-            alerts.push({
-                alert_type:
-                    'missing_document',
-
-                severity:
-                    'warning',
-
-                message:
-                    `Thiếu hồ sơ: ${item.document_name}`,
-
-                reference_id:
-                    item.reference_id ?? null,
-
-                due_date:
-                    null,
-            });
-        }
+        alerts.push(...projectExceptionAlertsFromDossier(
+            dossier as Parameters<typeof projectExceptionAlertsFromDossier>[0],
+            roles.some((role) => role.trim().toUpperCase() === 'ADMIN'),
+        ));
 
         // NC/CAP chưa đóng
         for (const finding of findings) {
@@ -2144,6 +2517,8 @@ export class CertificationProjectsService {
                     );
                 }
 
+                const standardName = dto.standard_name?.trim() || application.standard_name;
+                const schemeConfigSnapshot = await this.schemeConfigurationSnapshot(tx, standardName);
                 const project =
                     await tx.certification_projects.create({
                         data: {
@@ -2153,9 +2528,8 @@ export class CertificationProjectsService {
                             agreement_id: agreementId,
                             project_code:
                                 dto.project_code.trim(),
-                            standard_name:
-                                dto.standard_name?.trim() ||
-                                application.standard_name,
+                            standard_name: standardName,
+                            scheme_config_snapshot: schemeConfigSnapshot,
                             status: 'draft',
                         },
                         include: {
@@ -2336,6 +2710,8 @@ export class CertificationProjectsService {
 
         return this.prisma.$transaction(
             async (tx) => {
+                const standardName = dto.standard_name ?? application.standard_name;
+                const schemeConfigSnapshot = await this.schemeConfigurationSnapshot(tx, standardName);
                 const project =
                     await tx.certification_projects.create({
                         data: {
@@ -2351,9 +2727,8 @@ export class CertificationProjectsService {
                             project_code:
                                 dto.project_code,
 
-                            standard_name:
-                                dto.standard_name ??
-                                application.standard_name,
+                            standard_name: standardName,
+                            scheme_config_snapshot: schemeConfigSnapshot,
 
                             status: 'draft',
                         },

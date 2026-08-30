@@ -351,26 +351,10 @@ export class AuditResultNotificationsService {
             );
         }
 
-        const requiresDecision =
-            dto.audit_type === 'initial' ||
-            dto.audit_type ===
-            'recertification' ||
-            (
-                dto.audit_type ===
-                'surveillance' &&
-                hasCertificationChanges
-            );
-
-        if (
-            dto.audit_type ===
-            'surveillance' &&
-            !hasCertificationChanges &&
-            dto.certification_decision_id
-        ) {
-            throw new BadRequestException(
-                'Giám sát không có thay đổi không cần quyết định chứng nhận',
-            );
-        }
+        // F.12 is an outbound notification of an already-issued certification
+        // decision. This is intentionally uniform for initial, surveillance,
+        // recertification and special audits: Technical Review -> Decision -> F.12.
+        const requiresDecision = true;
 
         let decision =
             dto.certification_decision_id
@@ -434,6 +418,27 @@ export class AuditResultNotificationsService {
             throw new BadRequestException(
                 'Quyết định chứng nhận chưa được ban hành',
             );
+        }
+
+        if (decision) {
+            const decisionType = String(decision.decision_type ?? '').trim().toUpperCase();
+            const expectedNotificationResult =
+                decisionType === 'REFUSE' ||
+                decision.decision_result !== 'approved'
+                    ? 'certification_not_granted'
+                    : decisionType === 'SUSPEND'
+                        ? 'certification_suspended'
+                        : decisionType === 'WITHDRAW'
+                            ? 'certification_withdrawn'
+                            : ['MAINTAIN', 'RESTORE'].includes(decisionType)
+                                ? 'certification_maintained'
+                                : 'certification_granted';
+
+            if (dto.notification_result !== expectedNotificationResult) {
+                throw new BadRequestException(
+                    'Kết quả thông báo phải phù hợp với quyết định chứng nhận đã ban hành',
+                );
+            }
         }
 
         if (

@@ -31,6 +31,10 @@ type DatabaseMock = {
         findUnique: jest.Mock;
         upsert: jest.Mock;
         update: jest.Mock;
+        count: jest.Mock;
+    };
+    customer_user_access_history: {
+        create: jest.Mock;
     };
     $transaction: jest.Mock;
 };
@@ -74,6 +78,10 @@ function createDatabaseMock(): DatabaseMock {
             findUnique: jest.fn(),
             upsert: jest.fn(),
             update: jest.fn(),
+            count: jest.fn(),
+        },
+        customer_user_access_history: {
+            create: jest.fn(),
         },
         $transaction: jest.fn(),
     };
@@ -113,6 +121,9 @@ describe(
                     id: customerId,
                     status: 'active',
                 });
+            database.customer_user_access.count.mockResolvedValue(2);
+            database.customer_user_access_history.create.mockResolvedValue({ id: 'history' });
+
             database.users.findUnique
                 .mockResolvedValue({
                     id: targetUserId,
@@ -152,6 +163,7 @@ describe(
                 expect(query.select.user.select)
                     .toEqual({
                         id: true,
+                        username: true,
                         email: true,
                         full_name: true,
                         status: true,
@@ -193,6 +205,13 @@ describe(
                         }),
                     }),
                 );
+                expect(database.customer_user_access_history.create).toHaveBeenCalledWith({
+                    data: expect.objectContaining({
+                        action: 'ASSIGNED',
+                        source_type: 'ADMIN_DIRECT',
+                        changed_by: actorUserId,
+                    }),
+                });
             },
         );
 
@@ -408,6 +427,19 @@ describe(
                         },
                     }),
                 );
+            },
+        );
+
+        it(
+            'blocks revoking the last active portal user',
+            async () => {
+                database.customer_user_access.findUnique.mockResolvedValue(accessMapping());
+                database.customer_user_access.count.mockResolvedValue(1);
+
+                await expect(
+                    service.revokeUserAccess(customerId, targetUserId, actorUserId),
+                ).rejects.toBeInstanceOf(BadRequestException);
+                expect(database.customer_user_access.update).not.toHaveBeenCalled();
             },
         );
 

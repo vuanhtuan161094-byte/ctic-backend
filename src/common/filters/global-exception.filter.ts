@@ -14,6 +14,10 @@ import type {
     SecurityRequest,
 } from '../../security/security-request';
 
+import {
+    safeErrorForLog,
+} from '../safe-error-log';
+
 interface ErrorResponse {
     statusCode: number;
     error: string;
@@ -103,7 +107,9 @@ export class GlobalExceptionFilter
 
         console.error(
             '[GlobalExceptionFilter]',
-            exception,
+            safeErrorForLog(
+                exception,
+            ),
         );
 
         response

@@ -38,12 +38,12 @@ if (frontendRoot && fs.existsSync(frontendRoot)) {
 
   assert.match(projectDetail, /fileKind: "signed_scan"/);
   assert.match(projectDetail, /pdfOnly: true/);
-  assert.match(projectDetail, /Tải PDF chốt/);
-  assert.match(projectDetail, /PDF đã chốt/);
-  assert.match(projectDetail, /Xem PDF/);
+  assert.match(projectDetail, /Tải lên PDF chính thức/);
+  assert.match(projectDetail, /PDF đã ký\/xác nhận/);
+  assert.match(projectDetail, /Xem PDF chính thức/);
 
   assert.match(technicalReview, /openPrimaryReviewDocument/);
-  assert.match(technicalReview, /PDF đã chốt/);
+  assert.match(technicalReview, /PDF chính thức/);
   assert.match(technicalReview, /Xem thông tin/);
   assert.match(
     technicalReview,

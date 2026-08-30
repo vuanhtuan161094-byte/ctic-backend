@@ -47,4 +47,13 @@ export class CreateCertificateDto {
     @IsOptional()
     @IsDateString()
     expire_date?: string;
+
+    @ApiPropertyOptional({
+        example: 'Tái chứng nhận chu kỳ tiếp theo.',
+        description: 'Lý do tạo phiên bản chứng chỉ mới',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(1000)
+    change_reason?: string;
 }

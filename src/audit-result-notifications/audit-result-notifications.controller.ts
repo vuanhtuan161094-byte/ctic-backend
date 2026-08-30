@@ -60,7 +60,7 @@ export class AuditResultNotificationsController {
     @ApiOperation({
         summary: 'Tạo thông báo kết quả đánh giá F.12-P.09',
         description:
-            'Lần đầu cần quyết định; giám sát không thay đổi có thể chỉ phát hành thông báo duy trì.',
+            'F.12 chỉ được lập sau khi F.13/quyết định chứng nhận tương ứng đã được ban hành.',
     })
     @ApiCreatedResponse({
         description: 'Tạo thông báo kết quả thành công',

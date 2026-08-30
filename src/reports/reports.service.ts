@@ -527,11 +527,6 @@ export class ReportsService {
         const user = await this.prisma.users.findUnique({
             where: { id: userId },
             include: {
-                user_roles: {
-                    include: {
-                        roles: true,
-                    },
-                },
                 expert_profile: {
                     select: {
                         id: true,
@@ -544,18 +539,6 @@ export class ReportsService {
             throw new ForbiddenException(
                 'Không tìm thấy tài khoản người thực hiện',
             );
-        }
-
-        const roleNames = user.user_roles.map((item) =>
-            this.normalizeText(item.roles.role_name),
-        );
-
-        if (
-            roleNames.some((role) =>
-                ['admin', 'staff'].includes(role),
-            )
-        ) {
-            return;
         }
 
         const appointment =
@@ -591,6 +574,22 @@ export class ReportsService {
                 'Chỉ thành viên được phân công trong đoàn đánh giá mới được tạo hoặc sửa báo cáo',
             );
         }
+    }
+
+    async assertCanManageReport(
+        userId: string | undefined,
+        reportId: string,
+    ) {
+        const report = await this.prisma.reports.findUnique({
+            where: { id: reportId },
+            select: { audit_plan_id: true },
+        });
+
+        if (!report) {
+            throw new NotFoundException('Không tìm thấy báo cáo đánh giá');
+        }
+
+        await this.assertReportAccess(userId, report.audit_plan_id);
     }
 
     private validateSubmissionForm(report: any) {

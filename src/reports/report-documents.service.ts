@@ -958,6 +958,11 @@ export class ReportDocumentsService {
         );
 
         const built = this.buildSnapshot(report);
+        if (built.preview.missing_fields.length > 0) {
+            throw new BadRequestException(
+                `Không thể sinh báo cáo khi còn thiếu trường bắt buộc: ${built.preview.missing_fields.join(', ')}`,
+            );
+        }
         const templatePath = this.templatePath(
             built.definition.templateFile,
         );

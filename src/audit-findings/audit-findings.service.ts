@@ -4,6 +4,7 @@ import {
     ForbiddenException,
     Injectable,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
 
 import {
@@ -17,6 +18,8 @@ import {
 import type {
     ResourceActor,
 } from '../security/resource-access.service';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
+import { WorkItemsService } from '../work-items/work-items.service';
 
 import { CloseAuditFindingDto } from './dto/close-audit-finding.dto';
 import { CreateAuditFindingDto } from './dto/create-audit-finding.dto';
@@ -29,6 +32,9 @@ export class AuditFindingsService {
         private readonly prisma: PrismaService,
         private readonly resourceAccess:
             ResourceAccessService,
+        @Optional()
+        private readonly workItems?:
+            WorkItemsService,
     ) { }
 
     private getDetailInclude() {
@@ -416,11 +422,6 @@ export class AuditFindingsService {
         const user = await this.prisma.users.findUnique({
             where: { id: userId },
             include: {
-                user_roles: {
-                    include: {
-                        roles: true,
-                    },
-                },
                 expert_profile: {
                     select: {
                         id: true,
@@ -433,14 +434,6 @@ export class AuditFindingsService {
             throw new ForbiddenException(
                 'Không tìm thấy tài khoản người thực hiện',
             );
-        }
-
-        const roleNames = user.user_roles.map((item) =>
-            this.normalizeText(item.roles.role_name),
-        );
-
-        if (roleNames.some((role) => ['admin', 'staff'].includes(role))) {
-            return;
         }
 
         const appointment =
@@ -897,6 +890,9 @@ export class AuditFindingsService {
                         },
                         audit_plans: {
                             select: {
+                                id: true,
+                                project_id: true,
+                                audit_event_id: true,
                                 audit_type: true,
                                 audit_event: {
                                     select: {
@@ -1109,6 +1105,44 @@ export class AuditFindingsService {
                             },
                         },
                     );
+
+                    await this.workItems?.openWorkItem(
+                        {
+                            sourceKey:
+                                `cap:${finding.id}:${WORK_ITEM_ACTIONS.CAP_RESPOND}`,
+                            workType:
+                                'CAP_ACTION_OR_REVIEW',
+                            actionCode:
+                                WORK_ITEM_ACTIONS.CAP_RESPOND,
+                            title:
+                                `Phản hồi CAP ${finding.finding_code}`,
+                            entityType:
+                                'audit_finding',
+                            entityId:
+                                finding.id,
+                            projectId:
+                                report.audit_plans.project_id,
+                            auditEventId:
+                                report.audit_plans.audit_event_id,
+                            auditPlanId:
+                                report.audit_plans.id,
+                            assignedRole:
+                                'CUSTOMER',
+                            priority:
+                                'HIGH',
+                            dueAt:
+                                finding.due_date,
+                            destinationPath:
+                                `/projects/${report.audit_plans.project_id}?workspace=cap&finding_id=${finding.id}&audit_plan_id=${report.audit_plan_id}`,
+                            context: {
+                                finding_code:
+                                    finding.finding_code,
+                                finding_type:
+                                    finding.finding_type,
+                            },
+                        },
+                        transaction,
+                    );
                 }
 
                 return this.normalizeFinding(
@@ -1234,6 +1268,22 @@ export class AuditFindingsService {
                                 id: true,
                                 finding_type: true,
                                 status: true,
+                                due_date: true,
+                                finding_code: true,
+                                reports: {
+                                    select: {
+                                        audit_plan_id:
+                                            true,
+                                        audit_plans: {
+                                            select: {
+                                                project_id:
+                                                    true,
+                                                audit_event_id:
+                                                    true,
+                                            },
+                                        },
+                                    },
+                                },
                             },
                         });
 
@@ -1297,6 +1347,57 @@ export class AuditFindingsService {
                             status: 'response_submitted',
                         },
                     });
+
+                    await this.workItems?.completeMatchingWorkItems(
+                        {
+                            actionCode:
+                                WORK_ITEM_ACTIONS.CAP_RESPOND,
+                            entityType:
+                                'audit_finding',
+                            entityId:
+                                findingId,
+                        },
+                        submittedBy,
+                        transaction,
+                    );
+
+                    await this.workItems?.openWorkItem(
+                        {
+                            sourceKey:
+                                `cap:${findingId}:${WORK_ITEM_ACTIONS.CAP_REVIEW}`,
+                            workType:
+                                'CAP_ACTION_OR_REVIEW',
+                            actionCode:
+                                WORK_ITEM_ACTIONS.CAP_REVIEW,
+                            title:
+                                `Xem xét CAP ${finding.finding_code}`,
+                            entityType:
+                                'audit_finding',
+                            entityId:
+                                findingId,
+                            projectId:
+                                finding.reports.audit_plans.project_id,
+                            auditEventId:
+                                finding.reports.audit_plans.audit_event_id,
+                            auditPlanId:
+                                finding.reports.audit_plan_id,
+                            assignedRole:
+                                'LEAD_AUDITOR',
+                            priority:
+                                'HIGH',
+                            dueAt:
+                                finding.due_date,
+                            destinationPath:
+                                `/projects/${finding.reports.audit_plans.project_id}?workspace=cap&finding_id=${findingId}&audit_plan_id=${finding.reports.audit_plan_id}`,
+                            context: {
+                                corrective_action_id:
+                                    action.id,
+                                finding_code:
+                                    finding.finding_code,
+                            },
+                        },
+                        transaction,
+                    );
 
                     return {
                         ...action,
@@ -1404,6 +1505,14 @@ export class AuditFindingsService {
                                 reports: {
                                     select: {
                                         audit_plan_id: true,
+                                        audit_plans: {
+                                            select: {
+                                                project_id:
+                                                    true,
+                                                audit_event_id:
+                                                    true,
+                                            },
+                                        },
                                     },
                                 },
                             },
@@ -1526,6 +1635,62 @@ export class AuditFindingsService {
                         },
                     },
                 );
+
+                await this.workItems?.completeMatchingWorkItems(
+                    {
+                        actionCode:
+                            WORK_ITEM_ACTIONS.CAP_REVIEW,
+                        entityType:
+                            'audit_finding',
+                        entityId:
+                            findingId,
+                    },
+                    reviewedBy,
+                    transaction,
+                );
+
+                if (
+                    dto.review_result ===
+                    'revision_required'
+                ) {
+                    await this.workItems?.openWorkItem(
+                        {
+                            sourceKey:
+                                `cap:${findingId}:${WORK_ITEM_ACTIONS.CAP_RESPOND}:${action.version_no + 1}`,
+                            workType:
+                                'CAP_ACTION_OR_REVIEW',
+                            actionCode:
+                                WORK_ITEM_ACTIONS.CAP_RESPOND,
+                            title:
+                                `Bổ sung CAP ${action.audit_findings.finding_code}`,
+                            entityType:
+                                'audit_finding',
+                            entityId:
+                                findingId,
+                            projectId:
+                                action.audit_findings.reports.audit_plans.project_id,
+                            auditEventId:
+                                action.audit_findings.reports.audit_plans.audit_event_id,
+                            auditPlanId:
+                                action.audit_findings.reports.audit_plan_id,
+                            assignedRole:
+                                'CUSTOMER',
+                            priority:
+                                'HIGH',
+                            dueAt:
+                                action.audit_findings.due_date,
+                            destinationPath:
+                                `/projects/${action.audit_findings.reports.audit_plans.project_id}?workspace=cap&finding_id=${findingId}&audit_plan_id=${action.audit_findings.reports.audit_plan_id}`,
+                            context: {
+                                corrective_action_id:
+                                    actionId,
+                                revision_no:
+                                    action.version_no + 1,
+                            },
+                        },
+                        transaction,
+                    );
+                }
 
                 return reviewedAction;
             },
@@ -1690,6 +1855,32 @@ export class AuditFindingsService {
                         },
                     );
                 }
+
+                await this.workItems?.completeMatchingWorkItems(
+                    {
+                        actionCode:
+                            WORK_ITEM_ACTIONS.CAP_REVIEW,
+                        entityType:
+                            'audit_finding',
+                        entityId:
+                            id,
+                    },
+                    closedBy,
+                    transaction,
+                );
+
+                await this.workItems?.completeMatchingWorkItems(
+                    {
+                        actionCode:
+                            WORK_ITEM_ACTIONS.CAP_RESPOND,
+                        entityType:
+                            'audit_finding',
+                        entityId:
+                            id,
+                    },
+                    closedBy,
+                    transaction,
+                );
 
                 return this.normalizeFinding(
                     closedFinding,

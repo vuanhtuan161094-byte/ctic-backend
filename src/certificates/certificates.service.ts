@@ -4,7 +4,10 @@ import {
     GoneException,
     Injectable,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 
 import { UpdateCertificateStatusDto } from './dto/update-certificate-status.dto';
 
@@ -14,14 +17,28 @@ import { PrismaService } from '../prisma/prisma.service';
 
 import { getDeploymentConfig } from '../common/deployment-config';
 import { DocumentFilesService } from '../document-files/document-files.service';
+import { WorkItemsService } from '../work-items/work-items.service';
 
 import { CreateCertificateDto } from './dto/create-certificate.dto';
+import {
+    allowedStatusDecisionTypesForCertificateStatus,
+    assertCertificateStatusTransition,
+    canReplaceCertificateStatus,
+    certificateActionForDecisionType,
+    classifyAuditLifecycle,
+    decisionRequiresChangeReason,
+    decisionRequiresCertificateVersion,
+    normalizeCertificateStatus,
+    normalizeDecisionType,
+} from './certificate-lifecycle';
 
 @Injectable()
 export class CertificatesService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly documentFilesService: DocumentFilesService,
+        @Optional()
+        private readonly workItems?: WorkItemsService,
     ) { }
     private getTodayInVietnam(): Date {
         const parts =
@@ -203,8 +220,11 @@ export class CertificatesService {
                     certification_decision: {
                         select: {
                             id: true,
+                            project_id: true,
+                            certificate_series_id: true,
                             decision_number: true,
                             decision_date: true,
+                            decision_type: true,
                             decision_result: true,
                             organization_name: true,
                             organization_address: true,
@@ -240,6 +260,33 @@ export class CertificatesService {
                     },
                 },
             },
+
+            certification_decision: {
+                select: {
+                    id: true,
+                    decision_number: true,
+                    decision_type: true,
+                    decision_result: true,
+                },
+            },
+
+            certificate_series: {
+                select: {
+                    id: true,
+                    project_id: true,
+                    series_code: true,
+                    status: true,
+                },
+            },
+
+            supersedes_certificate: {
+                select: {
+                    id: true,
+                    cert_number: true,
+                    version_no: true,
+                    verification_code: true,
+                },
+            },
         };
     }
 
@@ -264,6 +311,72 @@ export class CertificatesService {
         }
 
         return parsedDate;
+    }
+
+    private parseSiteSnapshot(
+        value: string | null,
+    ): unknown[] {
+        if (!value) return [];
+
+        try {
+            const parsed: unknown =
+                JSON.parse(value);
+
+            return Array.isArray(parsed)
+                ? parsed
+                : [];
+        } catch {
+            return [];
+        }
+    }
+
+    private decisionChangeReason(
+        formData: unknown,
+    ): string | null {
+        if (!formData) return null;
+
+        try {
+            const parsed = typeof formData === 'string'
+                ? JSON.parse(formData) as unknown
+                : formData;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return null;
+            }
+
+            const value = (parsed as Record<string, unknown>)
+                .lifecycle_change_reason;
+            return typeof value === 'string' && value.trim()
+                ? value.trim()
+                : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private decisionSiteSnapshot(
+        formData: unknown,
+    ): string | null {
+        if (!formData) return null;
+
+        try {
+            const parsed = typeof formData === 'string'
+                ? JSON.parse(formData) as unknown
+                : formData;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return null;
+            }
+
+            const value = (parsed as Record<string, unknown>)
+                .approved_site_snapshot_json;
+            if (typeof value !== 'string') return null;
+
+            const sites: unknown = JSON.parse(value);
+            return Array.isArray(sites)
+                ? value
+                : null;
+        } catch {
+            return null;
+        }
     }
 
     private getPublicBaseUrl() {
@@ -337,6 +450,24 @@ export class CertificatesService {
                         id: true,
                         project_code: true,
                         standard_name: true,
+                        certification_applications: {
+                            select: {
+                                sites: {
+                                    orderBy: {
+                                        site_no:
+                                            'asc',
+                                    },
+                                    select: {
+                                        site_no: true,
+                                        site_name: true,
+                                        address: true,
+                                        activities: true,
+                                        employee_count: true,
+                                        is_headquarters: true,
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
                 reports: {
@@ -374,7 +505,70 @@ export class CertificatesService {
             ?? null;
         const decision = technicalReview?.certification_decision ?? null;
         const notification = technicalReview?.audit_result_notification ?? null;
-        const certificate = technicalReview?.certificates ?? null;
+        const decisionType = decision
+            ? normalizeDecisionType(decision.decision_type)
+            : null;
+        const lifecycleAction = decisionType
+            ? certificateActionForDecisionType(decisionType)
+            : null;
+        const issuedCertificate =
+            technicalReview?.certificates ??
+            null;
+        const certificateSeriesId =
+            decision?.certificate_series_id ??
+            issuedCertificate?.certificate_series_id ??
+            null;
+        const certificateSeries =
+            await this.prisma.certificate_series.findFirst({
+                where: certificateSeriesId
+                    ? {
+                        id:
+                            certificateSeriesId,
+                    }
+                    : {
+                        project_id:
+                            plan.project_id,
+                        status:
+                            'active',
+                    },
+                orderBy: certificateSeriesId
+                    ? undefined
+                    : {
+                        created_at:
+                            'desc',
+                    },
+                include: {
+                    certificates: {
+                        orderBy: { version_no: 'desc' },
+                        include: {
+                            certification_decision: {
+                                select: {
+                                    id: true,
+                                    decision_number: true,
+                                    decision_date: true,
+                                    decision_type: true,
+                                    decision_result: true,
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+        const seriesVersions = certificateSeries?.certificates ?? [];
+        const currentCertificate =
+            seriesVersions.find((item) =>
+                [
+                    'active',
+                    'suspended',
+                ].includes(
+                    item.status ??
+                    '',
+                ),
+            ) ??
+            seriesVersions[0] ??
+            issuedCertificate ??
+            null;
+        const workspaceCertificate = issuedCertificate ?? currentCertificate;
 
         const eligibilityErrors: string[] = [];
         if (!report) {
@@ -397,12 +591,45 @@ export class CertificatesService {
         } else if (!['certification_granted', 'certification_maintained'].includes(notification.notification_result)) {
             eligibilityErrors.push('Kết quả thông báo không cho phép cấp giấy chứng nhận.');
         }
+        if (
+            lifecycleAction === 'CREATE_NEXT_VERSION' &&
+            !canReplaceCertificateStatus(
+                currentCertificate?.status,
+            )
+        ) {
+            eligibilityErrors.push(
+                'Certificate hiện hành không ở trạng thái cho phép phát hành phiên bản thay thế.',
+            );
+        }
 
-        const documents = certificate
+        const versionIds = seriesVersions.map((item) => item.id);
+        const seriesDocuments = versionIds.length
             ? await this.prisma.documentFile.findMany({
                 where: {
                     entity_type: 'certificate',
-                    entity_id: certificate.id,
+                    entity_id: { in: versionIds },
+                },
+                orderBy: [
+                    { entity_id: 'asc' },
+                    { is_current: 'desc' },
+                    { version_no: 'desc' },
+                    { created_at: 'desc' },
+                ],
+            })
+            : [];
+        const documentsByCertificate = new Map<string, typeof seriesDocuments>();
+        for (const document of seriesDocuments) {
+            if (!document.entity_id) continue;
+            const documents = documentsByCertificate.get(document.entity_id) ?? [];
+            documents.push(document);
+            documentsByCertificate.set(document.entity_id, documents);
+        }
+
+        const documents = workspaceCertificate
+            ? await this.prisma.documentFile.findMany({
+                where: {
+                    entity_type: 'certificate',
+                    entity_id: workspaceCertificate.id,
                 },
                 orderBy: [
                     { is_current: 'desc' },
@@ -412,11 +639,19 @@ export class CertificatesService {
             })
             : [];
 
-        const history = certificate
+        const history = workspaceCertificate
             ? await this.prisma.certificate_status_histories.findMany({
-                where: { certificate_id: certificate.id },
+                where: { certificate_id: workspaceCertificate.id },
                 orderBy: { created_at: 'desc' },
                 include: {
+                    certification_decision: {
+                        select: {
+                            id: true,
+                            decision_number: true,
+                            decision_type: true,
+                            decision_result: true,
+                        },
+                    },
                     changed_by_user: {
                         select: {
                             id: true,
@@ -430,6 +665,30 @@ export class CertificatesService {
 
         const issueDate = decision?.effective_date ?? decision?.decision_date ?? this.getTodayInVietnam();
         const expiryDate = decision?.expiry_date ?? null;
+        const proposedCertificateNumber =
+            this.buildCertificateNumberProposal(
+                plan.certification_projects.project_code,
+                issueDate,
+            );
+        const proposedSiteSnapshot = decision
+            ? this.decisionSiteSnapshot(
+                decision.form_data,
+            )
+            : null;
+        const fallbackSiteSnapshot = JSON.stringify(
+            plan.certification_projects
+                .certification_applications
+                .sites,
+        );
+        const allowedStatusActions =
+            classifyAuditLifecycle(
+                plan.audit_type,
+            ) === 'SURVEILLANCE' &&
+                !decision
+                ? allowedStatusDecisionTypesForCertificateStatus(
+                    currentCertificate?.status,
+                )
+                : [];
 
         return {
             plan: {
@@ -453,22 +712,127 @@ export class CertificatesService {
                 status: technicalReview.status,
                 completed_at: technicalReview.completed_at,
             } : null,
-            decision,
+            decision: decision ? {
+                ...decision,
+                change_reason:
+                    this.decisionChangeReason(
+                        decision.form_data,
+                    ),
+            } : null,
             notification,
-            certificate,
+            certificate: issuedCertificate,
+            current_certificate: currentCertificate,
+            current_status:
+                currentCertificate?.status ??
+                null,
+            allowed_status_actions:
+                allowedStatusActions,
+            current_series: certificateSeries ? {
+                id: certificateSeries.id,
+                series_code: certificateSeries.series_code,
+                status: certificateSeries.status,
+            } : null,
+            version_timeline: seriesVersions.map((version) => ({
+                ...version,
+                documents:
+                    documentsByCertificate.get(version.id) ?? [],
+                official_pdf_available:
+                    (documentsByCertificate.get(version.id) ?? [])
+                        .some((item) =>
+                            item.document_type === 'certificate_pdf',
+                        ),
+                is_current:
+                    currentCertificate?.id === version.id,
+            })),
             documents,
             history,
+            status_history:
+                history,
+            can_issue_status_decision:
+                Boolean(technicalReview) &&
+                technicalReview.status === 'completed' &&
+                !decision &&
+                allowedStatusActions.length > 0,
+            lifecycle: decisionType
+                ? {
+                    decision_type:
+                        decisionType,
+                    certificate_action:
+                        lifecycleAction,
+                    requires_certificate_version:
+                        decisionRequiresCertificateVersion(
+                            decisionType,
+                        ),
+                    preserves_current_certificate:
+                        lifecycleAction ===
+                        'PRESERVE_CURRENT_VERSION',
+                    status_action:
+                        lifecycleAction ===
+                        'TRANSITION_STATUS',
+                }
+                : null,
+            requires_certificate_issuance:
+                Boolean(decisionType) &&
+                decision?.decision_result === 'approved' &&
+                decisionRequiresCertificateVersion(
+                    decisionType!,
+                ),
+            maintains_current_certificate:
+                Boolean(decisionType) &&
+                decision?.decision_result === 'approved' &&
+                lifecycleAction === 'PRESERVE_CURRENT_VERSION',
             can_issue_certificate: Boolean(technicalReview)
-                && !certificate
+                && !issuedCertificate
+                && Boolean(decisionType)
+                && decisionRequiresCertificateVersion(
+                    decisionType!,
+                )
                 && eligibilityErrors.length === 0,
             eligibility_errors: eligibilityErrors,
+            issuance_preview: {
+                previous_version: currentCertificate ? {
+                    id: currentCertificate.id,
+                    version_no: currentCertificate.version_no,
+                    cert_number: currentCertificate.cert_number,
+                    expire_date: currentCertificate.expire_date,
+                    status: currentCertificate.status,
+                } : null,
+                proposed_version: decision ? {
+                    version_no:
+                        currentCertificate
+                            ? currentCertificate.version_no + 1
+                            : 1,
+                    cert_number:
+                        proposedCertificateNumber,
+                    organization_name:
+                        decision.organization_name,
+                    organization_address:
+                        decision.organization_address,
+                    management_system:
+                        decision.management_system,
+                    standard_name:
+                        decision.standard_name,
+                    certification_scope:
+                        decision.certification_scope,
+                    site_snapshot_json:
+                        proposedSiteSnapshot ??
+                        fallbackSiteSnapshot,
+                    issue_date:
+                        issueDate,
+                    expire_date:
+                        expiryDate,
+                } : null,
+            },
             defaults: {
-                cert_number: this.buildCertificateNumberProposal(
-                    plan.certification_projects.project_code,
-                    issueDate,
-                ),
+                cert_number:
+                    proposedCertificateNumber,
                 issue_date: issueDate,
                 expire_date: expiryDate,
+                change_reason: decision
+                    ? this.decisionChangeReason(
+                        decision.form_data,
+                    )
+                    : null,
             },
         };
     }
@@ -541,23 +905,15 @@ export class CertificatesService {
             await this.prisma.certificates.findFirst(
                 {
                     where: {
-                        OR: [
-                            {
-                                technical_review_id:
-                                    dto.technical_review_id,
-                            },
-                            {
-                                cert_number:
-                                    dto.cert_number.trim(),
-                            },
-                        ],
+                        technical_review_id:
+                            dto.technical_review_id,
                     },
                 },
             );
 
         if (existingCertificate) {
             throw new ConflictException(
-                'Hồ sơ thẩm xét hoặc số chứng chỉ đã được sử dụng',
+                'Hồ sơ thẩm xét đã được dùng để tạo một phiên bản chứng chỉ',
             );
         }
 
@@ -581,7 +937,21 @@ export class CertificatesService {
                                 audit_plans: {
                                     include: {
                                         certification_projects:
-                                            true,
+                                        {
+                                            include: {
+                                                certification_applications:
+                                                {
+                                                    include: {
+                                                        sites: {
+                                                            orderBy: {
+                                                                site_no:
+                                                                    'asc',
+                                                            },
+                                                        },
+                                                    },
+                                                },
+                                            },
+                                        },
                                     },
                                 },
                             },
@@ -618,6 +988,55 @@ export class CertificatesService {
         ) {
             throw new BadRequestException(
                 'Quyết định chưa phê duyệt cấp chứng nhận',
+            );
+        }
+
+        const decisionType =
+            normalizeDecisionType(
+                decision.decision_type,
+            );
+
+        if (!decisionType) {
+            throw new BadRequestException(
+                'Quyết định chưa có loại lifecycle hợp lệ',
+            );
+        }
+
+        const lifecycleAction =
+            certificateActionForDecisionType(
+                decisionType,
+            );
+        const changeReason =
+            dto.change_reason?.trim() ||
+            this.decisionChangeReason(
+                decision.form_data,
+            );
+
+        if (
+            lifecycleAction ===
+            'PRESERVE_CURRENT_VERSION'
+        ) {
+            throw new BadRequestException(
+                'Quyết định MAINTAIN giữ nguyên certificate hiện hành và không tạo phiên bản mới',
+            );
+        }
+
+        if (
+            !decisionRequiresCertificateVersion(
+                decisionType,
+            )
+        ) {
+            throw new BadRequestException(
+                `Quyết định ${decisionType} không tạo phiên bản certificate`,
+            );
+        }
+
+        if (
+            decisionRequiresChangeReason(decisionType) &&
+            !changeReason
+        ) {
+            throw new BadRequestException(
+                'Phải có lý do thay đổi trước khi phát hành phiên bản chứng chỉ mới',
             );
         }
 
@@ -691,36 +1110,171 @@ export class CertificatesService {
             review.reports.audit_plans
                 .certification_projects;
 
+        const siteSnapshot =
+            this.decisionSiteSnapshot(
+                decision.form_data,
+            ) ??
+            JSON.stringify(
+                project
+                    .certification_applications
+                    .sites.map((site) => ({
+                        site_no:
+                            site.site_no,
+                        site_name:
+                            site.site_name,
+                        address:
+                            site.address,
+                        activities:
+                            site.activities,
+                        employee_count:
+                            site.employee_count,
+                        is_headquarters:
+                            site.is_headquarters,
+                    })),
+            );
+
         return this.prisma.$transaction(
             async (transaction) => {
-                // Tìm chứng chỉ đang có hiệu lực của cùng dự án
-                const previousCertificates =
-                    await transaction.certificates.findMany({
-                        where: {
-                            status: 'active',
+                let certificateSeriesId =
+                    decision.certificate_series_id;
 
-                            technical_reviews: {
-                                reports: {
-                                    audit_plans: {
-                                        project_id:
-                                            project.id,
-                                    },
-                                },
+                if (
+                    lifecycleAction ===
+                    'CREATE_FIRST_VERSION'
+                ) {
+                    if (certificateSeriesId) {
+                        throw new BadRequestException(
+                            'GRANT đã gắn Certificate Series; không thể tạo thêm series lần đầu',
+                        );
+                    }
+
+                    const seriesCode =
+                        `SER-${project.project_code.slice(0, 32)}-` +
+                        randomUUID()
+                            .replaceAll('-', '')
+                            .slice(0, 12);
+
+                    const series =
+                        await transaction.certificate_series.create({
+                            data: {
+                                project_id:
+                                    project.id,
+                                series_code:
+                                    seriesCode,
+                                status:
+                                    'active',
                             },
-                        },
+                        });
 
-                        select: {
-                            id: true,
-                            cert_number: true,
+                    certificateSeriesId =
+                        series.id;
+
+                    await transaction
+                        .certification_decisions
+                        .update({
+                            where: {
+                                id:
+                                    decision.id,
+                            },
+                            data: {
+                                certificate_series_id:
+                                    certificateSeriesId,
+                            },
+                        });
+                }
+
+                if (!certificateSeriesId) {
+                    throw new BadRequestException(
+                        `Quyết định ${decisionType} chưa xác định Certificate Series`,
+                    );
+                }
+
+                await transaction.$queryRaw`
+                    SELECT id
+                    FROM dbo.certificate_series WITH (UPDLOCK, HOLDLOCK)
+                    WHERE id = ${certificateSeriesId}
+                `;
+
+                const previousCertificate =
+                    await transaction.certificates.findFirst({
+                        where: {
+                            certificate_series_id:
+                                certificateSeriesId,
+                        },
+                        orderBy: {
+                            version_no:
+                                'desc',
                         },
                     });
 
-                // Tạo chứng chỉ mới hoặc chứng chỉ sửa đổi
+                if (
+                    lifecycleAction ===
+                    'CREATE_FIRST_VERSION' &&
+                    previousCertificate
+                ) {
+                    throw new ConflictException(
+                        'Certificate Series mới đã có version; dừng để tránh cấp trùng',
+                    );
+                }
+
+                if (
+                    lifecycleAction ===
+                    'CREATE_NEXT_VERSION' &&
+                    !previousCertificate
+                ) {
+                    throw new BadRequestException(
+                        `${decisionType} yêu cầu certificate version hiện hữu`,
+                    );
+                }
+
+                if (previousCertificate) {
+                    const previousStatus =
+                        normalizeCertificateStatus(
+                            previousCertificate.status,
+                        );
+
+                    if (!previousStatus) {
+                        throw new BadRequestException(
+                            'Certificate version hiện hành có trạng thái không hợp lệ',
+                        );
+                    }
+
+                    try {
+                        assertCertificateStatusTransition(
+                            previousStatus,
+                            'replaced',
+                        );
+                    } catch {
+                        throw new BadRequestException(
+                            `Không thể thay thế certificate ở trạng thái ${previousStatus}`,
+                        );
+                    }
+                }
+
+                const versionNo =
+                    previousCertificate
+                        ? previousCertificate.version_no +
+                        1
+                        : 1;
+
                 const certificate =
                     await transaction.certificates.create({
                         data: {
                             technical_review_id:
                                 dto.technical_review_id,
+
+                            certification_decision_id:
+                                decision.id,
+
+                            certificate_series_id:
+                                certificateSeriesId,
+
+                            supersedes_certificate_id:
+                                previousCertificate?.id ??
+                                null,
+
+                            version_no:
+                                versionNo,
 
                             cert_number:
                                 dto.cert_number.trim(),
@@ -733,26 +1287,41 @@ export class CertificatesService {
 
                             status:
                                 'active',
+
+                            change_reason:
+                                changeReason ||
+                                (decisionType === 'GRANT'
+                                    ? 'Cấp chứng nhận lần đầu.'
+                                    : `Tạo phiên bản theo quyết định ${decisionType}.`),
+
+                            organization_name:
+                                decision.organization_name,
+
+                            organization_address:
+                                decision.organization_address,
+
+                            management_system:
+                                decision.management_system,
+
+                            standard_name:
+                                decision.standard_name,
+
+                            certification_scope:
+                                decision.certification_scope,
+
+                            site_snapshot_json:
+                                siteSnapshot,
                         },
 
                         include:
                             this.getDetailInclude(),
                     });
 
-                // Chứng chỉ cũ không còn là bản hiện hành
-                if (
-                    previousCertificates.length >
-                    0
-                ) {
-                    await transaction.certificates.updateMany({
+                if (previousCertificate) {
+                    await transaction.certificates.update({
                         where: {
-                            id: {
-                                in:
-                                    previousCertificates.map(
-                                        (item) =>
-                                            item.id,
-                                    ),
-                            },
+                            id:
+                                previousCertificate.id,
                         },
 
                         data: {
@@ -764,16 +1333,26 @@ export class CertificatesService {
                         },
                     });
 
-                    await transaction.certificate_status_histories.createMany({
-                        data: previousCertificates.map((item) => ({
-                            certificate_id: item.id,
-                            from_status: 'active',
-                            to_status: 'replaced',
-                            reason: `Được thay thế bởi giấy chứng nhận ${certificate.cert_number}.`,
-                            effective_date: issueDate,
-                            changed_by: changedBy ?? null,
-                        })),
-                    });
+                    await transaction
+                        .certificate_status_histories
+                        .createMany({
+                            data: [{
+                                certificate_id:
+                                    previousCertificate.id,
+                                from_status:
+                                    previousCertificate.status ??
+                                    'active',
+                                to_status:
+                                    'replaced',
+                                reason:
+                                    `Được thay thế bởi version ${versionNo} của cùng Certificate Series.`,
+                                effective_date:
+                                    issueDate,
+                                changed_by:
+                                    changedBy ??
+                                    null,
+                            }],
+                        });
                 }
 
                 await transaction.certification_projects.update({
@@ -788,12 +1367,38 @@ export class CertificatesService {
                     },
                 });
 
+                await this.workItems?.completeWorkItem(
+                    {
+                        sourceKey:
+                            `certificate-issue:${decision.id}`,
+                    },
+                    changedBy,
+                    transaction,
+                );
+
                 return {
                     ...certificate,
 
                     replaced_certificates:
-                        previousCertificates,
+                        previousCertificate
+                            ? [
+                                {
+                                    id:
+                                        previousCertificate.id,
+                                    cert_number:
+                                        previousCertificate.cert_number,
+                                    version_no:
+                                        previousCertificate.version_no,
+                                },
+                            ]
+                            : [],
                 };
+            },
+            {
+                isolationLevel:
+                    Prisma
+                        .TransactionIsolationLevel
+                        .Serializable,
             },
         );
     }
@@ -816,10 +1421,27 @@ export class CertificatesService {
         }
 
         const currentStatus =
-            certificate.status ?? 'active';
+            normalizeCertificateStatus(
+                certificate.status ??
+                'active',
+            );
 
         const targetStatus =
-            dto.status.trim().toLowerCase();
+            normalizeCertificateStatus(
+                dto.status,
+            );
+
+        if (!currentStatus || !targetStatus) {
+            throw new BadRequestException(
+                'Trạng thái giấy chứng nhận không hợp lệ',
+            );
+        }
+
+        if (targetStatus !== 'expired') {
+            throw new BadRequestException(
+                'Đình chỉ, khôi phục và thu hồi chỉ được thực hiện bằng quyết định lifecycle đã phê duyệt trong hồ sơ chứng nhận',
+            );
+        }
 
         if (currentStatus === targetStatus) {
             throw new BadRequestException(
@@ -827,46 +1449,14 @@ export class CertificatesService {
             );
         }
 
-        const allowedTransitions:
-            Record<string, string[]> = {
-            active: [
-                'suspended',
-                'withdrawn',
-                'expired',
-            ],
-
-            suspended: [
-                'active',
-                'withdrawn',
-                'expired',
-            ],
-
-            replaced: [],
-            withdrawn: [],
-            expired: [],
-        };
-
-        const allowedTargets =
-            allowedTransitions[currentStatus] ?? [];
-
-        if (
-            !allowedTargets.includes(
+        try {
+            assertCertificateStatusTransition(
+                currentStatus,
                 targetStatus,
-            )
-        ) {
+            );
+        } catch {
             throw new BadRequestException(
                 `Không được chuyển trạng thái từ ${currentStatus} sang ${targetStatus}`,
-            );
-        }
-
-        if (
-            targetStatus === 'active' &&
-            certificate.expire_date &&
-            certificate.expire_date.getTime() <
-            new Date().getTime()
-        ) {
-            throw new BadRequestException(
-                'Không thể khôi phục chứng chỉ đã hết hạn',
             );
         }
 
@@ -976,6 +1566,14 @@ export class CertificatesService {
                     },
 
                     include: {
+                        certification_decision: {
+                            select: {
+                                id: true,
+                                decision_number: true,
+                                decision_type: true,
+                                decision_result: true,
+                            },
+                        },
                         changed_by_user: {
                             select: {
                                 id: true,
@@ -1003,25 +1601,20 @@ export class CertificatesService {
                     },
 
                     include: {
-                        technical_reviews: {
+                        certificate_series: {
                             select: {
-                                certification_decision:
-                                {
+                                certificates: {
                                     select: {
-                                        organization_name:
+                                        id:
                                             true,
-
-                                        organization_address:
+                                        version_no:
                                             true,
-
-                                        management_system:
+                                        status:
                                             true,
-
-                                        standard_name:
-                                            true,
-
-                                        certification_scope:
-                                            true,
+                                    },
+                                    orderBy: {
+                                        version_no:
+                                            'desc',
                                     },
                                 },
                             },
@@ -1036,15 +1629,29 @@ export class CertificatesService {
             );
         }
 
-        const decision =
-            certificate
-                .technical_reviews
-                .certification_decision;
-
         const expired =
             this.isExpired(
                 certificate.expire_date,
             );
+
+        const currentVersion =
+            certificate
+                .certificate_series
+                .certificates[0];
+
+        const statusLabels:
+            Record<string, string> = {
+            active:
+                'Đang hiệu lực',
+            suspended:
+                'Đình chỉ',
+            withdrawn:
+                'Đã thu hồi',
+            expired:
+                'Hết hiệu lực',
+            replaced:
+                'Đã được thay thế',
+        };
 
         return {
             cert_number:
@@ -1059,30 +1666,44 @@ export class CertificatesService {
             status:
                 certificate.status,
 
+            status_label:
+                statusLabels[
+                certificate.status ??
+                ''
+                ] ??
+                'Không xác định',
+
             is_valid:
                 certificate.status ===
                 'active' &&
                 !expired,
 
+            version_no:
+                certificate.version_no,
+
+            is_current_version:
+                currentVersion?.id ===
+                certificate.id,
+
             organization_name:
-                decision?.organization_name ??
-                null,
+                certificate.organization_name,
 
             organization_address:
-                decision?.organization_address ??
-                null,
+                certificate.organization_address,
 
             management_system:
-                decision?.management_system ??
-                null,
+                certificate.management_system,
 
             standard_name:
-                decision?.standard_name ??
-                null,
+                certificate.standard_name,
 
             certification_scope:
-                decision?.certification_scope ??
-                null,
+                certificate.certification_scope,
+
+            sites:
+                this.parseSiteSnapshot(
+                    certificate.site_snapshot_json,
+                ),
         };
     }
 
@@ -1176,7 +1797,7 @@ export class CertificatesService {
         const targetUrl =
             `${this.getPublicBaseUrl()}` +
             `/public/certificates/` +
-            `${certificate.verification_code}/pdf`;
+            `${certificate.verification_code}`;
 
         const qrCode =
             await QRCode.toBuffer(

@@ -23,6 +23,10 @@ import {
 } from './common/filters/global-exception.filter';
 
 import {
+    safeErrorForLog,
+} from './common/safe-error-log';
+
+import {
     getPlatformBranding,
 } from './common/platform-branding';
 
@@ -34,6 +38,10 @@ import {
     getSecurityConfig,
     validateSecurityEnvironment,
 } from './security/security-config';
+
+import {
+    validateRuntimeEnvironment,
+} from './common/production-readiness';
 
 import {
     PrismaService,
@@ -53,6 +61,19 @@ async function bootstrap() {
 
     const deployment =
         getDeploymentConfig();
+
+    const security =
+        getSecurityConfig();
+
+    validateSecurityEnvironment(
+        deployment.isProduction,
+    );
+
+    const productionReadiness =
+        validateRuntimeEnvironment({
+            deployment,
+            security,
+        });
 
     const storage =
         ensureStorageLayout();
@@ -77,13 +98,6 @@ async function bootstrap() {
 
     expressApp.disable(
         'x-powered-by',
-    );
-
-    const security =
-        getSecurityConfig();
-
-    validateSecurityEnvironment(
-        deployment.isProduction,
     );
 
     app.use((
@@ -227,7 +241,9 @@ async function bootstrap() {
             ) {
                 console.error(
                     'SQL Server connection entered an invalid state. Recovering connection pool...',
-                    error,
+                    safeErrorForLog(
+                        error,
+                    ),
                 );
 
                 void prisma
@@ -236,7 +252,9 @@ async function bootstrap() {
                         (reconnectError) =>
                             console.error(
                                 'SQL Server automatic recovery failed:',
-                                reconnectError,
+                                safeErrorForLog(
+                                    reconnectError,
+                                ),
                             ),
                     );
                 return;
@@ -244,7 +262,9 @@ async function bootstrap() {
 
             console.error(
                 'Uncaught exception:',
-                error,
+                safeErrorForLog(
+                    error,
+                ),
             );
 
             process.exitCode = 1;
@@ -260,7 +280,9 @@ async function bootstrap() {
         (reason) => {
             console.error(
                 'Unhandled promise rejection:',
-                reason,
+                safeErrorForLog(
+                    reason,
+                ),
             );
 
             process.exitCode = 1;
@@ -399,7 +421,9 @@ async function bootstrap() {
     );
 
     console.log(
-        `Storage root: ${storage.rootDirectory}`,
+        deployment.isProduction
+            ? 'Storage provider: LOCAL_FILESYSTEM (persistent root configured)'
+            : `Storage root: ${storage.rootDirectory}`,
     );
 
     console.log(
@@ -449,6 +473,12 @@ async function bootstrap() {
             `API documentation: ${deployment.publicBaseUrl}/api-docs`,
         );
     }
+
+    for (const warning of productionReadiness.warnings) {
+        console.warn(
+            `[PRODUCTION READINESS] ${warning}`,
+        );
+    }
 }
 
 void bootstrap()
@@ -475,9 +505,9 @@ void bootstrap()
         } else {
             console.error(
                 '[FATAL] Backend không thể khởi động:',
-                error instanceof Error
-                    ? error.stack
-                    : error,
+                safeErrorForLog(
+                    error,
+                ),
             );
         }
 

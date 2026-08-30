@@ -65,6 +65,15 @@ export class IndustryClassificationsController {
             IndustryClassificationsService,
     ) { }
 
+    @Get('summary')
+    @ApiOperation({ summary: 'Tổng quan dữ liệu ISIC, NACE, IAF và mức phủ ánh xạ' })
+    @ApiOkResponse({ description: 'Số lượng danh mục, ánh xạ và nguồn tham chiếu' })
+    @Roles('ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER')
+    @Permissions('classifications.read')
+    summary(): Promise<unknown> {
+        return this.service.getSummary();
+    }
+
     @Post('codes')
     @ApiOperation({ summary: 'Tạo mã phân loại ISIC hoặc NACE' })
     @ApiCreatedResponse({ description: 'Đã tạo mã phân loại' })
@@ -287,6 +296,25 @@ export class IndustryClassificationsController {
         return this.service.approveNaceIafMapping(
             id,
             request.user.userId,
+        );
+    }
+
+    @Get('mapping-coverage')
+    @ApiOperation({ summary: 'Kiểm tra độ phủ ISIC → NACE → IAF theo hệ thống quản lý' })
+    @ApiQuery({ name: 'management_system', required: true, example: 'QMS' })
+    @ApiOkResponse({ description: 'Độ phủ ánh xạ và danh sách mã chưa phân giải (nếu có)' })
+    @Roles(
+        'ADMIN',
+        'COORDINATOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('classifications.read')
+    getMappingCoverage(
+        @Query('management_system')
+        managementSystem: string,
+    ): Promise<unknown> {
+        return this.service.getMappingCoverage(
+            managementSystem,
         );
     }
 

@@ -63,7 +63,6 @@ check(
 );
 
 const genericOpenFiles = [
-  'app/components/DocumentsScreen.tsx',
   'app/components/CertificationProjectDetailScreen.tsx',
   'app/components/CommercialDocumentsPanel.tsx',
   'app/components/ScheduleResourcesScreen.tsx',
@@ -71,6 +70,11 @@ const genericOpenFiles = [
 check(
   genericOpenFiles.every((file) => read(file).includes('openDocumentFile')),
   'Các nút Mở tệp dùng open helper chung',
+);
+const documentsScreen = read('app/components/DocumentsScreen.tsx');
+check(
+  documentsScreen.includes('DocumentPreviewModal') && documentsScreen.includes('downloadDocumentFile'),
+  'Màn Tài liệu dùng preview modal chuyên dụng và helper tải xuống chung',
 );
 
 const documentComponents = [

@@ -29,6 +29,7 @@ import {
 
 import { UploadDocumentFileDto } from './dto/upload-document-file.dto';
 import { UploadCustomerCorrectiveActionEvidenceDto } from './dto/upload-customer-corrective-action-evidence.dto';
+import { UploadCustomerOrganizationChangeAttachmentDto } from '../customer-portal/dto/upload-customer-organization-change-attachment.dto';
 
 interface DocumentProjectContextSource {
     id: string;
@@ -50,7 +51,7 @@ interface RegisterGeneratedDocumentInput {
     entity_type: string;
     entity_id: string;
     document_type: string;
-    file_kind: 'generated_docx' | 'generated_pdf';
+    file_kind: 'generated_docx' | 'generated_xlsx' | 'generated_pdf';
     original_name: string;
     stored_name: string;
     absolute_path: string;
@@ -602,6 +603,38 @@ export class DocumentFilesService {
             : null;
     }
 
+    private async assertControlledLibraryFileAccess(
+        entityTypeInput: string,
+        entityId: string,
+        actor?: ResourceActor,
+    ) {
+        const entityType = entityTypeInput.trim().toLowerCase().replace(/-/g, '_');
+        if (!['document_library_version', 'controlled_template_version'].includes(entityType)) {
+            return false;
+        }
+        const roles = new Set((actor?.roles ?? []).map((role) => role.trim().toUpperCase()));
+        if (entityType === 'controlled_template_version') {
+            if (!roles.has('ADMIN') && !roles.has('STAFF')) {
+                throw new ForbiddenException('Chỉ Admin/Nhân viên quản lý tài liệu được thao tác tệp mẫu biểu');
+            }
+            const version = await this.prisma.controlled_template_versions.findUnique({ where: { id: entityId }, select: { id: true } });
+            if (!version) throw new NotFoundException('Không tìm thấy phiên bản mẫu biểu');
+            return true;
+        }
+        const version = await this.prisma.document_library_versions.findUnique({
+            where: { id: entityId },
+            include: { series: true },
+        });
+        if (!version) throw new NotFoundException('Không tìm thấy phiên bản tài liệu');
+        if (roles.has('CUSTOMER')) {
+            throw new ForbiddenException('Tài liệu nội bộ/bên ngoài không được mở từ cổng khách hàng');
+        }
+        if (version.series.access_scope === 'RESTRICTED' && !roles.has('ADMIN') && !roles.has('STAFF')) {
+            throw new ForbiddenException('Tài liệu này được giới hạn cho bộ phận quản lý tài liệu');
+        }
+        return true;
+    }
+
     async upload(
         dto: UploadDocumentFileDto,
         file: Express.Multer.File,
@@ -614,7 +647,41 @@ export class DocumentFilesService {
             );
         }
 
-        if (actor) {
+        const normalizedEntityType = dto.entity_type
+            .trim()
+            .toLowerCase()
+            .replace(/-/g, '_');
+        let controlledLibraryAccessHandled = false;
+        if (['document_library_version', 'controlled_template_version'].includes(normalizedEntityType)) {
+            const roles = new Set((actor?.roles ?? []).map((role) => role.trim().toUpperCase()));
+            if (!roles.has('ADMIN') && !roles.has('STAFF')) {
+                throw new ForbiddenException('Chỉ Admin/Nhân viên quản lý tài liệu được tải tệp cho thư viện tài liệu/mẫu biểu');
+            }
+            controlledLibraryAccessHandled = await this.assertControlledLibraryFileAccess(
+                normalizedEntityType,
+                dto.entity_id,
+                actor,
+            );
+        }
+        const expertGovernanceAdminOnlyEntities = [
+            'expert_competency_evidence',
+            'expert_training_record',
+            'expert_monitoring_record',
+        ];
+        if (
+            expertGovernanceAdminOnlyEntities.includes(normalizedEntityType) &&
+            !(actor?.roles ?? []).some(
+                (role) => role.trim().toUpperCase() === 'ADMIN',
+            )
+        ) {
+            throw new ForbiddenException(
+                normalizedEntityType === 'expert_competency_evidence'
+                    ? 'Chỉ Admin được tải tệp bằng chứng năng lực chuyên gia'
+                    : 'Chỉ Admin được tải tệp đào tạo/giám sát năng lực chuyên gia',
+            );
+        }
+
+        if (actor && !controlledLibraryAccessHandled) {
             await this.resourceAccess.assertDocumentEntityAccess(
                 {
                     entity_type: dto.entity_type,
@@ -1152,15 +1219,311 @@ export class DocumentFilesService {
         }
 
         if (actor) {
-            await this.resourceAccess.assertDocumentEntityAccess(
-                documentFile,
+            const handled = await this.assertControlledLibraryFileAccess(
+                documentFile.entity_type,
+                documentFile.entity_id,
                 actor,
             );
+            if (!handled) {
+                await this.resourceAccess.assertDocumentEntityAccess(
+                    documentFile,
+                    actor,
+                );
+            }
         }
 
         return this.withDownloadUrl(
             documentFile,
         );
+    }
+
+    private async assertCustomerOrganizationChangeRequestAccess(
+        requestId: string,
+        actor: ResourceActor,
+    ) {
+        const customerIds = Array.from(
+            await this.resourceAccess.getAccessibleCustomerIds(actor),
+        );
+        if (!customerIds.length) {
+            throw new ForbiddenException(
+                'Bạn không có quyền truy cập yêu cầu thay đổi này',
+            );
+        }
+
+        const request = await this.prisma.customer_organization_change_requests.findFirst({
+            where: {
+                id: requestId,
+                customer_id: { in: customerIds },
+            },
+            select: {
+                id: true,
+                status: true,
+                customer_id: true,
+            },
+        });
+        if (!request) {
+            throw new ForbiddenException(
+                'Bạn không có quyền truy cập yêu cầu thay đổi này',
+            );
+        }
+        return request;
+    }
+
+    async uploadCustomerOrganizationChangeAttachment(
+        requestId: string,
+        dto: UploadCustomerOrganizationChangeAttachmentDto,
+        file: Express.Multer.File,
+        uploadedBy: string | undefined,
+        actor: ResourceActor,
+    ) {
+        if (!file) {
+            throw new BadRequestException('Chưa chọn file tải lên');
+        }
+
+        const request = await this.assertCustomerOrganizationChangeRequestAccess(
+            requestId,
+            actor,
+        );
+        if (!['SUBMITTED', 'UNDER_REVIEW'].includes(request.status)) {
+            throw new ConflictException(
+                'Chỉ được bổ sung tệp khi yêu cầu thay đổi đang chờ xem xét',
+            );
+        }
+
+        const validated = validateUploadedFile(file, 'attachment');
+        const promoted = promoteValidatedUpload(file, validated.extension);
+
+        try {
+            const documentFile = await this.prisma.$transaction(async (tx) => {
+                const accessibleCustomerIds = Array.from(
+                    await this.resourceAccess.getAccessibleCustomerIds(actor, tx),
+                );
+                const currentRequest = await tx.customer_organization_change_requests.findFirst({
+                    where: {
+                        id: requestId,
+                        customer_id: { in: accessibleCustomerIds },
+                        status: { in: ['SUBMITTED', 'UNDER_REVIEW'] },
+                    },
+                    select: { id: true },
+                });
+                if (!currentRequest) {
+                    throw new ForbiddenException(
+                        'Bạn không có quyền bổ sung tệp cho yêu cầu thay đổi này',
+                    );
+                }
+
+                const latest = await tx.documentFile.aggregate({
+                    where: {
+                        entity_type: 'customer_organization_change_request',
+                        entity_id: requestId,
+                        document_type: 'organization_change_attachment',
+                        file_kind: 'attachment',
+                    },
+                    _max: { version_no: true },
+                });
+                const nextVersion = (latest._max.version_no ?? 0) + 1;
+
+                return tx.documentFile.create({
+                    data: {
+                        entity_type: 'customer_organization_change_request',
+                        entity_id: requestId,
+                        document_type: 'organization_change_attachment',
+                        file_kind: 'attachment',
+                        original_name: validated.originalName,
+                        stored_name: promoted.storedName,
+                        file_url: `/uploads/documents/${promoted.storedName}`,
+                        mime_type: validated.mimeType,
+                        file_size: validated.fileSize,
+                        sha256: validated.sha256,
+                        version_no: nextVersion,
+                        is_current: true,
+                        note: dto.note?.trim() ?? null,
+                        uploaded_by: uploadedBy ?? null,
+                    },
+                });
+            });
+
+            return this.withCustomerDownloadUrl(documentFile);
+        } catch (error) {
+            this.removePhysicalFile(promoted.absolutePath);
+            throw error;
+        }
+    }
+
+    async uploadCustomerCaseEvidence(
+        caseTypeInput: string,
+        caseId: string,
+        dto: UploadCustomerOrganizationChangeAttachmentDto,
+        file: Express.Multer.File,
+        uploadedBy: string | undefined,
+        actor: ResourceActor,
+    ) {
+        if (!file) throw new BadRequestException('Chưa chọn file tải lên');
+        const caseType = caseTypeInput.trim().toLowerCase();
+        const entityType = caseType === 'complaint'
+            ? 'complaint_case'
+            : caseType === 'appeal'
+                ? 'appeal_case'
+                : null;
+        if (!entityType) throw new BadRequestException('caseType chỉ nhận complaint hoặc appeal');
+
+        await this.resourceAccess.assertCustomerEntityAccess(
+            { entity_type: entityType, entity_id: caseId },
+            actor,
+        );
+        const validated = validateUploadedFile(file, 'attachment');
+        const promoted = promoteValidatedUpload(file, validated.extension);
+
+        try {
+            const documentFile = await this.prisma.$transaction(async (tx) => {
+                await this.resourceAccess.assertCustomerEntityAccess(
+                    { entity_type: entityType, entity_id: caseId },
+                    actor,
+                    tx,
+                );
+                const open = caseType === 'complaint'
+                    ? await tx.complaint_cases.findFirst({
+                        where: { id: caseId, status: { notIn: ['CLOSED', 'REJECTED', 'OUT_OF_SCOPE'] } },
+                        select: { id: true },
+                    })
+                    : await tx.appeal_cases.findFirst({
+                        where: { id: caseId, status: { notIn: ['CLOSED', 'REJECTED', 'OUT_OF_SCOPE'] } },
+                        select: { id: true },
+                    });
+                if (!open) throw new ConflictException('Không thể bổ sung evidence vào case đã đóng');
+
+                const latest = await tx.documentFile.aggregate({
+                    where: {
+                        entity_type: entityType,
+                        entity_id: caseId,
+                        document_type: 'case_evidence',
+                        file_kind: 'attachment',
+                    },
+                    _max: { version_no: true },
+                });
+                const documentFile = await tx.documentFile.create({
+                    data: {
+                        entity_type: entityType,
+                        entity_id: caseId,
+                        document_type: 'case_evidence',
+                        file_kind: 'attachment',
+                        original_name: validated.originalName,
+                        stored_name: promoted.storedName,
+                        file_url: `/uploads/documents/${promoted.storedName}`,
+                        mime_type: validated.mimeType,
+                        file_size: validated.fileSize,
+                        sha256: validated.sha256,
+                        version_no: (latest._max.version_no ?? 0) + 1,
+                        is_current: true,
+                        note: dto.note?.trim() ?? null,
+                        uploaded_by: uploadedBy ?? null,
+                    },
+                });
+                await tx.audit_logs.create({
+                    data: {
+                        user_id: uploadedBy ?? actor.userId ?? null,
+                        action: 'CASE_EVIDENCE_UPLOAD',
+                        entity_type: entityType,
+                        entity_id: caseId,
+                        outcome: 'SUCCESS',
+                    },
+                });
+                return documentFile;
+            }, {
+                isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            });
+            return this.withCustomerDownloadUrl(documentFile);
+        } catch (error) {
+            this.removePhysicalFile(promoted.absolutePath);
+            throw error;
+        }
+    }
+
+    async getCustomerPortalDownload(
+        id: string,
+        actor: ResourceActor,
+    ) {
+        const documentFile = await this.prisma.documentFile.findUnique({
+            where: { id },
+        });
+        if (!documentFile) {
+            throw new ForbiddenException('Bạn không có quyền truy cập tệp này');
+        }
+
+        const entityType = documentFile.entity_type.trim().toLowerCase();
+        const documentType = documentFile.document_type.trim().toLowerCase();
+        const fileKind = documentFile.file_kind.trim().toLowerCase();
+
+        if (
+            entityType === 'corrective_action' &&
+            documentType === 'corrective_action_evidence' &&
+            fileKind === 'attachment'
+        ) {
+            await this.resourceAccess.assertCustomerEntityAccess(
+                { entity_type: 'corrective_action', entity_id: documentFile.entity_id },
+                actor,
+            );
+        } else if (
+            entityType === 'customer_organization_change_request' &&
+            documentType === 'organization_change_attachment' &&
+            fileKind === 'attachment'
+        ) {
+            await this.assertCustomerOrganizationChangeRequestAccess(
+                documentFile.entity_id,
+                actor,
+            );
+        } else if (
+            ['complaint_case', 'appeal_case'].includes(entityType) &&
+            documentType === 'case_evidence' &&
+            fileKind === 'attachment'
+        ) {
+            await this.resourceAccess.assertCustomerEntityAccess(
+                { entity_type: entityType, entity_id: documentFile.entity_id },
+                actor,
+            );
+        } else {
+            throw new ForbiddenException('Bạn không có quyền truy cập tệp này');
+        }
+
+        let absolutePath: string;
+        try {
+            absolutePath = resolveDocumentStoragePath(documentFile.stored_name);
+        } catch {
+            throw new NotFoundException('Không tìm thấy tệp vật lý');
+        }
+        if (!existsSync(absolutePath)) {
+            throw new NotFoundException('Không tìm thấy tệp vật lý');
+        }
+
+        verifyStoredFileIntegrity(
+            absolutePath,
+            documentFile.file_size,
+            documentFile.sha256,
+        );
+
+        let verifiedDocumentFile = documentFile;
+        if (!documentFile.sha256) {
+            const sha256 = calculateFileSha256(absolutePath);
+            verifiedDocumentFile = await this.prisma.documentFile.update({
+                where: { id: documentFile.id },
+                data: { sha256 },
+            });
+        }
+
+        return {
+            documentFile: this.withCustomerDownloadUrl({
+                id: verifiedDocumentFile.id,
+                original_name: verifiedDocumentFile.original_name,
+                mime_type: verifiedDocumentFile.mime_type,
+                file_size: verifiedDocumentFile.file_size,
+                version_no: verifiedDocumentFile.version_no,
+                is_current: verifiedDocumentFile.is_current,
+                note: verifiedDocumentFile.note,
+                created_at: verifiedDocumentFile.created_at,
+                updated_at: verifiedDocumentFile.updated_at,
+            }),
+            absolutePath,
+        };
     }
 
     async getCustomerCorrectiveActionEvidenceDownload(

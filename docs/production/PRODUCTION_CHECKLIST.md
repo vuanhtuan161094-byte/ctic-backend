@@ -1,0 +1,23 @@
+# CMP production checklist
+
+- [ ] Production environment contract validated (`npm run prod:env:check`)
+- [ ] Strong JWT secret installed outside source control
+- [ ] CORS/reverse-proxy/TLS configuration reviewed
+- [ ] Swagger production exposure decision recorded
+- [ ] Runtime SQL account least privilege verified
+- [ ] Separate migration credential verified
+- [ ] SQL database `AUTO_CLOSE OFF`
+- [ ] Persistent absolute `STORAGE_ROOT` outside deploy directory
+- [ ] SQL backup completed with checksum/verify
+- [ ] Storage backup completed to separate location
+- [ ] Isolated DB+storage restore drill passed and evidence retained
+- [ ] External/off-site retention destination configured
+- [ ] Monitoring and alert destinations configured
+- [ ] Scheduler health confirmed
+- [ ] Backend regression/build/Jest green
+- [ ] Frontend tests/lint/build green
+- [ ] Real SQL P09 repeatability 2/2 green before release
+- [ ] Dependency/security audit reviewed
+- [ ] Release manifest retained
+- [ ] Deployment smoke passed
+- [ ] Rollback owner and recovery procedure ready

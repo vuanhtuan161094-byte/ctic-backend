@@ -123,7 +123,7 @@ check('Audit response trả correlation fields', auditService.includes('request_
 check('Global error response trả request_id để đối chiếu log', errorFilter.includes('request_id:') && errorFilter.includes('request.requestId'));
 check('Resource policy phân biệt role toàn tổ chức và role theo phân công', resourceAccess.includes('ORGANIZATION_WIDE_ROLES') && resourceAccess.includes("roles.has('AUDITOR')") && resourceAccess.includes("'TECHNICAL_REVIEWER'"));
 check('Approver/certification manager giữ quyền phạm vi tổ chức', resourceAccess.includes("'APPROVER'") && resourceAccess.includes("'CERTIFICATION_MANAGER'"));
-check('Reviewer thấy hồ sơ chưa nhận nhưng đã ready_for_technical_review', resourceAccess.includes("status:\n                            'ready_for_technical_review'") && resourceAccess.includes('technical_reviews: {') && resourceAccess.includes('none: {}'));
+check('Reviewer chỉ thấy hồ sơ đã được phân công, không còn pool self-claim ready_for_technical_review', resourceAccess.includes('technical_reviews.findMany') && resourceAccess.includes('reviewer_id:') && resourceAccess.includes('userId') && !resourceAccess.includes('readyReports') && !resourceAccess.includes("status:\n                            'ready_for_technical_review'") && !resourceAccess.includes('ensureForPlan()'));
 check('Auditor scope lấy từ audit_team_members', resourceAccess.includes('audit_team_members.findMany') && resourceAccess.includes('expert_id'));
 check('Technical reviewer scope lấy từ reviewer_id', resourceAccess.includes('technical_reviews.findMany') && resourceAccess.includes('reviewer_id'));
 check('Document access map bao phủ contract/agreement', resourceAccess.includes("'contract'") && resourceAccess.includes("'certification_agreement'"));

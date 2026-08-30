@@ -3,6 +3,7 @@ import {
     ForbiddenException,
     Injectable,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,6 +11,8 @@ import { CertificationBodyCapabilitiesService } from '../certification-body-capa
 import { SecurityAuditService } from '../security/security-audit.service';
 import { CreateApplicationReviewDto } from './dto/create-application-review.dto';
 import { ReviewApplicationReviewDto } from './dto/review-workflow-action.dto';
+import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
+import { WorkItemsService } from '../work-items/work-items.service';
 
 type NormalizedIndustryScope = {
     isic_code_id: string;
@@ -40,6 +43,8 @@ export class ApplicationReviewsService {
         private readonly prisma: PrismaService,
         private readonly certificationBodyCapabilities: CertificationBodyCapabilitiesService,
         private readonly securityAudit: SecurityAuditService,
+        @Optional()
+        private readonly workItems?: WorkItemsService,
     ) { }
 
     private normalizeRole(value: string) {
@@ -574,14 +579,21 @@ export class ApplicationReviewsService {
 
             if (isSubmit && reviewer) {
                 await tx.notifications.upsert({
-                    where: { source_key: `application-review:${review.id}:submitted` },
+                    where: {
+                        user_id_source_key_channel: {
+                            user_id: reviewer.id,
+                            source_key: `application-review:${review.id}:submitted`,
+                            channel: 'IN_APP',
+                        },
+                    },
                     create: {
                         user_id: reviewer.id,
                         source_key: `application-review:${review.id}:submitted`,
                         notification_type: 'APPLICATION_REVIEW_SUBMITTED',
+                        category: 'WORKFLOW_UPDATE',
                         title: 'Đơn đăng ký chờ reviewer xem xét',
                         message: `${application.application_code} đã được gửi tới bạn để phê duyệt hoặc trả lại.`,
-                        severity: 'warning',
+                        severity: 'WARNING',
                         entity_type: 'application_review',
                         entity_id: review.id,
                     },
@@ -592,6 +604,38 @@ export class ApplicationReviewsService {
                         updated_at: now,
                     },
                 });
+
+                await this.workItems?.openWorkItem(
+                    {
+                        sourceKey:
+                            `application-review:${review.id}:${now.getTime()}`,
+                        workType:
+                            'APPLICATION_REVIEW',
+                        actionCode:
+                            WORK_ITEM_ACTIONS.APPLICATION_REVIEW,
+                        title:
+                            `Xem xét đơn ${application.application_code}`,
+                        description:
+                            'Đơn đăng ký đã được gửi và đang chờ kết luận của reviewer được phân công.',
+                        entityType:
+                            'application_review',
+                        entityId:
+                            review.id,
+                        assignedUserId:
+                            reviewer.id,
+                        priority:
+                            'HIGH',
+                        destinationPath:
+                            `/applications/${dto.application_id}?workspace=application-review&review_id=${review.id}`,
+                        context: {
+                            application_id:
+                                dto.application_id,
+                            application_code:
+                                application.application_code,
+                        },
+                    },
+                    tx,
+                );
             }
 
             return review;
@@ -620,6 +664,15 @@ export class ApplicationReviewsService {
             throw new NotFoundException('Không tìm thấy bản xem xét đăng ký');
         }
         return review;
+    }
+
+    async getReviewAuthorizationContext(reviewId: string) {
+        const review = await this.getWorkflowReview(reviewId);
+
+        return {
+            reviewerId: review.reviewer_id,
+            workflowState: review.workflow_status,
+        };
     }
 
     async review(
@@ -707,6 +760,19 @@ export class ApplicationReviewsService {
                 data: { status: applicationStatus },
             });
 
+            await this.workItems?.completeMatchingWorkItems(
+                {
+                    actionCode:
+                        WORK_ITEM_ACTIONS.APPLICATION_REVIEW,
+                    entityType:
+                        'application_review',
+                    entityId:
+                        reviewId,
+                },
+                currentUserId,
+                tx,
+            );
+
             if (dto.action === 'APPROVE' && capabilityEvaluation) {
                 const previousSnapshotVersion =
                     await tx.application_review_capability_snapshots.aggregate({
@@ -728,16 +794,23 @@ export class ApplicationReviewsService {
             const targetUserId = review.prepared_by_id;
             if (targetUserId) {
                 await tx.notifications.upsert({
-                    where: { source_key: `application-review:${reviewId}:${nextStatus}` },
+                    where: {
+                        user_id_source_key_channel: {
+                            user_id: targetUserId,
+                            source_key: `application-review:${reviewId}:${nextStatus}`,
+                            channel: 'IN_APP',
+                        },
+                    },
                     create: {
                         user_id: targetUserId,
                         source_key: `application-review:${reviewId}:${nextStatus}`,
                         notification_type: 'APPLICATION_REVIEW_WORKFLOW',
+                        category: 'WORKFLOW_UPDATE',
                         title: dto.action === 'APPROVE'
                             ? 'Bản xem xét đã được phê duyệt'
                             : 'Bản xem xét được trả lại coordinator',
                         message: `${review.certification_applications.application_code}: ${dto.comment?.trim() || 'Quy trình đã được cập nhật.'}`,
-                        severity: dto.action === 'APPROVE' ? 'success' : 'warning',
+                        severity: dto.action === 'APPROVE' ? 'INFO' : 'WARNING',
                         entity_type: 'application_review',
                         entity_id: reviewId,
                     },

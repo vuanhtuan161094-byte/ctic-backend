@@ -29,7 +29,7 @@ export class HealthController {
     getReadiness():
         Promise<unknown> {
         return this.healthService
-            .getReadiness();
+            .getPublicReadiness();
     }
 
     @Get('live')

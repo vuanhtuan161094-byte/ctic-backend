@@ -108,6 +108,7 @@ for (const file of backendFiles) {
 const frontendFiles = [
   'app/components/AuditDocumentCenterModal.tsx',
   'app/components/AuditPlanWorkspaceDrawer.tsx',
+  'app/components/CertificationProjectDetailScreen.tsx',
 ];
 for (const file of frontendFiles) {
   check(exists(file, frontendRoot), `Có file frontend ${file}`);
@@ -117,12 +118,18 @@ for (const file of frontendFiles) {
 
 const modal = read('app/components/AuditDocumentCenterModal.tsx', frontendRoot);
 const drawer = read('app/components/AuditPlanWorkspaceDrawer.tsx', frontendRoot);
+const projectDetail = read('app/components/CertificationProjectDetailScreen.tsx', frontendRoot);
 check(modal.includes('Lịch trình chi tiết'), 'Frontend có trình soạn lịch trình chi tiết F.05');
 check(modal.includes('Xuất Word') && modal.includes('Xuất PDF'), 'Frontend có nút xuất Word và PDF');
 check(modal.includes('Phiên bản đã sinh'), 'Frontend hiển thị lịch sử phiên bản tài liệu');
 check(modal.includes('timeout: documentType === \"audit_checklist_f06\" ? 600_000 : 150_000') || modal.includes('timeout: 150_000'), 'Xuất PDF có thời gian chờ phù hợp cho bộ chuyển đổi');
 check(drawer.includes('Hồ sơ Word/PDF'), 'Không gian kế hoạch có nút mở trung tâm hồ sơ');
-check(drawer.includes('<AuditDocumentCenterModal'), 'Drawer đã nối modal hồ sơ Word/PDF');
+check(
+  drawer.includes('Hồ sơ Word/PDF chính thức được quản lý ở danh sách thành phần hồ sơ theo kỳ')
+    && projectDetail.includes('<AuditDocumentCenterModal')
+    && projectDetail.includes('dossierDocumentSummaryQuery.refetch()'),
+  'Hồ sơ chính thức thuộc danh mục dossier và workspace đồng bộ lại sau khi cập nhật',
+);
 check(drawer.includes('new Set(["team_leader", "lead_auditor", "auditor"])'), 'Frontend không tính MD cho chuyên gia kỹ thuật, quan sát viên và tập sự');
 
 const templateDefinitions = [

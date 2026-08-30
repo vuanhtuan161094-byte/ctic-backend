@@ -45,6 +45,49 @@ export class CreateCertificationDecisionDto {
     @IsDateString()
     decision_date!: string;
 
+    @ApiPropertyOptional({
+        example: 'GRANT',
+        enum: [
+            'GRANT',
+            'MAINTAIN',
+            'RECERTIFY',
+            'AMEND',
+            'EXTEND_SCOPE',
+            'REDUCE_SCOPE',
+            'SUSPEND',
+            'RESTORE',
+            'WITHDRAW',
+            'REFUSE',
+        ],
+        description:
+            'Loại quyết định lifecycle. Tạm thời có thể bỏ trống cho client Phase 0; backend sẽ suy luận theo loại cuộc đánh giá.',
+    })
+    @IsOptional()
+    @IsString()
+    @IsIn([
+        'GRANT',
+        'MAINTAIN',
+        'RECERTIFY',
+        'AMEND',
+        'EXTEND_SCOPE',
+        'REDUCE_SCOPE',
+        'SUSPEND',
+        'RESTORE',
+        'WITHDRAW',
+        'REFUSE',
+    ])
+    decision_type?: string;
+
+    @ApiPropertyOptional({
+        example: '8bc21d25-e60a-4b9d-b6a1-d95f54ef2697',
+        description:
+            'Certificate Series áp dụng cho quyết định duy trì, tái chứng nhận, sửa đổi hoặc trạng thái. Có thể bỏ trống khi project chỉ có một series phù hợp.',
+        format: 'uuid',
+    })
+    @IsOptional()
+    @IsUUID()
+    certificate_series_id?: string;
+
     @ApiProperty({
         example: 'approved',
         enum: [
@@ -106,6 +149,17 @@ export class CreateCertificationDecisionDto {
     @IsOptional()
     @IsString()
     certification_scope?: string;
+
+    @ApiPropertyOptional({
+        example: 'Căn cứ kết quả đánh giá và quyết định của người có thẩm quyền.',
+        description:
+            'Lý do thay đổi bắt buộc khi chấp thuận AMEND, EXTEND_SCOPE hoặc REDUCE_SCOPE; luôn bắt buộc với SUSPEND, RESTORE và WITHDRAW.',
+        maxLength: 1000,
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(1000)
+    change_reason?: string;
 
     @ApiPropertyOptional({
         example: '2026-07-27',
