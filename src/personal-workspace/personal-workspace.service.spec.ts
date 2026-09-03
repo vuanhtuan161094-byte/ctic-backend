@@ -203,25 +203,34 @@ describe('PersonalWorkspaceService', () => {
     });
 
     it('returns assigned-audit KPIs for Lead Auditor', async () => {
-        prisma.audit_team_members.findMany
-            .mockResolvedValue([
-                membership(),
-            ]);
+        jest.useFakeTimers();
+        jest.setSystemTime(
+            new Date('2026-09-01T12:00:00+07:00'),
+        );
 
-        const result =
-            await workspace([
-                'LEAD_AUDITOR',
-            ]);
+        try {
+            prisma.audit_team_members.findMany
+                .mockResolvedValue([
+                    membership(),
+                ]);
 
-        expect(result.role_kpis)
-            .toContainEqual(
-                expect.objectContaining({
-                    key:
-                        'assigned_audits',
-                    value:
-                        1,
-                }),
-            );
+            const result =
+                await workspace([
+                    'LEAD_AUDITOR',
+                ]);
+
+            expect(result.role_kpis)
+                .toContainEqual(
+                    expect.objectContaining({
+                        key:
+                            'assigned_audits',
+                        value:
+                            1,
+                    }),
+                );
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     it('does not return unrelated audit to unassigned Lead Auditor', async () => {

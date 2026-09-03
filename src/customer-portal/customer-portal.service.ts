@@ -2327,6 +2327,68 @@ export class CustomerPortalService {
         return { updated: result.count };
     }
 
+    async getCertificationCases(actor: ResourceActor) {
+        const customerIds =
+            await this.accessibleCustomerIds(actor);
+
+        const items =
+            await this.prisma.certification_projects.findMany({
+                where: {
+                    certification_applications: {
+                        customer_id: {
+                            in: customerIds,
+                        },
+                    },
+                },
+                select: {
+                    id: true,
+                    project_code: true,
+                    standard_name: true,
+                    status: true,
+                    created_at: true,
+                    updated_at: true,
+                    certification_applications: {
+                        select: {
+                            id: true,
+                            application_code: true,
+                            certification_scope: true,
+                            customers: {
+                                select: {
+                                    id: true,
+                                    customer_code: true,
+                                    company_name: true,
+                                },
+                            },
+                        },
+                    },
+                },
+                orderBy: {
+                    updated_at: 'desc',
+                },
+            });
+
+        return items.map((item) => ({
+            id: item.id,
+            project_code: item.project_code,
+            standard_name: item.standard_name,
+            status: item.status,
+            certification_scope:
+                item.certification_applications
+                    .certification_scope,
+            application: {
+                id: item.certification_applications.id,
+                application_code:
+                    item.certification_applications
+                        .application_code,
+            },
+            customer:
+                item.certification_applications
+                    .customers,
+            created_at: item.created_at,
+            updated_at: item.updated_at,
+        }));
+    }
+
     async getDashboard(actor: ResourceActor) {
         const customerIds =
             await this.accessibleCustomerIds(actor);

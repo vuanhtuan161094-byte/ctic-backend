@@ -4,6 +4,8 @@ import type {
 
 export interface AuthenticatedActor {
     userId?: string;
+    username?: string | null;
+    email?: string | null;
     roles?: string[];
     permissions?: string[];
 }

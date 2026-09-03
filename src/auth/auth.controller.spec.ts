@@ -39,4 +39,26 @@ describe('AuthController', () => {
   it('should be defined', () => {
     expect(controller).toBeDefined();
   });
+  it('returns effective roles and permissions for the authenticated account context', () => {
+    const result = controller.currentAccess({
+      user: {
+        userId: 'user-1',
+        username: 'reviewer',
+        email: 'reviewer@example.com',
+        roles: ['TECHNICAL_REVIEWER'],
+        permissions: ['projects.read', 'technical_reviews.perform'],
+      },
+    } as any);
+
+    expect(result).toEqual({
+      user: {
+        id: 'user-1',
+        username: 'reviewer',
+        email: 'reviewer@example.com',
+        roles: ['TECHNICAL_REVIEWER'],
+        permissions: ['projects.read', 'technical_reviews.perform'],
+      },
+    });
+  });
+
 });

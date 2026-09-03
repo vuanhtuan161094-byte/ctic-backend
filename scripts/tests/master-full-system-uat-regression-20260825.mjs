@@ -36,6 +36,9 @@ const admin = read(backend, 'src/system-administration/system-administration.con
 const documents = read(backend, 'src/document-control/document-control.service.ts');
 const phase9E2E = read(backend, 'test/system-administration-governance.e2e-spec.ts');
 const prodEnv = read(backend, 'scripts/production/validate-production-env.cjs');
+const portalMenu = shell.match(
+  /const navigationItems[\s\S]*?if \(customerPortalMode\) \{([\s\S]*?)\n    \}\n\n    const operations:/,
+)?.[1] ?? '';
 
 console.log('=== MASTER FULL-SYSTEM UAT STATIC CONTRACT ===');
 check('UAT runner chạy backend regression/build/Jest', runner.includes("'test:regression'") && runner.includes("'build'") && runner.includes("'--runInBand'"));
@@ -58,7 +61,12 @@ check('Phase 9 E2E safety reconnect chỉ bounded trong test harness', phase9E2E
 check('Production env validation vẫn fail-closed', prodEnv.includes('NODE_ENV must be exactly production') && prodEnv.includes('validateRuntimeEnvironment'));
 check('Frontend vẫn disable Product Certification', shell.includes('{ value: "products", label: "Chứng nhận sản phẩm", disabled: true }'));
 check('Frontend vẫn disable Validation/Verification', shell.includes('{ value: "validation", label: "Thẩm tra & xác nhận", disabled: true }'));
-check('Customer portal menu không có System Admin', shell.includes('CỔNG KHÁCH HÀNG') && shell.includes('HỆ THỐNG'));
+check(
+  'Customer portal menu không có System Admin',
+  portalMenu.includes('CỔNG KHÁCH HÀNG')
+    && !portalMenu.includes('system-admin')
+    && !portalMenu.includes('Quản trị hệ thống'),
+);
 check('UAT plan tồn tại', fs.existsSync(path.join(backend, 'docs/uat/MASTER_UAT_PLAN.md')));
 check('RC1 release gate tồn tại', fs.existsSync(path.join(backend, 'docs/uat/RC1_RELEASE_GATE.md')));
 

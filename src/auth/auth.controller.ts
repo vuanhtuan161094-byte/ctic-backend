@@ -1,6 +1,7 @@
 import {
     Body,
     Controller,
+    Get,
     HttpException,
     Post,
     Req,
@@ -19,6 +20,7 @@ import {
 } from '@nestjs/swagger';
 
 import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth/jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import {
@@ -147,6 +149,35 @@ export class AuthController {
 
             throw error;
         }
+    }
+
+
+    @Get('me')
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({
+        summary: 'Ngữ cảnh truy cập hiện tại',
+        description:
+            'Trả về roles và effective permissions đã được JwtStrategy tính sau role grants và permission overrides. Endpoint chỉ là projection read-only cho UI; backend guards vẫn là authority.',
+    })
+    @ApiOkResponse({
+        description: 'Ngữ cảnh truy cập của tài khoản đang đăng nhập',
+    })
+    @ApiUnauthorizedResponse({
+        description: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn',
+    })
+    currentAccess(
+        @Req()
+        request: SecurityRequest,
+    ) {
+        return {
+            user: {
+                id: request.user?.userId ?? request.user?.id ?? request.user?.sub ?? null,
+                username: request.user?.username ?? null,
+                email: request.user?.email ?? null,
+                roles: request.user?.roles ?? [],
+                permissions: request.user?.permissions ?? [],
+            },
+        };
     }
 
     @Post('register')

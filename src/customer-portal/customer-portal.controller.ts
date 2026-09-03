@@ -85,6 +85,22 @@ export class CustomerPortalController {
             );
     }
 
+    @Get('me/certifications')
+    @ApiOperation({
+        summary: 'Danh sách hồ sơ chứng nhận an toàn cho khách hàng hiện tại',
+    })
+    @ApiOkResponse({
+        description: 'Danh sách tối giản các hồ sơ chứng nhận thuộc customer mapping active',
+    })
+    certifications(
+        @Req() request: SecurityRequest,
+    ) {
+        return this.customerPortalService
+            .getCertificationCases(
+                getResourceActor(request),
+            );
+    }
+
     @Get('me/profile')
     @ApiOperation({
         summary: 'Hồ sơ tổ chức và người liên hệ an toàn cho cổng khách hàng',
