@@ -6,6 +6,7 @@ import {
     ParseUUIDPipe,
     Patch,
     Post,
+    Query,
     Req,
     UseGuards,
 } from '@nestjs/common';
@@ -62,6 +63,20 @@ export class AuditFindingsController {
             request.user?.id ??
             request.user?.userId ??
             request.user?.sub
+        );
+    }
+
+    @Get(':id/workspace')
+    @Roles('ADMIN', 'STAFF', 'COORDINATOR', 'AUDITOR', 'LEAD_AUDITOR', 'TECHNICAL_REVIEWER', 'DECISION_MAKER', 'CUSTOMER')
+    @ApiOperation({ summary: 'Không gian CAP theo phát hiện, dữ liệu và quyền đã giới hạn' })
+    async getWorkspace(
+        @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+        @Query('case_id') caseId: string | undefined,
+        @Req() request: SecurityRequest,
+    ) {
+        return this.auditFindingsService.getWorkspace(
+            id, caseId, getResourceActor(request), request.user?.permissions ?? [],
+            this.actionAuthorization,
         );
     }
 

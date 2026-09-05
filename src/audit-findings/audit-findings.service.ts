@@ -20,6 +20,8 @@ import type {
 } from '../security/resource-access.service';
 import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 import { WorkItemsService } from '../work-items/work-items.service';
+import type { ActionAuthorizationService } from '../work-items/action-authorization.service';
+import type { CapFindingProjection } from './audit-findings-workspace.types';
 
 import { CloseAuditFindingDto } from './dto/close-audit-finding.dto';
 import { CreateAuditFindingDto } from './dto/create-audit-finding.dto';
@@ -623,6 +625,101 @@ export class AuditFindingsService {
             finding,
         ]);
         return normalized;
+    }
+
+    // Read-only composition. Existing mutation controllers/services remain the authority.
+    async getWorkspace(
+        id: string,
+        caseId: string | undefined,
+        actor: ResourceActor,
+        permissions: string[],
+        actionAuthorization: ActionAuthorizationService,
+    ) {
+        const roles = (actor.roles ?? []).map((role) => role.trim().toUpperCase());
+        const customer = roles.includes('CUSTOMER');
+        const permitted = (permission: string) => roles.includes('ADMIN') ||
+            permissions.some((value) => value.trim().toLowerCase() === permission);
+        if (!customer && !permitted('projects.read')) throw new ForbiddenException();
+        const resource = { entity_type: 'audit_finding', entity_id: id };
+        if (customer) await this.resourceAccess.assertCustomerEntityAccess(resource, actor);
+        else await this.resourceAccess.assertEntityAccess(resource, actor);
+
+        const record = await this.prisma.audit_findings.findUnique({
+            where: { id },
+            select: {
+                ...this.getCustomerFindingSelect(),
+                reports: { select: { audit_plan_id: true, audit_plans: { select: {
+                    id: true, project_id: true, plan_code: true, audit_type: true,
+                    certification_projects: { select: { project_code: true,
+                        certification_applications: { select: { customers: { select: { company_name: true } } } },
+                    } },
+                } } } },
+            },
+        });
+        // A wrong parent URL must not return even a finding code or customer name.
+        if (!record || (caseId !== undefined && record.reports.audit_plans.project_id !== caseId)) {
+            throw new ForbiddenException();
+        }
+        const plan = record.reports.audit_plans;
+        const [safe] = await this.normalizeCustomerFindingsWithEvidence([record]) as CapFindingProjection[];
+        let canRespond = customer || (permitted('findings.manage') &&
+            roles.some((role) => ['ADMIN', 'STAFF', 'COORDINATOR', 'AUDITOR', 'LEAD_AUDITOR'].includes(role)));
+        if (canRespond) {
+            try { this.validateCorrectiveActionFinding(record); }
+            catch (error) {
+                if (error instanceof BadRequestException || error instanceof ConflictException) canRespond = false;
+                else throw error;
+            }
+        }
+        let canReview = false;
+        if (!customer && permitted('findings.manage') && roles.some((role) => ['AUDITOR', 'LEAD_AUDITOR'].includes(role))) {
+            try {
+                await this.assertFindingAccess(actor.userId ?? undefined, plan.id);
+                canReview = await actionAuthorization.canPerformAction({
+                    user: actor, actionCode: WORK_ITEM_ACTIONS.CAP_REVIEW,
+                    resource: { entityType: 'audit_finding', entityId: id },
+                    assignment: { assignedUserId: actor.userId }, workflowState: 'IN_PROGRESS',
+                });
+            } catch (error) {
+                if (!(error instanceof ForbiddenException)) throw error;
+            }
+        }
+        const latest = record.corrective_actions[0];
+        const open = record.status !== 'closed';
+        const canUpload = !customer && permitted('documents.manage') &&
+            roles.some((role) => ['ADMIN', 'STAFF', 'COORDINATOR', 'AUDITOR', 'LEAD_AUDITOR'].includes(role));
+        return {
+            contract_version: '1.0', audience: customer ? 'customer' : 'internal',
+            context: { case_id: plan.project_id, audit_id: plan.id, plan_code: plan.plan_code,
+                audit_type: plan.audit_type, project_code: plan.certification_projects.project_code,
+                customer_name: plan.certification_projects.certification_applications.customers.company_name },
+            finding: {
+                ...safe,
+                close_comment: customer ? null : safe.close_comment,
+                corrective_actions: safe.corrective_actions.map((action) => ({
+                    ...action,
+                    // Only the documented customer comment is part of the page contract.
+                    form_data: { custom_content: { customer_comment:
+                        typeof action.form_data?.custom_content?.customer_comment === 'string'
+                            ? action.form_data.custom_content.customer_comment : '' } },
+                    submitted_by_user: customer ? null : action.submitted_by_user,
+                    reviewed_by_user: customer ? null : action.reviewed_by_user,
+                    evidence_files: action.evidence_files.map((file) => ({
+                        ...file,
+                        download_url: customer ? file.download_url : `/document-files/${file.id}/download`,
+                    })),
+                })),
+            },
+            allowed_actions: {
+                respond: canRespond,
+                review: canReview && open,
+                close: canReview && open && (!['minor_nc', 'major_nc'].includes(record.finding_type) ||
+                    record.corrective_actions.some((action) => action.status === 'accepted')),
+                upload_evidence: customer
+                    ? open && record.status === 'response_submitted' && latest?.status === 'submitted'
+                    : canUpload && open,
+            },
+        };
     }
 
     async findByPlan(auditPlanId: string) {
