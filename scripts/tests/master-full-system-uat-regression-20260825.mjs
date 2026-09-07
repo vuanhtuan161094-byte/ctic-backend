@@ -13,7 +13,7 @@ const frontendCandidates = [
 const frontend = frontendCandidates.find((candidate) => fs.existsSync(path.join(candidate, 'app/components/DashboardShell.tsx')));
 if (!frontend) throw new Error('Không tìm thấy ctic-frontend để chạy Master UAT regression.');
 
-const read = (root, relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+const read = (root, relative) => fs.readFileSync(path.join(root, relative), 'utf8').replace(/\r\n/g, '\n');
 let pass = 0;
 let fail = 0;
 const check = (name, ok) => {
