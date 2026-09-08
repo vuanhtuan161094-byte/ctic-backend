@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
     Optional,
@@ -1464,6 +1465,15 @@ export class TechnicalReviewsService {
                 `Còn ${unresolvedNc.length} NC chưa được đóng`,
             );
         }
+    }
+
+    async getCaseWorkspace(planId: string, caseId: string) {
+        const context = await this.prisma.audit_plans.findFirst({
+            where: { id: planId, project_id: caseId },
+            select: { id: true },
+        });
+        if (!context) throw new ForbiddenException();
+        return this.getWorkspaceByPlan(planId);
     }
 
     async getWorkspaceByPlan(

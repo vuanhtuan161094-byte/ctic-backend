@@ -1,9 +1,11 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Body,
     Controller,
     Get,
     Param,
+    ParseUUIDPipe,
     Patch,
     Post,
     Query,
@@ -39,6 +41,7 @@ import { UpdateTechnicalReviewReportDto } from './dto/update-technical-review-re
 import { SaveTechnicalReviewWorkspaceDto } from './dto/save-technical-review-workspace.dto';
 import { AssignTechnicalReviewerDto } from './dto/assign-technical-reviewer.dto';
 import { ReassignTechnicalReviewerDto } from './dto/reassign-technical-reviewer.dto';
+import { projectTechnicalReviewWorkspace } from './technical-review-workspace.projection';
 
 @Controller('technical-reviews')
 @ApiTags('15. Thẩm xét kỹ thuật')
@@ -64,6 +67,39 @@ export class TechnicalReviewsController {
         return request.user?.id ??
             request.user?.userId ??
             request.user?.sub;
+    }
+
+    @Get('plan/:planId/case-workspace')
+    @Roles('ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER', 'DECISION_MAKER')
+    @Permissions('technical_reviews.read')
+    async getCaseWorkspace(
+        @Param('planId', ParseUUIDPipe) planId: string,
+        @Query('case_id', ParseUUIDPipe) caseId: string,
+        @Query('review_id') reviewId: string | undefined,
+        @Req() request: SecurityRequest,
+    ) {
+        const actor = getResourceActor(request);
+        await this.resourceAccess.assertEntityAccess({ entity_type: 'audit_plan', entity_id: planId }, actor);
+        const workspace = await this.technicalReviewsService.getCaseWorkspace(planId, caseId);
+        if (reviewId && workspace.review?.id !== reviewId) throw new ForbiddenException();
+        const roles = (actor.roles ?? []).map((role) => role.toUpperCase());
+        const permissions = request.user?.permissions ?? [];
+        const permission = (key: string) => roles.includes('ADMIN') || permissions.includes(key);
+        let perform = false;
+        if (workspace.review && roles.includes('TECHNICAL_REVIEWER') && permission('technical_reviews.perform')) {
+            try {
+                await this.technicalReviewsService.assertCanPerformReview(workspace.review.id, actor);
+                perform = true;
+            } catch (error) {
+                if (!(error instanceof BadRequestException)) throw error;
+            }
+        }
+        return projectTechnicalReviewWorkspace(workspace, caseId, {
+            perform,
+            assign: roles.some((role) => ['ADMIN', 'COORDINATOR'].includes(role))
+                && permission('technical_review.assign') && workspace.can_start
+                && (!workspace.review || workspace.review.status === 'pending'),
+        });
     }
 
     @Get('plan/:planId/workspace')
