@@ -418,6 +418,32 @@ export class CertificationDecisionsService {
         );
     }
 
+    // Shared by the existing mutation and the bounded read capability. No rule changes.
+    async assertDecisionMakerIndependent(
+        review: { reviewer_id: string | null; reports: { audit_plan_id: string } },
+        createdBy?: string,
+    ) {
+        if (!createdBy) return;
+        if (review.reviewer_id === createdBy) {
+            throw new BadRequestException(
+                'Người đã thực hiện thẩm xét kỹ thuật không được ra quyết định cho cùng hồ sơ',
+            );
+        }
+        const auditParticipation = await (this.prisma as PrismaService).audit_team_members?.findFirst({
+            where: {
+                audit_team_appointments: { audit_plan_id: review.reports.audit_plan_id },
+                experts: { user_id: createdBy },
+                assignment_status: { not: 'cancelled' },
+            },
+            select: { id: true, team_role: true },
+        }) ?? null;
+        if (auditParticipation) {
+            throw new BadRequestException(
+                'Thành viên đoàn đánh giá không được ra quyết định chứng nhận cho cùng chu kỳ',
+            );
+        }
+    }
+
     async create(
         dto: CreateCertificationDecisionDto,
         createdBy?: string,
@@ -521,30 +547,7 @@ export class CertificationDecisionsService {
             );
         }
 
-        if (createdBy) {
-            if (review.reviewer_id === createdBy) {
-                throw new BadRequestException(
-                    'Người đã thực hiện thẩm xét kỹ thuật không được ra quyết định cho cùng hồ sơ',
-                );
-            }
-            const auditParticipation = await (this.prisma as PrismaService).audit_team_members?.findFirst({
-                where: {
-                    audit_team_appointments: {
-                        audit_plan_id: review.reports.audit_plan_id,
-                    },
-                    experts: {
-                        user_id: createdBy,
-                    },
-                    assignment_status: { not: 'cancelled' },
-                },
-                select: { id: true, team_role: true },
-            }) ?? null;
-            if (auditParticipation) {
-                throw new BadRequestException(
-                    'Thành viên đoàn đánh giá không được ra quyết định chứng nhận cho cùng chu kỳ',
-                );
-            }
-        }
+        await this.assertDecisionMakerIndependent(review, createdBy);
 
         const reviewFormData =
             this.parseFormData(
