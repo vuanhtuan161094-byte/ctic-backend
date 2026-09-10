@@ -5,6 +5,7 @@ import { DocumentFilesModule } from '../document-files/document-files.module';
 import { SecurityModule } from '../security/security.module';
 
 import { CertificatesController } from './certificates.controller';
+import { CertificateWorkspaceController } from './certificate-workspace.controller';
 import { PublicCertificatesController } from './public-certificates.controller';
 import { CertificatesService } from './certificates.service';
 import { CertificatesScheduler } from './certificates.scheduler';
@@ -17,6 +18,7 @@ import { CertificatesScheduler } from './certificates.scheduler';
   ],
 
   controllers: [
+    CertificateWorkspaceController,
     CertificatesController,
     PublicCertificatesController,
   ],
