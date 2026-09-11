@@ -1,0 +1,51 @@
+name: CMP Backend Quality
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: "sqlserver://localhost:1433;database=cmp_ci;user=sa;password=CmpCiPass123;trustServerCertificate=true"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma schema validation
+        run: npm run prisma:validate
+
+      - name: Generate and verify Prisma client
+        run: npm run prisma:generate
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit and service tests
+        run: npm test -- --runInBand
