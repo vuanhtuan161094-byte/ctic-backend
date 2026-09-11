@@ -1,0 +1,55 @@
+name: CMP Step 18A Closure Static Gate
+
+on:
+  push:
+    branches:
+      - feature/step18a-stabilization
+    paths:
+      - .github/workflows/step18a-closure-static-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  closure-static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/step18a-stabilization
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify clean checkout
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain)"
+          git diff --check
+      - name: Verify migration repository contract
+        shell: bash
+        run: |
+          count=$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          echo "Migration directories: $count"
+          test "$count" = "32"
+          if find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -Eiq '(^|[_-])(patch)?33([_-]|$)|migration.?33'; then
+            echo "Unexpected migration 33-like directory found"
+            find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -Ei '(^|[_-])(patch)?33([_-]|$)|migration.?33'
+            exit 1
+          fi
+      - name: Verify no temporary Step 18A harness remains
+        shell: bash
+        run: |
+          leftovers=$(find .github/workflows scripts -type f \( -name 'step18a-*' -o -name '*step18a*one-shot*' \) ! -path '.github/workflows/step18a-closure-static-gate.yml' -print)
+          if [ -n "$leftovers" ]; then
+            echo "Temporary Step 18A harness files remain:"
+            echo "$leftovers"
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm ci
+      - name: Canonical static regression
+        run: npm run test:regression
