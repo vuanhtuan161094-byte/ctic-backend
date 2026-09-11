@@ -1,0 +1,63 @@
+name: CMP Step 18A Backend Security Audit
+
+on:
+  push:
+    branches:
+      - feature/step18a-stabilization
+    paths:
+      - .github/workflows/step18a-backend-security-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/step18a-stabilization
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Production dependency audit
+        shell: bash
+        run: |
+          npm audit --omit=dev --json > /tmp/prod-audit.json || true
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const a = JSON.parse(fs.readFileSync('/tmp/prod-audit.json', 'utf8'));
+          console.log('PROD_METADATA=' + JSON.stringify(a.metadata?.vulnerabilities ?? {}));
+          const rows = Object.entries(a.vulnerabilities ?? {}).map(([name, v]) => ({
+            name,
+            severity: v.severity,
+            direct: Boolean(v.isDirect),
+            via: Array.isArray(v.via) ? v.via.map(x => typeof x === 'string' ? x : x.name).filter(Boolean) : [],
+            range: v.range,
+            fixAvailable: v.fixAvailable,
+          }));
+          console.log('PROD_VULNERABILITIES=' + JSON.stringify(rows));
+          NODE
+      - name: Full dependency audit
+        shell: bash
+        run: |
+          npm audit --json > /tmp/full-audit.json || true
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const a = JSON.parse(fs.readFileSync('/tmp/full-audit.json', 'utf8'));
+          console.log('FULL_METADATA=' + JSON.stringify(a.metadata?.vulnerabilities ?? {}));
+          const rows = Object.entries(a.vulnerabilities ?? {}).map(([name, v]) => ({
+            name,
+            severity: v.severity,
+            direct: Boolean(v.isDirect),
+            via: Array.isArray(v.via) ? v.via.map(x => typeof x === 'string' ? x : x.name).filter(Boolean) : [],
+            range: v.range,
+            fixAvailable: v.fixAvailable,
+          }));
+          console.log('FULL_VULNERABILITIES=' + JSON.stringify(rows));
+          NODE
