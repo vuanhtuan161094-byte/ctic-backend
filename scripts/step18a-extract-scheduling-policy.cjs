@@ -26,9 +26,12 @@ source = source.replace(countsImport, '');
 const policyImportAnchor = "import { AuditTeamReadinessService } from './audit-team-readiness.service';\n";
 if (source.split(policyImportAnchor).length - 1 !== 1) throw new Error('Scheduling policy import anchor mismatch');
 source = source.replace(policyImportAnchor, policyImportAnchor + `import {
+    countsTowardAuditTeamMandays,
     formatAuditDateOnly,
+    inclusiveAuditCalendarDays,
     isInitialStage2AuditPlan,
     isStage1AuditPlan,
+    numericAuditValue,
     parseAuditDate,
     validateAuditMandayAllocation,
 } from './audit-team-scheduling.policy';
@@ -66,6 +69,12 @@ const stageWrappers = `    private isStage1Plan(
         return isInitialStage2AuditPlan(plan);
     }
 
+    private countsTowardMandays(
+        teamRole?: string | null,
+    ): boolean {
+        return countsTowardAuditTeamMandays(teamRole);
+    }
+
 `;
 source = source.slice(0, stageStart) + stageWrappers + source.slice(projectMethodStart);
 
@@ -76,6 +85,19 @@ const mandayWrappers = `    private formatDateOnly(
         value: Date,
     ) {
         return formatAuditDateOnly(value);
+    }
+
+    private inclusiveCalendarDays(
+        startDate: Date,
+        endDate: Date,
+    ) {
+        return inclusiveAuditCalendarDays(startDate, endDate);
+    }
+
+    private numericValue(
+        value: unknown,
+    ): number | null {
+        return numericAuditValue(value);
     }
 
     private validateMandayAllocation(
@@ -93,8 +115,8 @@ const mandayWrappers = `    private formatDateOnly(
 `;
 source = source.slice(0, formatStart) + mandayWrappers + source.slice(overlapStart);
 
-if (source.includes('this.countsTowardMandays(') || source.includes('this.numericValue(') || source.includes('this.inclusiveCalendarDays(') || source.includes('this.isHalfDayIncrement(') || source.includes('this.requiredPlanMandays(')) {
-  throw new Error('Legacy manday helper references remain after extraction');
+if (source.includes('this.isHalfDayIncrement(') || source.includes('this.requiredPlanMandays(')) {
+  throw new Error('Legacy private-only manday helper references remain after extraction');
 }
 
 const policy = `import { BadRequestException } from '@nestjs/common';
@@ -173,12 +195,16 @@ export function isInitialStage2AuditPlan(plan: AuditStagePlan): boolean {
     return /stage\\s*2|stage2|giai[_\\s-]*doan[_\\s-]*2|gđ2/.test(value);
 }
 
-function inclusiveCalendarDays(startDate: Date, endDate: Date): number {
+export function countsTowardAuditTeamMandays(teamRole?: string | null): boolean {
+    return countsTowardAuditMandays(teamRole ?? '');
+}
+
+export function inclusiveAuditCalendarDays(startDate: Date, endDate: Date): number {
     const millisecondsPerDay = 24 * 60 * 60 * 1000;
     return Math.floor((endDate.getTime() - startDate.getTime()) / millisecondsPerDay) + 1;
 }
 
-function numericValue(value: unknown): number | null {
+export function numericAuditValue(value: unknown): number | null {
     if (value === null || value === undefined || value === '') return null;
     const result = Number(value);
     return Number.isFinite(result) ? result : null;
@@ -189,7 +215,7 @@ function isHalfDayIncrement(value: number): boolean {
 }
 
 function requiredPlanMandays(plan: AuditPlanDateRange): number | null {
-    return numericValue(plan.audit_event?.planned_mandays);
+    return numericAuditValue(plan.audit_event?.planned_mandays);
 }
 
 export function validateAuditMandayAllocation(
@@ -203,8 +229,8 @@ export function validateAuditMandayAllocation(
 
     let allocatedMandays = 0;
     for (const member of members) {
-        const countsTowardMandays = countsTowardAuditMandays(member.team_role ?? '');
-        const enteredValue = numericValue(member.planned_mandays);
+        const countsTowardMandays = countsTowardAuditTeamMandays(member.team_role);
+        const enteredValue = numericAuditValue(member.planned_mandays);
         if (!countsTowardMandays) {
             if ((enteredValue ?? 0) > 0.001) {
                 throw new BadRequestException(
@@ -217,7 +243,7 @@ export function validateAuditMandayAllocation(
 
         const startDate = parseAuditDate(member.planned_start_date, 'Ngày bắt đầu phân công');
         const endDate = parseAuditDate(member.planned_end_date, 'Ngày kết thúc phân công');
-        const maximumMandays = inclusiveCalendarDays(startDate, endDate);
+        const maximumMandays = inclusiveAuditCalendarDays(startDate, endDate);
         const enteredMandays = enteredValue ?? maximumMandays;
 
         if (enteredMandays < 0) {
@@ -257,9 +283,12 @@ export function validateAuditMandayAllocation(
 const spec = `import { BadRequestException } from '@nestjs/common';
 
 import {
+    countsTowardAuditTeamMandays,
     formatAuditDateOnly,
+    inclusiveAuditCalendarDays,
     isInitialStage2AuditPlan,
     isStage1AuditPlan,
+    numericAuditValue,
     parseAuditDate,
     validateAuditMandayAllocation,
 } from './audit-team-scheduling.policy';
@@ -276,6 +305,15 @@ describe('Audit-team scheduling policy', () => {
         expect(isStage1AuditPlan({ audit_event: { event_type: 'gđ1' } })).toBe(true);
         expect(isInitialStage2AuditPlan({ audit_type: 'stage2' })).toBe(true);
         expect(isInitialStage2AuditPlan({ audit_event: { event_type: 'giai-doan-2' } })).toBe(true);
+    });
+
+    it('keeps shared persistence helpers deterministic', () => {
+        expect(countsTowardAuditTeamMandays('TEAM_LEADER')).toBe(true);
+        expect(numericAuditValue('1.5')).toBe(1.5);
+        expect(inclusiveAuditCalendarDays(
+            new Date('2026-09-10T00:00:00.000Z'),
+            new Date('2026-09-11T00:00:00.000Z'),
+        )).toBe(2);
     });
 
     it('enforces 0.5 MD increments and exact strict totals', () => {
