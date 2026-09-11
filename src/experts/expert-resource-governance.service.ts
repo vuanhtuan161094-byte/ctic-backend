@@ -194,7 +194,8 @@ export class ExpertResourceGovernanceService {
                     orderBy: { declared_at: 'desc' },
                 }) ?? Promise.resolve([])
                 : Promise.resolve([]),
-            this.prisma.audit_team_members.findMany({
+            includeAssignments
+                ? this.prisma.audit_team_members.findMany({
                     where: {
                         expert_id: expertId,
                         assignment_status: { not: 'cancelled' },
@@ -225,7 +226,8 @@ export class ExpertResourceGovernanceService {
                         },
                     },
                     orderBy: { planned_start_date: 'asc' },
-                }),
+                })
+                : Promise.resolve([]),
         ]);
         const evaluatedAssignments = includeAssignments ? assignments : [];
 

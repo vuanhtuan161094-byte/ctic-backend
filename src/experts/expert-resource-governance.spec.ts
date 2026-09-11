@@ -223,6 +223,25 @@ describe('ExpertResourceGovernanceService', () => {
         ]);
     });
 
+    it('skips assignment reads when assignment details are explicitly excluded', async () => {
+        const prisma = createPrismaMock();
+        const service = new ExpertResourceGovernanceService(
+            prisma as unknown as PrismaService,
+        );
+
+        const result = await service.evaluate(
+            'expert-1',
+            '2026-09-03',
+            '2026-09-03',
+            { includeAssignments: false },
+        );
+
+        expect(prisma.audit_team_members.findMany).not.toHaveBeenCalled();
+        expect(result.assignments).toEqual([]);
+        expect(result.workload.assigned_mandays).toBe(0);
+        expect(result.workload.engagement_count).toBe(0);
+    });
+
     it('retries the complete cancellation transaction only for transient ENOTBEGUN', async () => {
         const existing = {
             id: 'availability-1',
