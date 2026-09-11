@@ -14,7 +14,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,14 +25,36 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Production dependency audit
+      - name: Baseline production audit
         shell: bash
         run: |
-          npm audit --omit=dev --json > /tmp/prod-audit.json || true
+          npm audit --omit=dev --json > /tmp/prod-before.json || true
           node - <<'NODE'
           const fs = require('node:fs');
-          const a = JSON.parse(fs.readFileSync('/tmp/prod-audit.json', 'utf8'));
-          console.log('PROD_METADATA=' + JSON.stringify(a.metadata?.vulnerabilities ?? {}));
+          const a = JSON.parse(fs.readFileSync('/tmp/prod-before.json', 'utf8'));
+          console.log('BEFORE=' + JSON.stringify(a.metadata?.vulnerabilities ?? {}));
+          NODE
+      - name: Simulate same-major lock refresh
+        shell: bash
+        run: |
+          npm update --package-lock-only @nestjs/common @nestjs/core @nestjs/platform-express @nestjs/swagger multer @prisma/adapter-mssql @prisma/client prisma
+          echo 'LOCK_DIFF_BEGIN'
+          git diff --stat -- package-lock.json package.json
+          git diff --name-only
+          echo 'LOCK_DIFF_END'
+          npm ci
+      - name: Candidate versions
+        shell: bash
+        run: |
+          npm ls @nestjs/common @nestjs/core @nestjs/platform-express @nestjs/schedule @nestjs/swagger multer @prisma/adapter-mssql @prisma/client prisma --depth=0 || true
+      - name: Candidate production audit
+        shell: bash
+        run: |
+          npm audit --omit=dev --json > /tmp/prod-after.json || true
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const a = JSON.parse(fs.readFileSync('/tmp/prod-after.json', 'utf8'));
+          console.log('AFTER=' + JSON.stringify(a.metadata?.vulnerabilities ?? {}));
           const rows = Object.entries(a.vulnerabilities ?? {}).map(([name, v]) => ({
             name,
             severity: v.severity,
@@ -41,35 +63,16 @@ jobs:
             range: v.range,
             fixAvailable: v.fixAvailable,
           }));
-          console.log('PROD_VULNERABILITIES=' + JSON.stringify(rows));
+          console.log('AFTER_VULNERABILITIES=' + JSON.stringify(rows));
           NODE
-      - name: Production dependency paths
-        shell: bash
+      - name: Candidate Prisma and build gate
+        env:
+          DATABASE_URL: "sqlserver://localhost:1433;database=cmp_ci;integratedSecurity=true;trustServerCertificate=true"
         run: |
-          npm ls --omit=dev @nestjs/core @nestjs/platform-express @nestjs/schedule @nestjs/swagger multer js-yaml qs fast-uri prisma @prisma/config deepmerge-ts mysql2 hono @hono/node-server valibot || true
-      - name: Safe fix dry run
-        shell: bash
-        run: |
-          npm audit fix --omit=dev --package-lock-only --dry-run || true
-          git status --short
-      - name: Direct production updates available
-        shell: bash
-        run: npm outdated --omit=dev || true
-      - name: Full dependency audit
-        shell: bash
-        run: |
-          npm audit --json > /tmp/full-audit.json || true
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const a = JSON.parse(fs.readFileSync('/tmp/full-audit.json', 'utf8'));
-          console.log('FULL_METADATA=' + JSON.stringify(a.metadata?.vulnerabilities ?? {}));
-          const rows = Object.entries(a.vulnerabilities ?? {}).map(([name, v]) => ({
-            name,
-            severity: v.severity,
-            direct: Boolean(v.isDirect),
-            via: Array.isArray(v.via) ? v.via.map(x => typeof x === 'string' ? x : x.name).filter(Boolean) : [],
-            range: v.range,
-            fixAvailable: v.fixAvailable,
-          }));
-          console.log('FULL_VULNERABILITIES=' + JSON.stringify(rows));
-          NODE
+          npm run prisma:validate
+          npm run prisma:generate
+          npm run build
+      - name: Candidate full regression
+        env:
+          DATABASE_URL: "sqlserver://localhost:1433;database=cmp_ci;integratedSecurity=true;trustServerCertificate=true"
+        run: npm test -- --runInBand
