@@ -47,11 +47,14 @@ moduleSource = moduleSource.replace(
   moduleImportAnchor + "import { TechnicalReviewReviewerPolicyService } from './technical-review-reviewer-policy.service';\n",
 );
 const providerAnchor = '    TechnicalReviewsService,\n';
-if (moduleSource.split(providerAnchor).length - 1 !== 1) throw new Error('Module provider anchor mismatch');
-moduleSource = moduleSource.replace(
-  providerAnchor,
-  providerAnchor + '    TechnicalReviewReviewerPolicyService,\n',
-);
+const providerCount = moduleSource.split(providerAnchor).length - 1;
+if (providerCount < 2) throw new Error(`Module provider/export anchors changed: ${providerCount}`);
+const providerIndex = moduleSource.indexOf(providerAnchor);
+moduleSource =
+  moduleSource.slice(0, providerIndex) +
+  providerAnchor +
+  '    TechnicalReviewReviewerPolicyService,\n' +
+  moduleSource.slice(providerIndex + providerAnchor.length);
 
 const extractedService = `import { BadRequestException, Injectable } from '@nestjs/common';
 
