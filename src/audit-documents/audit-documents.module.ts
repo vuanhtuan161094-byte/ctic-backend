@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 
 import { AuditDocumentsController } from './audit-documents.controller';
 import { AuditDocumentsService } from './audit-documents.service';
+import { AuditDocumentQueryContextService } from './audit-document-query-context.service';
 
 @Module({
     imports: [
@@ -16,6 +17,7 @@ import { AuditDocumentsService } from './audit-documents.service';
     ],
     providers: [
         AuditDocumentsService,
+        AuditDocumentQueryContextService,
     ],
     exports: [
         AuditDocumentsService,

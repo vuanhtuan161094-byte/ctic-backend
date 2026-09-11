@@ -3,6 +3,7 @@ import {
     ForbiddenException,
     Injectable,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
 
 import { randomUUID } from 'crypto';
@@ -19,6 +20,7 @@ import { getStorageConfig } from '../common/storage-config';
 import { convertDocxToPdf } from '../common/document-conversion';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditDocumentQueryContextService } from './audit-document-query-context.service';
 
 import { SaveAuditDocumentDataDto } from './dto/save-audit-document-data.dto';
 import {
@@ -100,10 +102,18 @@ const templateEngine = loadOoxmlTemplateEngine();
 
 @Injectable()
 export class AuditDocumentsService {
+    private readonly queryContextService: AuditDocumentQueryContextService;
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly documentFilesService: DocumentFilesService,
-    ) { }
+        @Optional()
+        queryContextService?: AuditDocumentQueryContextService,
+    ) {
+        this.queryContextService =
+            queryContextService ??
+            new AuditDocumentQueryContextService(prisma);
+    }
 
     private readonly uploadDirectory =
         getStorageConfig()
@@ -409,138 +419,11 @@ export class AuditDocumentsService {
     }
 
     private async loadPlan(planId: string) {
-        const plan = await this.prisma.audit_plans.findUnique({
-            where: {
-                id: planId,
-            },
-            include: {
-                certification_projects: {
-                    include: {
-                        contracts: true,
-                        certification_agreements: true,
-                        audit_plans: {
-                            where: {
-                                audit_type: 'project_team',
-                            },
-                            orderBy: {
-                                created_at: 'desc',
-                            },
-                            include: {
-                                audit_team_appointment: {
-                                    include: {
-                                        prepared_by_user: true,
-                                        approved_by_user: true,
-                                        members: {
-                                            include: {
-                                                experts: true,
-                                            },
-                                            orderBy: {
-                                                created_at: 'asc',
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                        certification_applications: {
-                            include: {
-                                sites: {
-                                    orderBy: {
-                                        site_no: 'asc',
-                                    },
-                                },
-                                customers: {
-                                    include: {
-                                        contacts: true,
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-                audit_event: {
-                    include: {
-                        audit_programs: true,
-                    },
-                },
-                audit_team_appointment: {
-                    include: {
-                        prepared_by_user: true,
-                        approved_by_user: true,
-                        members: {
-                            include: {
-                                experts: true,
-                                program_mandays: true,
-                            },
-                            orderBy: {
-                                created_at: 'asc',
-                            },
-                        },
-                    },
-                },
-            },
-        });
-
-        if (!plan) {
-            throw new NotFoundException(
-                'Không tìm thấy kế hoạch đánh giá',
-            );
-        }
-
-        const platformBranding = 'organization_profiles' in this.prisma
-            ? await this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' } })
-            : null;
-
-        return Object.assign(plan, { platform_branding: platformBranding }) as any;
+        return this.queryContextService.loadPlan(planId);
     }
 
     private async loadProgram(programId: string | null | undefined) {
-        if (!programId) {
-            return null;
-        }
-
-        return this.prisma.audit_programs.findUnique({
-            where: {
-                id: programId,
-            },
-            include: {
-                preparer: true,
-                events: {
-                    orderBy: {
-                        sequence_no: 'asc',
-                    },
-                    include: {
-                        audit_plans: {
-                            orderBy: {
-                                version_no: 'desc',
-                            },
-                            include: {
-                                reports: {
-                                    orderBy: {
-                                        version_no: 'desc',
-                                    },
-                                    include: {
-                                        audit_findings: true,
-                                    },
-                                },
-                                audit_team_appointment: {
-                                    include: {
-                                        members: {
-                                            include: {
-                                                experts: true,
-                                            },
-                                            orderBy: {
-                                                created_at: 'asc',
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        }) as Promise<any>;
+        return this.queryContextService.loadProgram(programId);
     }
 
     private async assertGenerationAccess(
