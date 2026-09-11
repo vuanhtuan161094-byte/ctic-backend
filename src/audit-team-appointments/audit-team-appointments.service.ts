@@ -12,9 +12,22 @@ import { WorkItemsService } from '../work-items/work-items.service';
 import { AuditTeamCompetencyService } from './audit-team-competency.service';
 import { AuditTeamProgramCompetencyService } from './audit-team-program-competency.service';
 import { AuditMandayAllocationService } from './audit-manday-allocation.service';
-import { countsTowardAuditMandays } from './integrated-manday-allocation.engine';
 import { ExpertResourceGovernanceService } from '../experts/expert-resource-governance.service';
 import { AuditTeamReadinessService } from './audit-team-readiness.service';
+import {
+    countsTowardAuditTeamMandays,
+    formatAuditDateOnly,
+    inclusiveAuditCalendarDays,
+    isInitialStage2AuditPlan,
+    isStage1AuditPlan,
+    numericAuditValue,
+    parseAuditDate,
+    validateAuditMandayAllocation,
+} from './audit-team-scheduling.policy';
+import type {
+    AuditMemberDateInput as MemberDateInput,
+    AuditPlanDateRange as PlanDateRange,
+} from './audit-team-scheduling.policy';
 import {
     normalizeCompetencyValue,
     normalizeStandardCode,
@@ -29,24 +42,6 @@ import {
     UpdateAuditTeamAppointmentDto,
 } from './dto/update-audit-team-appointment.dto';
 
-interface PlanDateRange {
-    id: string;
-    project_id: string;
-    plan_code: string | null;
-
-    planned_start_date:
-    Date | null;
-
-    planned_end_date:
-    Date | null;
-
-    audit_event?: {
-        planned_mandays:
-        unknown;
-        event_type?:
-        string | null;
-    } | null;
-}
 interface ProjectScopeMemberInput {
     team_role: string;
 
@@ -55,14 +50,6 @@ interface ProjectScopeMemberInput {
         string | null;
     }>;
 }
-interface MemberDateInput {
-    expert_id: string;
-    team_role: string;
-    planned_start_date?: string | Date;
-    planned_end_date?: string | Date;
-    planned_mandays?: number | string | null;
-}
-
 @Injectable()
 export class AuditTeamAppointmentsService {
     private readonly resourceGovernance: ExpertResourceGovernanceService;
@@ -185,79 +172,7 @@ export class AuditTeamAppointmentsService {
         value: string | Date,
         fieldName: string,
     ) {
-        if (
-            typeof value ===
-            'string'
-        ) {
-            const dateOnlyMatch =
-                value.match(
-                    /^(\d{4})-(\d{2})-(\d{2})/,
-                );
-
-            if (dateOnlyMatch) {
-                const year =
-                    Number(
-                        dateOnlyMatch[1],
-                    );
-
-                const month =
-                    Number(
-                        dateOnlyMatch[2],
-                    );
-
-                const day =
-                    Number(
-                        dateOnlyMatch[3],
-                    );
-
-                const date =
-                    new Date(
-                        Date.UTC(
-                            year,
-                            month - 1,
-                            day,
-                        ),
-                    );
-
-                if (
-                    date.getUTCFullYear() !==
-                    year ||
-                    date.getUTCMonth() !==
-                    month - 1 ||
-                    date.getUTCDate() !==
-                    day
-                ) {
-                    throw new BadRequestException(
-                        `${fieldName} không hợp lệ`,
-                    );
-                }
-
-                return date;
-            }
-        }
-
-        const sourceDate =
-            value instanceof Date
-                ? value
-                : new Date(value);
-
-        if (
-            Number.isNaN(
-                sourceDate.getTime(),
-            )
-        ) {
-            throw new BadRequestException(
-                `${fieldName} không hợp lệ`,
-            );
-        }
-
-        return new Date(
-            Date.UTC(
-                sourceDate.getUTCFullYear(),
-                sourceDate.getUTCMonth(),
-                sourceDate.getUTCDate(),
-            ),
-        );
+        return parseAuditDate(value, fieldName);
     }
 
     private async getPlanOrThrow(
@@ -303,19 +218,19 @@ export class AuditTeamAppointmentsService {
     private isStage1Plan(
         plan: { audit_type?: string | null; audit_event?: { event_type?: string | null } | null },
     ): boolean {
-        const value = `${plan.audit_type ?? ''} ${plan.audit_event?.event_type ?? ''}`.toLowerCase();
-        return /stage\s*1|stage1|giai[_\s-]*doan[_\s-]*1|gđ1/.test(value);
+        return isStage1AuditPlan(plan);
     }
 
     private isInitialStage2Plan(
         plan: { audit_type?: string | null; audit_event?: { event_type?: string | null } | null },
     ): boolean {
-        const value = `${plan.audit_type ?? ''} ${plan.audit_event?.event_type ?? ''}`.toLowerCase();
-        return /stage\s*2|stage2|giai[_\s-]*doan[_\s-]*2|gđ2/.test(value);
+        return isInitialStage2AuditPlan(plan);
     }
 
-    private countsTowardMandays(teamRole?: string | null): boolean {
-        return countsTowardAuditMandays(teamRole ?? '');
+    private countsTowardMandays(
+        teamRole?: string | null,
+    ): boolean {
+        return countsTowardAuditTeamMandays(teamRole);
     }
 
     private async getProjectOrThrow(
@@ -789,51 +704,20 @@ export class AuditTeamAppointmentsService {
     private formatDateOnly(
         value: Date,
     ) {
-        return `${String(value.getUTCDate()).padStart(2, '0')}/${String(value.getUTCMonth() + 1).padStart(2, '0')}/${value.getUTCFullYear()}`;
+        return formatAuditDateOnly(value);
     }
 
     private inclusiveCalendarDays(
         startDate: Date,
         endDate: Date,
     ) {
-        const millisecondsPerDay =
-            24 * 60 * 60 * 1000;
-
-        return Math.floor(
-            (endDate.getTime() - startDate.getTime()) /
-            millisecondsPerDay,
-        ) + 1;
+        return inclusiveAuditCalendarDays(startDate, endDate);
     }
 
     private numericValue(
         value: unknown,
     ): number | null {
-        if (
-            value === null ||
-            value === undefined ||
-            value === ''
-        ) {
-            return null;
-        }
-
-        const result = Number(value);
-        return Number.isFinite(result)
-            ? result
-            : null;
-    }
-
-    private isHalfDayIncrement(
-        value: number,
-    ) {
-        return Math.abs(value * 2 - Math.round(value * 2)) < 0.0001;
-    }
-
-    private requiredPlanMandays(
-        plan: PlanDateRange,
-    ) {
-        return this.numericValue(
-            plan.audit_event?.planned_mandays,
-        );
+        return numericAuditValue(value);
     }
 
     private validateMandayAllocation(
@@ -841,81 +725,11 @@ export class AuditTeamAppointmentsService {
         plan: PlanDateRange & { audit_type?: string | null },
         strictTotal = false,
     ) {
-        const isProjectContext =
-            plan.audit_type
-                ?.trim()
-                .toLowerCase() ===
-            this.projectTeamAuditType;
-
-        const isStage1 = this.isStage1Plan(plan);
-
-        if (isProjectContext) {
-            return;
-        }
-
-        let allocatedMandays = 0;
-
-        for (const member of members) {
-            const countsTowardMandays = this.countsTowardMandays(member.team_role);
-            const enteredValue = this.numericValue(member.planned_mandays);
-
-            if (!countsTowardMandays) {
-                if ((enteredValue ?? 0) > 0.001) {
-                    throw new BadRequestException(
-                        'Chuyên gia kỹ thuật, quan sát viên, chuyên gia tập sự và vai trò hỗ trợ không được tính man-day',
-                    );
-                }
-                continue;
-            }
-
-            if (!member.planned_start_date || !member.planned_end_date) {
-                continue;
-            }
-
-            const startDate = this.parseDate(
-                member.planned_start_date,
-                'Ngày bắt đầu phân công',
-            );
-            const endDate = this.parseDate(
-                member.planned_end_date,
-                'Ngày kết thúc phân công',
-            );
-            const maximumMandays = this.inclusiveCalendarDays(startDate, endDate);
-            const enteredMandays = enteredValue ?? maximumMandays;
-
-            if (enteredMandays < 0) {
-                throw new BadRequestException('Ngày công không được nhỏ hơn 0');
-            }
-            if (!this.isHalfDayIncrement(enteredMandays)) {
-                throw new BadRequestException('Ngày công phải được nhập theo bước 0,5 MD');
-            }
-            // Giai đoạn 1 là xem xét hồ sơ từ xa. Ngày PLAN chỉ là mốc quản lý,
-            // không phải số ngày lịch bị khóa của chuyên gia.
-            if (!isStage1 && enteredMandays > maximumMandays) {
-                throw new BadRequestException(
-                    `Ngày công ${enteredMandays} MD vượt quá ${maximumMandays} ngày tham gia đã chọn`,
-                );
-            }
-            allocatedMandays += enteredMandays;
-        }
-
-        const requiredMandays = this.requiredPlanMandays(plan);
-        if (strictTotal && requiredMandays === null) {
-            throw new BadRequestException(
-                'Chưa thể ban hành: kỳ đánh giá chưa có man-day được phê duyệt trong chương trình',
-            );
-        }
-        if (
-            strictTotal &&
-            requiredMandays !== null &&
-            Math.abs(allocatedMandays - requiredMandays) > 0.001
-        ) {
-            throw new BadRequestException(
-                allocatedMandays < requiredMandays
-                    ? `Chưa thể xác nhận: kế hoạch yêu cầu ${requiredMandays} MD nhưng mới bố trí ${allocatedMandays} MD`
-                    : `Chưa thể xác nhận: kế hoạch yêu cầu ${requiredMandays} MD nhưng đang bố trí vượt thành ${allocatedMandays} MD`,
-            );
-        }
+        return validateAuditMandayAllocation(
+            members,
+            plan,
+            strictTotal,
+        );
     }
 
     private async findScheduleOverlaps(
