@@ -25,21 +25,44 @@ jobs:
           cache: npm
       - name: Install baseline
         run: npm ci
-      - name: Baseline audit
-        run: npm audit --omit=dev || true
-      - name: Refresh app runtime packages in working tree
+      - name: Prepare bounded candidate
         shell: bash
         run: |
-          npm update --package-lock-only @nestjs/common @nestjs/core @nestjs/platform-express @nestjs/swagger
-          npm install --package-lock-only --ignore-scripts --save multer@^2.3.0
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          p.dependencies['@nestjs/common'] = '^11.2.3';
+          p.dependencies['@nestjs/core'] = '^11.2.3';
+          p.dependencies['@nestjs/platform-express'] = '^11.2.3';
+          p.dependencies['@nestjs/swagger'] = '^11.4.7';
+          p.dependencies.multer = '^2.3.0';
+          p.overrides = {
+            ...(p.overrides || {}),
+            '@nestjs/platform-express': {
+              ...((p.overrides || {})['@nestjs/platform-express'] || {}),
+              multer: '2.3.0'
+            }
+          };
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          NODE
+          npm install --package-lock-only --ignore-scripts
+          npm update --package-lock-only qs fast-uri hono @hono/node-server mysql2 valibot
           npm ci
-      - name: Verify candidate versions
+      - name: Verify candidate boundary
         shell: bash
         run: |
-          npm ls @nestjs/common @nestjs/core @nestjs/platform-express @nestjs/schedule @nestjs/swagger multer @prisma/adapter-mssql @prisma/client prisma --depth=0 || true
+          npm ls @nestjs/common @nestjs/core @nestjs/platform-express @nestjs/swagger multer qs fast-uri hono @hono/node-server mysql2 valibot @prisma/adapter-mssql @prisma/client prisma || true
+          node - <<'NODE'
+          const lock = require('./package-lock.json');
+          for (const name of ['node_modules/prisma','node_modules/@prisma/client','node_modules/@prisma/adapter-mssql']) {
+            const version = lock.packages?.[name]?.version;
+            console.log(`${name}=${version}`);
+            if (version !== '7.8.0') throw new Error(`${name} changed from canonical 7.8.0`);
+          }
+          NODE
+          git diff --check
           git diff --stat -- package.json package-lock.json
-          git diff --name-only
-      - name: Candidate audit
+      - name: Candidate production audit
         run: npm audit --omit=dev || true
       - name: Prisma and build gate
         env:
