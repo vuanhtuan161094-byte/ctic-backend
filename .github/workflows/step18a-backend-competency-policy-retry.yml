@@ -1,0 +1,166 @@
+name: CMP Step 18A Backend Competency Policy Extraction Retry
+
+on:
+  push:
+    branches:
+      - feature/step18a-stabilization
+    paths:
+      - .github/workflows/step18a-backend-competency-policy-retry.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: "sqlserver://localhost:1433;database=cmp_ci;user=sa;password=CmpCiPass123;trustServerCertificate=true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/step18a-stabilization
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Extract shared competency policy
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('src/audit-team-appointments')
+          appointment_path = root / 'audit-team-appointments.service.ts'
+          competency_path = root / 'audit-team-competency.service.ts'
+          policy_path = root / 'audit-team-competency.policy.ts'
+          spec_path = root / 'audit-team-competency.policy.spec.ts'
+
+          if policy_path.exists() or spec_path.exists():
+              raise SystemExit('Policy files already exist; refusing ambiguous rewrite')
+
+          appointment = appointment_path.read_text(encoding='utf-8')
+          competency = competency_path.read_text(encoding='utf-8')
+
+          appointment_import_anchor = "import { AuditTeamReadinessService } from './audit-team-readiness.service';\n"
+          competency_import_anchor = "import { PrismaService } from '../prisma/prisma.service';\n"
+          policy_import = "import {\n    acceptedCompetencyRoles,\n    normalizeCompetencyValue,\n    normalizeStandardCode,\n} from './audit-team-competency.policy';\n"
+
+          if appointment.count(appointment_import_anchor) != 1:
+              raise SystemExit('Unexpected appointments import anchor count')
+          if competency.count(competency_import_anchor) != 1:
+              raise SystemExit('Unexpected competency import anchor count')
+
+          appointment = appointment.replace(appointment_import_anchor, appointment_import_anchor + policy_import, 1)
+          competency = competency.replace(competency_import_anchor, competency_import_anchor + policy_import, 1)
+
+          appointment, count = re.subn(
+              r"\n    private normalizeCompetencyValue\([\s\S]*?(?=\n    private projectProgramKey\()",
+              "",
+              appointment,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'Expected one appointments normalization block, got {count}')
+
+          appointment, count = re.subn(
+              r"\n    private acceptedProgramCompetencyRoles\([\s\S]*?(?=\n    private async getApprovedProjectPrograms\()",
+              "",
+              appointment,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'Expected one appointments role policy block, got {count}')
+
+          competency, count = re.subn(
+              r"\n    private normalize\([\s\S]*?(?=\n    private competencyMatchesScope\()",
+              "",
+              competency,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'Expected one competency normalize/role block, got {count}')
+
+          for old, new in [
+              ('this.normalizeCompetencyValue(', 'normalizeCompetencyValue('),
+              ('this.normalizeStandardCode(', 'normalizeStandardCode('),
+              ('this.acceptedProgramCompetencyRoles(', 'acceptedCompetencyRoles('),
+          ]:
+              hits = appointment.count(old)
+              if hits == 0:
+                  raise SystemExit(f'Expected appointments usage of {old}')
+              appointment = appointment.replace(old, new)
+
+          if any(value in appointment for value in [
+              'this.normalizeCompetencyValue(',
+              'this.normalizeStandardCode(',
+              'this.acceptedProgramCompetencyRoles(',
+          ]):
+              raise SystemExit('Legacy appointments policy calls remain')
+
+          for old, new in [
+              ('this.normalize(', 'normalizeCompetencyValue('),
+              ('this.acceptedCompetencyRoles(', 'acceptedCompetencyRoles('),
+          ]:
+              hits = competency.count(old)
+              if hits == 0:
+                  raise SystemExit(f'Expected competency usage of {old}')
+              competency = competency.replace(old, new)
+
+          if 'this.normalize(' in competency or 'this.acceptedCompetencyRoles(' in competency:
+              raise SystemExit('Legacy competency policy calls remain')
+
+          policy = """const COMPETENCY_ROLES_BY_TEAM_ROLE: Readonly<Record<string, readonly string[]>> = {\n    TEAM_LEADER: ['LEAD_AUDITOR', 'AUDITOR'],\n    AUDITOR: ['AUDITOR', 'LEAD_AUDITOR'],\n    TECHNICAL_EXPERT: ['TECHNICAL_EXPERT'],\n    WITNESS_EVALUATOR: ['WITNESS_EVALUATOR', 'LEAD_AUDITOR', 'AUDITOR'],\n};\n\nexport function normalizeCompetencyValue(\n    value?: string | null,\n): string {\n    return value\n        ?.trim()\n        .toUpperCase() ?? '';\n}\n\nexport function normalizeStandardCode(\n    value?: string | null,\n): string {\n    return normalizeCompetencyValue(value)\n        .replace(/[^A-Z0-9]/g, '');\n}\n\nexport function acceptedCompetencyRoles(\n    teamRole: string,\n): string[] {\n    const normalizedRole = normalizeCompetencyValue(teamRole);\n    return [...(COMPETENCY_ROLES_BY_TEAM_ROLE[normalizedRole] ?? [])];\n}\n"""
+
+          spec = """import {\n    acceptedCompetencyRoles,\n    normalizeCompetencyValue,\n    normalizeStandardCode,\n} from './audit-team-competency.policy';\n\ndescribe('audit team competency policy', () => {\n    it('normalizes competency values without changing business meaning', () => {\n        expect(normalizeCompetencyValue('  lead_auditor ')).toBe('LEAD_AUDITOR');\n        expect(normalizeCompetencyValue(null)).toBe('');\n    });\n\n    it('normalizes standard codes consistently for program matching', () => {\n        expect(normalizeStandardCode(' ISO 9001:2015 ')).toBe('ISO90012015');\n        expect(normalizeStandardCode('iso-14001:2015')).toBe('ISO140012015');\n    });\n\n    it('keeps the frozen team-role to competency-role mapping', () => {\n        expect(acceptedCompetencyRoles('TEAM_LEADER')).toEqual(['LEAD_AUDITOR', 'AUDITOR']);\n        expect(acceptedCompetencyRoles('auditor')).toEqual(['AUDITOR', 'LEAD_AUDITOR']);\n        expect(acceptedCompetencyRoles('TECHNICAL_EXPERT')).toEqual(['TECHNICAL_EXPERT']);\n        expect(acceptedCompetencyRoles('WITNESS_EVALUATOR')).toEqual([\n            'WITNESS_EVALUATOR',\n            'LEAD_AUDITOR',\n            'AUDITOR',\n        ]);\n        expect(acceptedCompetencyRoles('OBSERVER')).toEqual([]);\n    });\n});\n"""
+
+          appointment_path.write_text(appointment, encoding='utf-8')
+          competency_path.write_text(competency, encoding='utf-8')
+          policy_path.write_text(policy, encoding='utf-8')
+          spec_path.write_text(spec, encoding='utf-8')
+          PY
+      - name: Require bounded refactor diff
+        shell: bash
+        run: |
+          git add -N \
+            src/audit-team-appointments/audit-team-competency.policy.ts \
+            src/audit-team-appointments/audit-team-competency.policy.spec.ts
+          changed=$(git diff --name-only | sort)
+          expected=$(printf '%s\n' \
+            src/audit-team-appointments/audit-team-appointments.service.ts \
+            src/audit-team-appointments/audit-team-competency.policy.spec.ts \
+            src/audit-team-appointments/audit-team-competency.policy.ts \
+            src/audit-team-appointments/audit-team-competency.service.ts | sort)
+          if [ "$changed" != "$expected" ]; then
+            echo "Unexpected changed files:"
+            echo "$changed"
+            exit 1
+          fi
+          git diff --check
+      - name: Install dependencies
+        run: npm ci
+      - name: Prisma schema validation
+        run: npm run prisma:validate
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+      - name: Build
+        run: npm run build
+      - name: Full backend regression
+        run: npm test -- --runInBand
+      - name: Commit verified refactor
+        shell: bash
+        run: |
+          git config user.name "cmp-step18a-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            src/audit-team-appointments/audit-team-appointments.service.ts \
+            src/audit-team-appointments/audit-team-competency.service.ts \
+            src/audit-team-appointments/audit-team-competency.policy.ts \
+            src/audit-team-appointments/audit-team-competency.policy.spec.ts
+          git diff --cached --check
+          git commit -m "refactor(step18a): centralize audit team competency policy"
+          git push origin HEAD:feature/step18a-stabilization
