@@ -11,6 +11,7 @@ import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 import { WorkItemsService } from '../work-items/work-items.service';
 import { AuditTeamCompetencyService } from './audit-team-competency.service';
 import { AuditTeamProgramCompetencyService } from './audit-team-program-competency.service';
+import { AuditTeamScheduleConflictService } from './audit-team-schedule-conflict.service';
 import { AuditMandayAllocationService } from './audit-manday-allocation.service';
 import { ExpertResourceGovernanceService } from '../experts/expert-resource-governance.service';
 import { AuditTeamReadinessService } from './audit-team-readiness.service';
@@ -54,6 +55,7 @@ interface ProjectScopeMemberInput {
 export class AuditTeamAppointmentsService {
     private readonly resourceGovernance: ExpertResourceGovernanceService;
     private readonly programCompetencyService: AuditTeamProgramCompetencyService;
+    private readonly scheduleConflictService: AuditTeamScheduleConflictService;
     private readonly teamReadiness: AuditTeamReadinessService;
 
     private readonly detailInclude = {
@@ -161,12 +163,19 @@ export class AuditTeamAppointmentsService {
         @Optional()
         programCompetencyService?:
             AuditTeamProgramCompetencyService,
+
+        @Optional()
+        scheduleConflictService?:
+            AuditTeamScheduleConflictService,
     ) {
         this.resourceGovernance = new ExpertResourceGovernanceService(prisma);
         this.teamReadiness = new AuditTeamReadinessService(prisma);
         this.programCompetencyService =
             programCompetencyService ??
             new AuditTeamProgramCompetencyService(prisma);
+        this.scheduleConflictService =
+            scheduleConflictService ??
+            new AuditTeamScheduleConflictService(prisma);
     }
     private parseDate(
         value: string | Date,
@@ -732,75 +741,18 @@ export class AuditTeamAppointmentsService {
         );
     }
 
-    private async findScheduleOverlaps(
-        expertId: string,
-        startDate: Date,
-        endDate: Date,
-        excludeAppointmentId?: string,
-    ) {
-        return this.prisma.audit_team_members.findMany({
-            where: {
-                expert_id: expertId,
-                assignment_status: { not: 'cancelled' },
-                planned_start_date: { lte: endDate },
-                planned_end_date: { gte: startDate },
-                audit_team_appointments: {
-                    status: { in: ['draft', 'issued'] },
-                    ...(excludeAppointmentId
-                        ? { id: { not: excludeAppointmentId } }
-                        : {}),
-                },
-            },
-            orderBy: {
-                planned_start_date: 'asc',
-            },
-            include: {
-                experts: true,
-                audit_team_appointments: {
-                    include: {
-                        audit_plans: {
-                            select: {
-                                id: true,
-                                plan_code: true,
-                                project_id: true,
-                                audit_type: true,
-                                status: true,
-                                planned_start_date: true,
-                                planned_end_date: true,
-                                audit_event: {
-                                    select: {
-                                        event_type: true,
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        });
-    }
-
     private async findConflict(
         expertId: string,
         startDate: Date,
         endDate: Date,
         excludeAppointmentId?: string,
     ) {
-        const overlaps = await this.findScheduleOverlaps(
+        return this.scheduleConflictService.findConflict(
             expertId,
             startDate,
             endDate,
             excludeAppointmentId,
         );
-
-        return overlaps.find((assignment) => {
-            const plan = assignment.audit_team_appointments.audit_plans;
-            if (normalizeCompetencyValue(plan.audit_type) === normalizeCompetencyValue(this.projectTeamAuditType)) {
-                return false;
-            }
-            // GĐ1 là workload từ xa: không khóa cứng lịch onsite, chỉ phát cảnh báo mềm.
-            return !this.isStage1Plan(plan);
-        }) ?? null;
     }
 
     private async findStage1WarningConflicts(
@@ -809,17 +761,12 @@ export class AuditTeamAppointmentsService {
         endDate: Date,
         excludeAppointmentId?: string,
     ) {
-        const overlaps = await this.findScheduleOverlaps(
+        return this.scheduleConflictService.findStage1WarningConflicts(
             expertId,
             startDate,
             endDate,
             excludeAppointmentId,
         );
-
-        return overlaps.filter((assignment) => {
-            const plan = assignment.audit_team_appointments.audit_plans;
-            return this.isStage1Plan(plan);
-        });
     }
 
     private async validateMembers(

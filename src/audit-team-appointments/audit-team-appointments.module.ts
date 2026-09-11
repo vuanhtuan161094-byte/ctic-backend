@@ -6,6 +6,7 @@ import { AuditTeamAppointmentsController } from './audit-team-appointments.contr
 import { AuditTeamAppointmentsService } from './audit-team-appointments.service';
 import { AuditTeamCompetencyService } from './audit-team-competency.service';
 import { AuditTeamProgramCompetencyService } from './audit-team-program-competency.service';
+import { AuditTeamScheduleConflictService } from './audit-team-schedule-conflict.service';
 import { AuditMandayAllocationService } from './audit-manday-allocation.service';
 import { AuditTeamReadinessService } from './audit-team-readiness.service';
 
@@ -18,6 +19,7 @@ import { AuditTeamReadinessService } from './audit-team-readiness.service';
     AuditTeamAppointmentsService,
     AuditTeamCompetencyService,
     AuditTeamProgramCompetencyService,
+    AuditTeamScheduleConflictService,
     AuditMandayAllocationService,
     AuditTeamReadinessService,
   ],
