@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           echo '=== TOP_TS_FILES ==='
-          find src -type f -name '*.ts' -printf '%s\t%p\n' | sort -nr | head -40
+          find src -type f -name '*.ts' -printf '%s\t%p\n' | sort -nr | sed -n '1,40p'
       - name: Large service/controller/spec counts
         shell: bash
         run: |
@@ -38,14 +38,14 @@ jobs:
         shell: bash
         run: |
           echo '=== DEBT_MARKERS ==='
-          grep -RInE --include='*.ts' 'TODO|FIXME|HACK|LEGACY|legacy|deprecated|DEPRECATED' src | head -120 || true
+          grep -RInE --include='*.ts' 'TODO|FIXME|HACK|LEGACY|legacy|deprecated|DEPRECATED' src | sed -n '1,120p' || true
           echo '=== DEBT_MARKER_COUNT ==='
           grep -RInE --include='*.ts' 'TODO|FIXME|HACK|LEGACY|legacy|deprecated|DEPRECATED' src | wc -l || true
       - name: Direct service construction hotspots
         shell: bash
         run: |
           echo '=== DIRECT_NEW_SERVICE ==='
-          grep -RInE --include='*.ts' 'new [A-Za-z0-9_]+Service\(' src --exclude='*.spec.ts' | head -120 || true
+          grep -RInE --include='*.ts' 'new [A-Za-z0-9_]+Service\(' src --exclude='*.spec.ts' | sed -n '1,120p' || true
           echo '=== DIRECT_NEW_SERVICE_COUNT ==='
           grep -RInE --include='*.ts' 'new [A-Za-z0-9_]+Service\(' src --exclude='*.spec.ts' | wc -l || true
       - name: Hotspot method and Prisma profiles
@@ -63,11 +63,11 @@ jobs:
             printf 'lines='; wc -l < "$file"
             printf 'methods='; grep -Ec '^[[:space:]]+(private |public |protected )?(async )?[A-Za-z_][A-Za-z0-9_]*\(' "$file" || true
             echo '-- methods --'
-            grep -nE '^[[:space:]]+(private |public |protected )?(async )?[A-Za-z_][A-Za-z0-9_]*\(' "$file" | head -120 || true
+            grep -nE '^[[:space:]]+(private |public |protected )?(async )?[A-Za-z_][A-Za-z0-9_]*\(' "$file" | sed -n '1,120p' || true
             echo '-- prisma models --'
             grep -oE 'this\.prisma\.[A-Za-z0-9_]+' "$file" | sort | uniq -c | sort -nr || true
             echo '-- injected/direct services --'
-            grep -nE 'Service[,;)]|new [A-Za-z0-9_]+Service\(' "$file" | head -80 || true
+            grep -nE 'Service[,;)]|new [A-Za-z0-9_]+Service\(' "$file" | sed -n '1,80p' || true
           done
       - name: Source tests near largest hotspots
         shell: bash
