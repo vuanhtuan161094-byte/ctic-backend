@@ -6,6 +6,7 @@ on:
       - feature/step18a-stabilization
     paths:
       - .github/workflows/step18a-backend-skip-assignment-query.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,127 +27,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Skip unused assignment query
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-
-          service_path = Path('src/experts/expert-resource-governance.service.ts')
-          spec_path = Path('src/experts/expert-resource-governance.spec.ts')
-          service = service_path.read_text(encoding='utf-8')
-          spec = spec_path.read_text(encoding='utf-8')
-
-          old = """            this.prisma.audit_team_members.findMany({
-                    where: {
-                        expert_id: expertId,
-                        assignment_status: { not: 'cancelled' },
-                        planned_start_date: { lte: endDate },
-                        planned_end_date: { gte: startDate },
-                        audit_team_appointments: {
-                            status: { in: ['draft', 'issued'] },
-                            ...(options.excludeAppointmentId
-                                ? { id: { not: options.excludeAppointmentId } }
-                                : {}),
-                        },
-                    },
-                    include: {
-                        audit_team_appointments: {
-                            include: {
-                                audit_plans: {
-                                    select: {
-                                        id: true,
-                                        plan_code: true,
-                                        audit_type: true,
-                                        project_id: true,
-                                        audit_event: {
-                                            select: { event_type: true },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                    orderBy: { planned_start_date: 'asc' },
-                }),
-"""
-          new = """            includeAssignments
-                ? this.prisma.audit_team_members.findMany({
-                    where: {
-                        expert_id: expertId,
-                        assignment_status: { not: 'cancelled' },
-                        planned_start_date: { lte: endDate },
-                        planned_end_date: { gte: startDate },
-                        audit_team_appointments: {
-                            status: { in: ['draft', 'issued'] },
-                            ...(options.excludeAppointmentId
-                                ? { id: { not: options.excludeAppointmentId } }
-                                : {}),
-                        },
-                    },
-                    include: {
-                        audit_team_appointments: {
-                            include: {
-                                audit_plans: {
-                                    select: {
-                                        id: true,
-                                        plan_code: true,
-                                        audit_type: true,
-                                        project_id: true,
-                                        audit_event: {
-                                            select: { event_type: true },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                    orderBy: { planned_start_date: 'asc' },
-                })
-                : Promise.resolve([]),
-"""
-          if service.count(old) != 1:
-              raise SystemExit(f'Expected exactly one assignment query block, got {service.count(old)}')
-          service = service.replace(old, new, 1)
-
-          anchor = """    it('retries the complete cancellation transaction only for transient ENOTBEGUN', async () => {
-"""
-          test = """    it('skips assignment reads when assignment details are explicitly excluded', async () => {
-        const prisma = createPrismaMock();
-        const service = new ExpertResourceGovernanceService(
-            prisma as unknown as PrismaService,
-        );
-
-        const result = await service.evaluate(
-            'expert-1',
-            '2026-09-03',
-            '2026-09-03',
-            { includeAssignments: false },
-        );
-
-        expect(prisma.audit_team_members.findMany).not.toHaveBeenCalled();
-        expect(result.assignments).toEqual([]);
-        expect(result.workload.assigned_mandays).toBe(0);
-        expect(result.workload.engagement_count).toBe(0);
-    });
-
-"""
-          if spec.count(anchor) != 1:
-              raise SystemExit('Unexpected spec anchor count')
-          if "skips assignment reads when assignment details are explicitly excluded" in spec:
-              raise SystemExit('Optimization regression test already exists')
-          spec = spec.replace(anchor, test + anchor, 1)
-
-          service_path.write_text(service, encoding='utf-8')
-          spec_path.write_text(spec, encoding='utf-8')
-          PY
+      - name: Apply deterministic optimization
+        run: node scripts/step18a-skip-assignment-query.cjs
       - name: Require bounded optimization diff
         shell: bash
         run: |
           changed=$(git diff --name-only | sort)
-          expected=$(printf '%s\n' \
-            src/experts/expert-resource-governance.service.ts \
-            src/experts/expert-resource-governance.spec.ts | sort)
+          expected=$(printf '%s\n' src/experts/expert-resource-governance.service.ts src/experts/expert-resource-governance.spec.ts | sort)
           if [ "$changed" != "$expected" ]; then
             echo "Unexpected changed files:"
             echo "$changed"
