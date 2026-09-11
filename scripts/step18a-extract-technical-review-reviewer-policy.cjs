@@ -137,10 +137,13 @@ export class TechnicalReviewReviewerPolicyService {
     async getReviewerCandidates(
         plan: any,
     ) {
-        const conflictedIds = new Set(
+        const conflictedIds = new Set<string>(
             (plan.audit_team_appointment?.members ?? [])
                 .map((member: any) => member.experts?.user_id)
-                .filter(Boolean),
+                .filter(
+                    (value: unknown): value is string =>
+                        typeof value === 'string' && value.length > 0,
+                ),
         );
         const candidates = await this.prisma.users.findMany({
             where: {
