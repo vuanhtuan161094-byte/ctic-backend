@@ -6,6 +6,7 @@ on:
       - feature/step18a-stabilization
     paths:
       - .github/workflows/step18a-extract-scheduling-policy.yml
+      - scripts/step18a-extract-scheduling-policy.cjs
   workflow_dispatch:
 
 permissions:
