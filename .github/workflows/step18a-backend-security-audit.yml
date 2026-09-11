@@ -43,6 +43,18 @@ jobs:
           }));
           console.log('PROD_VULNERABILITIES=' + JSON.stringify(rows));
           NODE
+      - name: Production dependency paths
+        shell: bash
+        run: |
+          npm ls --omit=dev @nestjs/core @nestjs/platform-express @nestjs/schedule @nestjs/swagger multer js-yaml qs fast-uri prisma @prisma/config deepmerge-ts mysql2 hono @hono/node-server valibot || true
+      - name: Safe fix dry run
+        shell: bash
+        run: |
+          npm audit fix --omit=dev --package-lock-only --dry-run || true
+          git status --short
+      - name: Direct production updates available
+        shell: bash
+        run: npm outdated --omit=dev || true
       - name: Full dependency audit
         shell: bash
         run: |
