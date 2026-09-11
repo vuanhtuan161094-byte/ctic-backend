@@ -14,6 +14,11 @@ import { AuditMandayAllocationService } from './audit-manday-allocation.service'
 import { countsTowardAuditMandays } from './integrated-manday-allocation.engine';
 import { ExpertResourceGovernanceService } from '../experts/expert-resource-governance.service';
 import { AuditTeamReadinessService } from './audit-team-readiness.service';
+import {
+    acceptedCompetencyRoles,
+    normalizeCompetencyValue,
+    normalizeStandardCode,
+} from './audit-team-competency.policy';
 
 import {
     AuditTeamMemberDto,
@@ -321,39 +326,11 @@ export class AuditTeamAppointmentsService {
         return countsTowardAuditMandays(teamRole ?? '');
     }
 
-    private normalizeCompetencyValue(
-        value?: string | null,
-    ): string {
-        return value
-            ?.trim()
-            .toUpperCase() ?? '';
-    }
-
-    private normalizeStandardCode(
-        value?: string | null,
-    ): string {
-        return this.normalizeCompetencyValue(value)
-            .replace(/[^A-Z0-9]/g, '');
-    }
-
     private projectProgramKey(
         managementSystem?: string | null,
         standardCode?: string | null,
     ): string {
-        return `${this.normalizeCompetencyValue(managementSystem)}::${this.normalizeStandardCode(standardCode)}`;
-    }
-
-    private acceptedProgramCompetencyRoles(
-        teamRole: string,
-    ): string[] {
-        const role = this.normalizeCompetencyValue(teamRole);
-        const roleMap: Record<string, string[]> = {
-            TEAM_LEADER: ['LEAD_AUDITOR', 'AUDITOR'],
-            AUDITOR: ['AUDITOR', 'LEAD_AUDITOR'],
-            TECHNICAL_EXPERT: ['TECHNICAL_EXPERT'],
-            WITNESS_EVALUATOR: ['WITNESS_EVALUATOR', 'LEAD_AUDITOR', 'AUDITOR'],
-        };
-        return roleMap[role] ?? [];
+        return `${normalizeCompetencyValue(managementSystem)}::${normalizeStandardCode(standardCode)}`;
     }
 
     private async getApprovedProjectPrograms(
@@ -441,7 +418,7 @@ export class AuditTeamAppointmentsService {
         const projectTeamRoleByExpertId = new Map<string, string>(
             (projectAppointment?.members ?? []).map((member) => [
                 member.expert_id,
-                this.normalizeCompetencyValue(member.team_role),
+                normalizeCompetencyValue(member.team_role),
             ] as const),
         );
         const expertIds = Array.from(new Set(members.map((member) => member.expert_id)));
@@ -489,7 +466,7 @@ export class AuditTeamAppointmentsService {
                     });
                     continue;
                 }
-                if (inheritedRole !== this.normalizeCompetencyValue(member.team_role)) {
+                if (inheritedRole !== normalizeCompetencyValue(member.team_role)) {
                     errors.push('Vai trò thành viên phải giữ nguyên theo quyết định chỉ định đoàn cấp hồ sơ');
                     memberResults.push({
                         member_id: member.member_id,
@@ -502,7 +479,7 @@ export class AuditTeamAppointmentsService {
                 }
             }
 
-            const acceptedRoles = this.acceptedProgramCompetencyRoles(member.team_role);
+            const acceptedRoles = acceptedCompetencyRoles(member.team_role);
             if (!acceptedRoles.length) {
                 memberResults.push({
                     member_id: member.member_id,
@@ -543,11 +520,11 @@ export class AuditTeamAppointmentsService {
 
             for (const program of assignedPrograms) {
                 const matched = expertCompetencies.find((competency) =>
-                    acceptedRoles.includes(this.normalizeCompetencyValue(competency.competency_role)) &&
-                    this.normalizeCompetencyValue(competency.management_system) ===
-                        this.normalizeCompetencyValue(program.management_system) &&
-                    this.normalizeStandardCode(competency.standard_code) ===
-                        this.normalizeStandardCode(program.standard_code),
+                    acceptedRoles.includes(normalizeCompetencyValue(competency.competency_role)) &&
+                    normalizeCompetencyValue(competency.management_system) ===
+                        normalizeCompetencyValue(program.management_system) &&
+                    normalizeStandardCode(competency.standard_code) ===
+                        normalizeStandardCode(program.standard_code),
                 );
 
                 if (matched) {
@@ -556,8 +533,8 @@ export class AuditTeamAppointmentsService {
                         coveredProgramKeys.add(program.key);
                     }
                     if (
-                        this.normalizeCompetencyValue(member.team_role) === 'TEAM_LEADER' &&
-                        this.normalizeCompetencyValue(matched.competency_role) === 'LEAD_AUDITOR'
+                        normalizeCompetencyValue(member.team_role) === 'TEAM_LEADER' &&
+                        normalizeCompetencyValue(matched.competency_role) === 'LEAD_AUDITOR'
                     ) {
                         leaderQualified = true;
                     }
@@ -1043,15 +1020,15 @@ export class AuditTeamAppointmentsService {
                 );
                 const programCapabilities = programs.flatMap((program) => {
                     const matchingCompetencies = expertCompetencies.filter((competency) =>
-                        this.normalizeCompetencyValue(competency.management_system) ===
-                            this.normalizeCompetencyValue(program.management_system) &&
-                        this.normalizeStandardCode(competency.standard_code) ===
-                            this.normalizeStandardCode(program.standard_code),
+                        normalizeCompetencyValue(competency.management_system) ===
+                            normalizeCompetencyValue(program.management_system) &&
+                        normalizeStandardCode(competency.standard_code) ===
+                            normalizeStandardCode(program.standard_code),
                     );
                     if (!matchingCompetencies.length) return [];
                     const competencyRoles = Array.from(new Set(
                         matchingCompetencies.map((competency) =>
-                            this.normalizeCompetencyValue(competency.competency_role),
+                            normalizeCompetencyValue(competency.competency_role),
                         ),
                     ));
                     return [{
@@ -1291,7 +1268,7 @@ export class AuditTeamAppointmentsService {
 
         return overlaps.find((assignment) => {
             const plan = assignment.audit_team_appointments.audit_plans;
-            if (this.normalizeCompetencyValue(plan.audit_type) === this.normalizeCompetencyValue(this.projectTeamAuditType)) {
+            if (normalizeCompetencyValue(plan.audit_type) === normalizeCompetencyValue(this.projectTeamAuditType)) {
                 return false;
             }
             // GĐ1 là workload từ xa: không khóa cứng lịch onsite, chỉ phát cảnh báo mềm.
@@ -2714,7 +2691,7 @@ export class AuditTeamAppointmentsService {
 
         const hardAssignments = assignments.filter((assignment) => {
             const plan = assignment.audit_team_appointments.audit_plans;
-            if (this.normalizeCompetencyValue(plan.audit_type) === this.normalizeCompetencyValue(this.projectTeamAuditType)) {
+            if (normalizeCompetencyValue(plan.audit_type) === normalizeCompetencyValue(this.projectTeamAuditType)) {
                 return false;
             }
             return !this.isStage1Plan(plan);

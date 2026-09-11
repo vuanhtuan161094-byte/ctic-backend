@@ -5,6 +5,11 @@ import {
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import {
+    acceptedCompetencyRoles,
+    normalizeCompetencyValue,
+    normalizeStandardCode,
+} from './audit-team-competency.policy';
 
 export interface AuditTeamCompetencyCheckResult {
     appointment_id: string;
@@ -50,45 +55,6 @@ export class AuditTeamCompetencyService {
         private readonly prisma: PrismaService,
     ) { }
 
-    private normalize(
-        value?: string | null,
-    ): string {
-        return value
-            ?.trim()
-            .toUpperCase() ?? '';
-    }
-
-    private acceptedCompetencyRoles(
-        teamRole: string,
-    ): string[] {
-        const role =
-            this.normalize(
-                teamRole,
-            );
-
-        const roleMap:
-            Record<string, string[]> = {
-            TEAM_LEADER: [
-                'LEAD_AUDITOR',
-                'AUDITOR',
-            ],
-            AUDITOR: [
-                'AUDITOR',
-                'LEAD_AUDITOR',
-            ],
-            TECHNICAL_EXPERT: [
-                'TECHNICAL_EXPERT',
-            ],
-            WITNESS_EVALUATOR: [
-                'WITNESS_EVALUATOR',
-                'LEAD_AUDITOR',
-                'AUDITOR',
-            ],
-        };
-
-        return roleMap[role] ?? [];
-    }
-
     private competencyMatchesScope(
         competency: {
             management_system: string;
@@ -117,32 +83,32 @@ export class AuditTeamCompetencyService {
         const roleMatches =
             !acceptedRoles ||
             acceptedRoles.includes(
-                this.normalize(
+                normalizeCompetencyValue(
                     competency.competency_role,
                 ),
             );
 
         const managementSystemMatches =
-            this.normalize(
+            normalizeCompetencyValue(
                 competency.management_system,
             ) ===
-            this.normalize(
+            normalizeCompetencyValue(
                 projectScope.management_system,
             );
 
         const standardMatches =
-            this.normalize(
+            normalizeCompetencyValue(
                 competency.standard_code,
             ) ===
-            this.normalize(
+            normalizeCompetencyValue(
                 projectScope.standard_code,
             );
 
         const iafMatches =
-            this.normalize(
+            normalizeCompetencyValue(
                 competency.iaf_code,
             ) ===
-            this.normalize(
+            normalizeCompetencyValue(
                 projectScope
                     .nace_iaf_mapping
                     .iaf_scope
@@ -150,13 +116,13 @@ export class AuditTeamCompetencyService {
             );
 
         const naceMatches =
-            this.normalize(
+            normalizeCompetencyValue(
                 competency.scope_level,
             ) !== 'NACE' ||
-            this.normalize(
+            normalizeCompetencyValue(
                 competency.nace_code,
             ) ===
-            this.normalize(
+            normalizeCompetencyValue(
                 projectScope
                     .isic_nace_mapping
                     .target_code
@@ -512,7 +478,7 @@ export class AuditTeamCompetencyService {
 
         for (const member of appointment.members) {
             const acceptedRoles =
-                this.acceptedCompetencyRoles(
+                acceptedCompetencyRoles(
                     member.team_role,
                 );
 
@@ -580,22 +546,22 @@ export class AuditTeamCompetencyService {
 
                         return projectScopes.filter(
                             (projectScope) =>
-                                this.normalize(
+                                normalizeCompetencyValue(
                                     projectScope
                                         .nace_iaf_mapping
                                         .iaf_scope
                                         .iaf_code,
                                 ) ===
-                                this.normalize(
+                                normalizeCompetencyValue(
                                     memberScope.iaf_code,
                                 ) &&
-                                this.normalize(
+                                normalizeCompetencyValue(
                                     projectScope
                                         .isic_nace_mapping
                                         .target_code
                                         .code,
                                 ) ===
-                                this.normalize(
+                                normalizeCompetencyValue(
                                     memberScope.nace_code,
                                 ),
                         );
@@ -745,7 +711,7 @@ export class AuditTeamCompetencyService {
         const teamLeader =
             appointment.members.find(
                 (member) =>
-                    this.normalize(
+                    normalizeCompetencyValue(
                         member.team_role,
                     ) ===
                     'TEAM_LEADER',
