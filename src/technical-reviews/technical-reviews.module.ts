@@ -8,6 +8,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { TechnicalReviewsController } from './technical-reviews.controller';
 import { TechnicalReviewsService } from './technical-reviews.service';
 import { TechnicalReviewReviewerPolicyService } from './technical-review-reviewer-policy.service';
+import { TechnicalReviewQueryContextService } from './technical-review-query-context.service';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { TechnicalReviewReviewerPolicyService } from './technical-review-reviewe
   providers: [
     TechnicalReviewsService,
     TechnicalReviewReviewerPolicyService,
+    TechnicalReviewQueryContextService,
   ],
 
   exports: [
