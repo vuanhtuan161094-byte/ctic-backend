@@ -1412,14 +1412,15 @@ export class AuditTeamAppointmentsService {
         // nhưng independence theo khách hàng vẫn là hard gate.
         if (isProjectContext) {
             const effectiveDate = plan.planned_start_date ?? new Date();
+            const governanceByExpert = await this.resourceGovernance.evaluateMany(
+                expertIds,
+                effectiveDate,
+                effectiveDate,
+                { customerId, includeAssignments: false },
+            );
             for (const member of members) {
-                const governance = await this.resourceGovernance.evaluate(
-                    member.expert_id,
-                    effectiveDate,
-                    effectiveDate,
-                    { customerId, includeAssignments: false },
-                );
-                const block = governance.reasons.find(
+                const governance = governanceByExpert.get(member.expert_id);
+                const block = governance?.reasons.find(
                     (reason) => reason.code === 'INDEPENDENCE_CONFLICT',
                 );
                 if (block) {

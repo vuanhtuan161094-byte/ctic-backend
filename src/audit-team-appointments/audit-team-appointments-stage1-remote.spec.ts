@@ -50,6 +50,7 @@ function createHarness() {
     const prisma = {
         experts: {
             findUnique: jest.fn(),
+            findMany: jest.fn(),
         },
         audit_team_members: {
             findMany: jest.fn(),
@@ -120,6 +121,64 @@ describe('AuditTeamAppointmentsService — GĐ1 remote workload', () => {
         );
 
         expect(conflict).toBeNull();
+    });
+
+    it('batches project-team independence evaluation without per-member resource calls', async () => {
+        const { prisma, service } = createHarness();
+        prisma.experts.findMany.mockResolvedValue([
+            {
+                id: 'leader',
+                full_name: 'Lead Auditor',
+                status: 'active',
+                profile_status: 'APPROVED',
+                user_id: 'user-leader',
+                user_account: { id: 'user-leader', status: 'active' },
+            },
+            {
+                id: 'auditor',
+                full_name: 'Auditor',
+                status: 'active',
+                profile_status: 'APPROVED',
+                user_id: 'user-auditor',
+                user_account: { id: 'user-auditor', status: 'active' },
+            },
+        ]);
+        const governance = (service as any).resourceGovernance;
+        jest.spyOn(governance, 'getProjectCustomerId').mockResolvedValue('customer-1');
+        const evaluateSpy = jest.spyOn(governance, 'evaluate');
+        const evaluateManySpy = jest.spyOn(governance, 'evaluateMany').mockResolvedValue(new Map([
+            ['leader', { reasons: [] }],
+            ['auditor', { reasons: [] }],
+        ]));
+
+        const effectiveDate = new Date('2026-09-10T00:00:00.000Z');
+        await (service as any).validateMembers(
+            [
+                { expert_id: 'leader', team_role: 'TEAM_LEADER' },
+                { expert_id: 'auditor', team_role: 'AUDITOR' },
+            ],
+            {
+                id: 'project-team-plan',
+                project_id: 'project-1',
+                plan_code: 'DOSSIER-PRJ-1',
+                audit_type: 'project_team',
+                planned_start_date: effectiveDate,
+                planned_end_date: effectiveDate,
+                audit_event: null,
+            },
+            undefined,
+            false,
+            'admin-1',
+        );
+
+        expect(evaluateManySpy).toHaveBeenCalledTimes(1);
+        expect(evaluateManySpy).toHaveBeenCalledWith(
+            ['leader', 'auditor'],
+            effectiveDate,
+            effectiveDate,
+            { customerId: 'customer-1', includeAssignments: false },
+        );
+        expect(evaluateSpy).not.toHaveBeenCalled();
     });
 
     it('keeps Stage 1 man-days exact while allowing multiple F04 members', () => {

@@ -410,17 +410,7 @@ export class ExpertResourceGovernanceService {
                 orderBy: { declared_at: 'desc' },
             })
             : Promise.resolve([]);
-        const [periods, conflicts, assignments] = await Promise.all([
-            this.prisma.expert_availability_periods.findMany({
-                where: {
-                    expert_id: { in: expertIds },
-                    status: 'ACTIVE',
-                    start_datetime: { lte: endDate },
-                    end_datetime: { gte: startDate },
-                },
-                orderBy: { start_datetime: 'asc' },
-            }),
-            conflictQuery,
+        const loadAssignments = () =>
             this.prisma.audit_team_members.findMany({
                 where: {
                     expert_id: { in: expertIds },
@@ -448,7 +438,23 @@ export class ExpertResourceGovernanceService {
                     },
                 },
                 orderBy: { planned_start_date: 'asc' },
+            });
+        const assignmentQuery: Promise<Awaited<ReturnType<typeof loadAssignments>>> =
+            options.includeAssignments === false
+                ? Promise.resolve([])
+                : loadAssignments();
+        const [periods, conflicts, assignments] = await Promise.all([
+            this.prisma.expert_availability_periods.findMany({
+                where: {
+                    expert_id: { in: expertIds },
+                    status: 'ACTIVE',
+                    start_datetime: { lte: endDate },
+                    end_datetime: { gte: startDate },
+                },
+                orderBy: { start_datetime: 'asc' },
             }),
+            conflictQuery,
+            assignmentQuery,
         ]);
 
         const result = new Map<string, Awaited<ReturnType<ExpertResourceGovernanceService['evaluate']>>>();

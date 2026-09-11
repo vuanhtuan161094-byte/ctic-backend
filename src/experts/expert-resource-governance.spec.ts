@@ -242,6 +242,27 @@ describe('ExpertResourceGovernanceService', () => {
         expect(result.workload.engagement_count).toBe(0);
     });
 
+    it('batches assignment-free evaluations without reading audit assignments', async () => {
+        const prisma = createPrismaMock();
+        const service = new ExpertResourceGovernanceService(
+            prisma as unknown as PrismaService,
+        );
+
+        const result = await service.evaluateMany(
+            ['expert-1', 'expert-2'],
+            '2026-09-03',
+            '2026-09-03',
+            { customerId: 'customer-a', includeAssignments: false },
+        );
+
+        expect(prisma.expert_availability_periods.findMany).toHaveBeenCalledTimes(1);
+        expect(prisma.expert_customer_conflicts.findMany).toHaveBeenCalledTimes(1);
+        expect(prisma.audit_team_members.findMany).not.toHaveBeenCalled();
+        expect(Array.from(result.keys())).toEqual(['expert-1', 'expert-2']);
+        expect(result.get('expert-1')?.assignments).toEqual([]);
+        expect(result.get('expert-2')?.assignments).toEqual([]);
+    });
+
     it('retries the complete cancellation transaction only for transient ENOTBEGUN', async () => {
         const existing = {
             id: 'availability-1',
