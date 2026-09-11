@@ -76,6 +76,7 @@ for (const file of backendFiles) {
 
 const controller = read('src/audit-documents/audit-documents.controller.ts');
 const service = read('src/audit-documents/audit-documents.service.ts');
+const queryContext = read('src/audit-documents/audit-document-query-context.service.ts');
 const conversion = read('src/common/document-conversion.ts');
 const moduleSource = read('src/audit-documents/audit-documents.module.ts');
 const appModule = read('src/app.module.ts');
@@ -94,7 +95,7 @@ check(service.includes('convertDocxToPdf') && conversion.includes('tryLibreOffic
 check(service.includes("new Set([\n    'teamleader',\n    'leadauditor',\n    'auditor',"), 'Chỉ trưởng đoàn và đánh giá viên được tính man-day trong tài liệu');
 check(!service.match(/COUNTED_MANDAY_ROLES[\s\S]{0,200}technicalexpert/), 'Chuyên gia kỹ thuật không bị tính man-day');
 check(service.includes('cert_initial_mark') && service.includes('cert_recert_mark'), 'F.03 có dấu chọn loại chứng nhận động');
-check(service.includes("audit_type: 'project_team'"), 'F.04 lấy quyết định chỉ định đoàn ở cấp hồ sơ');
+check(queryContext.includes("audit_type: 'project_team'"), 'F.04 lấy quyết định chỉ định đoàn ở cấp hồ sơ');
 check(service.includes('this.projectTeamAppointment(plan)'), 'F.04 không phụ thuộc phân công riêng của từng PLAN');
 check(moduleSource.includes('DocumentFilesModule'), 'Module hồ sơ dùng chung kho tài liệu');
 check(appModule.includes('AuditDocumentsModule'), 'AuditDocumentsModule đã nối vào AppModule');

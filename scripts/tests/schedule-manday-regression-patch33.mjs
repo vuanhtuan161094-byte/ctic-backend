@@ -5,6 +5,8 @@ import process from 'node:process';
 const root = process.cwd();
 const servicePath = path.join(root, 'src', 'audit-team-appointments', 'audit-team-appointments.service.ts');
 const service = fs.readFileSync(servicePath, 'utf8');
+const schedulingPolicyPath = path.join(root, 'src', 'audit-team-appointments', 'audit-team-scheduling.policy.ts');
+const schedulingPolicy = fs.readFileSync(schedulingPolicyPath, 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -39,12 +41,12 @@ check('Chỉ chấp nhận bước 0,5 MD', !validMemberMandays('2026-08-06', '2
 check('Tổng 2 + 1,5 khớp kế hoạch 3,5 MD', Math.abs((2 + 1.5) - 3.5) < 0.001);
 check('Nhận diện ngày phân công trước kế hoạch', Date.parse('2026-08-06') < Date.parse('2026-08-07'));
 
-check('Backend có kiểm tra man-day theo nửa ngày', service.includes('isHalfDayIncrement'));
+check('Backend có kiểm tra man-day theo nửa ngày', schedulingPolicy.includes('isHalfDayIncrement'));
 check(
   'Backend chặn cả thiếu và vượt khi tổng MD không khớp',
-  service.includes('Math.abs(allocatedMandays - requiredMandays) > 0.001')
-    && service.includes('allocatedMandays < requiredMandays')
-    && service.includes('nhưng đang bố trí vượt'),
+  schedulingPolicy.includes('Math.abs(allocatedMandays - requiredMandays) > 0.001')
+    && schedulingPolicy.includes('allocatedMandays < requiredMandays')
+    && schedulingPolicy.includes('nhưng đang bố trí vượt'),
 );
 check('Backend trả lỗi ngày kèm mã kế hoạch và khoảng hợp lệ', service.includes('Hãy chọn ngày trong khoảng'));
 check('Backend loại trừ chỉ định hiện tại khi kiểm tra trùng', service.includes('excludeAppointmentId'));
