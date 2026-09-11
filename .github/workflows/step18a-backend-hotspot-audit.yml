@@ -1,0 +1,55 @@
+name: CMP Step 18A Backend Hotspot Audit
+
+on:
+  push:
+    branches:
+      - feature/step18a-stabilization
+    paths:
+      - .github/workflows/step18a-backend-hotspot-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/step18a-stabilization
+      - name: Largest TypeScript source files
+        shell: bash
+        run: |
+          echo '=== TOP_TS_FILES ==='
+          find src -type f -name '*.ts' -printf '%s\t%p\n' | sort -nr | head -40
+      - name: Large service/controller/spec counts
+        shell: bash
+        run: |
+          echo '=== FILE_COUNTS ==='
+          printf 'services='; find src -type f -name '*.service.ts' | wc -l
+          printf 'controllers='; find src -type f -name '*.controller.ts' | wc -l
+          printf 'specs='; find src -type f -name '*.spec.ts' | wc -l
+          printf 'ts_total='; find src -type f -name '*.ts' | wc -l
+          echo '=== TS_BYTES ==='
+          find src -type f -name '*.ts' -printf '%s\n' | awk '{s+=$1} END {print s}'
+      - name: Legacy debt markers
+        shell: bash
+        run: |
+          echo '=== DEBT_MARKERS ==='
+          grep -RInE --include='*.ts' 'TODO|FIXME|HACK|LEGACY|legacy|deprecated|DEPRECATED' src | head -120 || true
+          echo '=== DEBT_MARKER_COUNT ==='
+          grep -RInE --include='*.ts' 'TODO|FIXME|HACK|LEGACY|legacy|deprecated|DEPRECATED' src | wc -l || true
+      - name: Direct service construction hotspots
+        shell: bash
+        run: |
+          echo '=== DIRECT_NEW_SERVICE ==='
+          grep -RInE --include='*.ts' 'new [A-Za-z0-9_]+Service\(' src --exclude='*.spec.ts' | head -120 || true
+          echo '=== DIRECT_NEW_SERVICE_COUNT ==='
+          grep -RInE --include='*.ts' 'new [A-Za-z0-9_]+Service\(' src --exclude='*.spec.ts' | wc -l || true
+      - name: Source tests near largest hotspots
+        shell: bash
+        run: |
+          echo '=== AUDIT_TEAM_FILES ==='
+          find src/audit-team-appointments -maxdepth 1 -type f -printf '%s\t%f\n' | sort -nr
