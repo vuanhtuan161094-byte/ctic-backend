@@ -31,9 +31,12 @@ import type { ResourceActor } from '../security/resource-access.service';
 import { normalizeRoles } from '../security/security-request';
 import { AssignTechnicalReviewerDto } from './dto/assign-technical-reviewer.dto';
 import { ReassignTechnicalReviewerDto } from './dto/reassign-technical-reviewer.dto';
+import { TechnicalReviewReviewerPolicyService } from './technical-review-reviewer-policy.service';
 
 @Injectable()
 export class TechnicalReviewsService {
+    private readonly reviewerPolicyService: TechnicalReviewReviewerPolicyService;
+
     constructor(
         private readonly prisma: PrismaService,
         @Optional()
@@ -42,7 +45,13 @@ export class TechnicalReviewsService {
         private readonly delegations?: DelegationsService,
         @Optional()
         private readonly notifications?: NotificationEngineService,
-    ) { }
+        @Optional()
+        reviewerPolicyService?: TechnicalReviewReviewerPolicyService,
+    ) {
+        this.reviewerPolicyService =
+            reviewerPolicyService ??
+            new TechnicalReviewReviewerPolicyService(prisma);
+    }
 
     private transactionNotBegun(error: unknown): boolean {
         if (!error || typeof error !== 'object') return false;
@@ -1289,64 +1298,28 @@ export class TechnicalReviewsService {
         plan: any,
         reviewerId: string,
     ) {
-        const auditMember =
-            plan.audit_team_appointment
-                ?.members
-                ?.find(
-                    (member: any) =>
-                        member.experts
-                            ?.user_id ===
-                        reviewerId,
-                );
-
-        if (auditMember) {
-            throw new BadRequestException(
-                `Người thẩm xét không được là thành viên đoàn đánh giá (${auditMember.experts?.full_name ?? 'không xác định'}).`,
-            );
-        }
+        return this.reviewerPolicyService.assertReviewerIndependent(
+            plan,
+            reviewerId,
+        );
     }
 
     private async assertReviewerEligible(
         reviewerId: string,
     ) {
-        const reviewer = await this.prisma.users.findFirst({
-            where: {
-                id: reviewerId,
-                status: 'active',
-                user_roles: {
-                    some: {
-                        roles: {
-                            role_name: 'technical_reviewer',
-                        },
-                    },
-                },
-            },
-            select: {
-                id: true,
-                username: true,
-                full_name: true,
-                email: true,
-            },
-        });
-        if (!reviewer) {
-            throw new BadRequestException(
-                'Người được chọn không hoạt động hoặc không đủ eligibility Người thẩm xét kỹ thuật',
-            );
-        }
-        return reviewer;
+        return this.reviewerPolicyService.assertReviewerEligible(
+            reviewerId,
+        );
     }
 
     private assertAssignmentActor(
         actor: ResourceActor,
         adminOverrideReason?: string,
     ) {
-        const roles = normalizeRoles(actor.roles);
-        if (roles.includes('COORDINATOR')) return;
-        if (roles.includes('ADMIN') && adminOverrideReason?.trim()) return;
-        if (roles.includes('ADMIN')) {
-            throw new BadRequestException('ADMIN phải nhập lý do override khi phân công nghiệp vụ');
-        }
-        throw new BadRequestException('Chỉ Điều phối viên hoặc ADMIN override được phân công người thẩm xét');
+        return this.reviewerPolicyService.assertAssignmentActor(
+            actor,
+            adminOverrideReason,
+        );
     }
 
     async getReviewerCandidates(
@@ -1354,30 +1327,9 @@ export class TechnicalReviewsService {
     ) {
         const context = await this.loadPlanReviewContext(planId);
         this.assertReportReady(context.report);
-        const conflictedIds = new Set(
-            (context.plan.audit_team_appointment?.members ?? [])
-                .map((member: any) => member.experts?.user_id)
-                .filter(Boolean),
+        return this.reviewerPolicyService.getReviewerCandidates(
+            context.plan,
         );
-        const candidates = await this.prisma.users.findMany({
-            where: {
-                status: 'active',
-                id: { notIn: Array.from(conflictedIds) },
-                user_roles: { some: { roles: { role_name: 'technical_reviewer' } } },
-            },
-            select: {
-                id: true,
-                username: true,
-                full_name: true,
-                email: true,
-            },
-            orderBy: [{ full_name: 'asc' }, { username: 'asc' }],
-        });
-        return candidates.map((candidate) => ({
-            ...candidate,
-            eligible: true,
-            independent: true,
-        }));
     }
 
     async assertCanPerformReview(
