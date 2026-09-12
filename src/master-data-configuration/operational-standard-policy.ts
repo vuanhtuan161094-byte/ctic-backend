@@ -2,6 +2,18 @@ import { BadRequestException } from '@nestjs/common';
 
 import type { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * Application intake is currently implemented end-to-end for these management
+ * system programmes. Master/configuration data may remain more generic, but an
+ * edition must not become selectable for a new application until the runtime
+ * review, capability and manday workflow supports its programme.
+ */
+export const APPLICATION_RUNTIME_PROGRAM_CODES = [
+    'QMS',
+    'EMS',
+    'OHSMS',
+];
+
 export function operationalStandardDate() {
     const now = new Date();
     return new Date(Date.UTC(
@@ -20,6 +32,7 @@ export function operationalStandardWhere(at = operationalStandardDate()) {
             { withdrawn_at: { gt: at } },
         ],
         scheme: {
+            code: { in: APPLICATION_RUNTIME_PROGRAM_CODES },
             status: 'ACTIVE',
             AND: [
                 {
