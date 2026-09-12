@@ -35,6 +35,7 @@ import { StandardEditionLifecycleService } from './standard-edition-lifecycle.se
 
 type AuthRequest = { user: { userId?: string; id?: string; sub?: string } };
 const INTERNAL_READ_ROLES = ['ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER', 'AUDITOR', 'LEAD_AUDITOR', 'DECISION_MAKER'];
+const APPLICATION_STANDARD_ROLES = ['ADMIN', 'STAFF', 'SALES', 'COORDINATOR', 'TECHNICAL_REVIEWER'];
 
 @Controller('master-data-configuration')
 @ApiTags('Master data, configuration and import')
@@ -76,6 +77,13 @@ export class MasterDataConfigurationController {
     @Permissions('classifications.read')
     listStandards(@Query('search') search?: string, @Query('selectable') selectable?: string) {
         return this.service.listStandards(search, selectable === 'true');
+    }
+
+    @Get('operational-standards')
+    @Roles(...APPLICATION_STANDARD_ROLES)
+    @Permissions('applications.read')
+    listOperationalStandards() {
+        return this.standardLifecycle.listOperationalStandardEditions();
     }
 
     @Post('standards')
