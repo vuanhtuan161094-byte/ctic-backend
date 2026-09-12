@@ -1,0 +1,386 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str, label: str) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    if old not in text:
+        raise SystemExit(f"anchor missing: {label} in {path}")
+    if text.count(old) != 1:
+        raise SystemExit(f"anchor not unique: {label} in {path}")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+helper = r'''import { BadRequestException } from '@nestjs/common';
+
+import type { PrismaService } from '../prisma/prisma.service';
+
+export function operationalStandardDate() {
+    const now = new Date();
+    return new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+    ));
+}
+
+export function operationalStandardWhere(at = operationalStandardDate()) {
+    return {
+        status: 'ACTIVE',
+        effective_from: { lte: at },
+        OR: [
+            { withdrawn_at: null },
+            { withdrawn_at: { gt: at } },
+        ],
+        scheme: {
+            status: 'ACTIVE',
+            AND: [
+                {
+                    OR: [
+                        { effective_from: null },
+                        { effective_from: { lte: at } },
+                    ],
+                },
+                {
+                    OR: [
+                        { effective_to: null },
+                        { effective_to: { gte: at } },
+                    ],
+                },
+                {
+                    configurations: {
+                        some: {
+                            status: 'ACTIVE',
+                            effective_from: { lte: at },
+                            OR: [
+                                { effective_to: null },
+                                { effective_to: { gte: at } },
+                            ],
+                        },
+                    },
+                },
+            ],
+        },
+    } as const;
+}
+
+export function standardEditionBusinessLabel(input: {
+    standard_code: string;
+    edition: string;
+}) {
+    const code = input.standard_code.trim();
+    const edition = input.edition.trim();
+    return edition && !code.toUpperCase().includes(edition.toUpperCase())
+        ? `${code}:${edition}`
+        : code;
+}
+
+function normalizeLabel(value: string) {
+    return value.trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+export function parseStandardSelection(value: string) {
+    return value
+        .split(/\s+\+\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+export async function assertOperationalStandardSelection(
+    prisma: Pick<PrismaService, 'standard_editions'>,
+    value: string,
+) {
+    const requested = parseStandardSelection(value);
+    if (!requested.length) {
+        throw new BadRequestException('Chọn ít nhất một tiêu chuẩn đang áp dụng');
+    }
+
+    const rows = await prisma.standard_editions.findMany({
+        where: operationalStandardWhere(),
+        select: {
+            standard_code: true,
+            edition: true,
+        },
+        take: 300,
+    });
+    const allowed = new Set(
+        rows.map((row) => normalizeLabel(standardEditionBusinessLabel(row))),
+    );
+    const invalid = requested.filter((item) => !allowed.has(normalizeLabel(item)));
+
+    if (invalid.length) {
+        throw new BadRequestException(
+            `Tiêu chuẩn không còn sẵn sàng cho hồ sơ mới: ${invalid.join(', ')}. ` +
+            'Hãy chọn lại từ danh sách Chương trình & tiêu chuẩn đang áp dụng.',
+        );
+    }
+}
+'''
+Path("src/master-data-configuration/operational-standard-policy.ts").write_text(helper, encoding="utf-8")
+
+lifecycle = Path("src/master-data-configuration/standard-edition-lifecycle.service.ts")
+text = lifecycle.read_text(encoding="utf-8")
+import_anchor = "import { SecurityAuditService } from '../security/security-audit.service';\n"
+if "./operational-standard-policy" not in text:
+    if import_anchor not in text:
+        raise SystemExit("lifecycle import anchor missing")
+    text = text.replace(import_anchor, import_anchor + "import { operationalStandardWhere } from './operational-standard-policy';\n", 1)
+start = text.index("    async listOperationalStandardEditions() {")
+end = text.index("\n    async createStandardEdition(", start)
+new_method = '''    async listOperationalStandardEditions() {
+        return this.prisma.standard_editions.findMany({
+            where: operationalStandardWhere(this.todayUtc()),
+            include: { scheme: true },
+            orderBy: [
+                { scheme: { code: 'asc' } },
+                { standard_code: 'asc' },
+                { effective_from: 'desc' },
+            ],
+            take: 300,
+        });
+    }
+'''
+text = text[:start] + new_method + text[end:]
+lifecycle.write_text(text, encoding="utf-8")
+
+app_service = Path("src/certification-applications/certification-applications.service.ts")
+text = app_service.read_text(encoding="utf-8")
+import_anchor = "import { PrismaService } from '../prisma/prisma.service';\n"
+if "assertOperationalStandardSelection" not in text:
+    if import_anchor not in text:
+        raise SystemExit("application service import anchor missing")
+    text = text.replace(import_anchor, import_anchor + "import { assertOperationalStandardSelection } from '../master-data-configuration/operational-standard-policy';\n", 1)
+ctor_anchor = '''    constructor(
+        private readonly prisma: PrismaService,
+    ) { }
+'''
+ctor_new = '''    constructor(
+        private readonly prisma: PrismaService,
+    ) { }
+
+    async validateOperationalStandardSelection(value: string) {
+        await assertOperationalStandardSelection(this.prisma, value);
+    }
+'''
+if "validateOperationalStandardSelection" not in text:
+    if ctor_anchor not in text:
+        raise SystemExit("application service constructor anchor missing")
+    text = text.replace(ctor_anchor, ctor_new, 1)
+create_anchor = '''        if (
+            (options?.requireDeclaration ?? true) &&
+            !dto.declaration_accepted
+        ) {
+            throw new BadRequestException(
+                'Khách hàng phải xác nhận cam kết thông tin đăng ký',
+            );
+        }
+
+        const sites = (dto.sites ?? [])
+'''
+create_new = '''        if (
+            (options?.requireDeclaration ?? true) &&
+            !dto.declaration_accepted
+        ) {
+            throw new BadRequestException(
+                'Khách hàng phải xác nhận cam kết thông tin đăng ký',
+            );
+        }
+
+        await this.validateOperationalStandardSelection(dto.standard_name);
+
+        const sites = (dto.sites ?? [])
+'''
+if "await this.validateOperationalStandardSelection(dto.standard_name);" not in text:
+    if create_anchor not in text:
+        raise SystemExit("application create validation anchor missing")
+    text = text.replace(create_anchor, create_new, 1)
+update_anchor = '''        if (existing.certification_projects.length) {
+            throw new BadRequestException(
+                `Đơn đã liên kết với hồ sơ ${existing.certification_projects[0].project_code}; không thể sửa thông tin gốc`,
+            );
+        }
+
+        const latestReview = existing.application_reviews[0];
+'''
+update_new = '''        if (existing.certification_projects.length) {
+            throw new BadRequestException(
+                `Đơn đã liên kết với hồ sơ ${existing.certification_projects[0].project_code}; không thể sửa thông tin gốc`,
+            );
+        }
+
+        if (
+            this.normalizedText(existing.standard_name).toUpperCase() !==
+            this.normalizedText(dto.standard_name).toUpperCase()
+        ) {
+            await this.validateOperationalStandardSelection(dto.standard_name);
+        }
+
+        const latestReview = existing.application_reviews[0];
+'''
+if "this.normalizedText(existing.standard_name).toUpperCase() !==" not in text:
+    if update_anchor not in text:
+        raise SystemExit("application update validation anchor missing")
+    text = text.replace(update_anchor, update_new, 1)
+app_service.write_text(text, encoding="utf-8")
+
+portal_service = Path("src/customer-portal/customer-portal.service.ts")
+text = portal_service.read_text(encoding="utf-8")
+prisma_import = '''import {
+    PrismaService,
+} from '../prisma/prisma.service';
+'''
+if "operationalStandardWhere" not in text:
+    if prisma_import not in text:
+        raise SystemExit("portal prisma import anchor missing")
+    text = text.replace(prisma_import, prisma_import + "import { operationalStandardWhere, standardEditionBusinessLabel } from '../master-data-configuration/operational-standard-policy';\n", 1)
+normalize_anchor = '''    private normalize(value?: string | null) {
+        return (value ?? '')
+            .trim()
+            .toLowerCase();
+    }
+'''
+portal_method = '''    private normalize(value?: string | null) {
+        return (value ?? '')
+            .trim()
+            .toLowerCase();
+    }
+
+    async getOperationalStandards() {
+        const rows = await this.prisma.standard_editions.findMany({
+            where: operationalStandardWhere(),
+            select: {
+                id: true,
+                scheme_id: true,
+                standard_code: true,
+                standard_name: true,
+                edition: true,
+                effective_from: true,
+                scheme: {
+                    select: {
+                        id: true,
+                        code: true,
+                        name: true,
+                    },
+                },
+            },
+            orderBy: [
+                { scheme: { code: 'asc' } },
+                { standard_code: 'asc' },
+                { effective_from: 'desc' },
+            ],
+            take: 300,
+        });
+
+        return rows.map((row) => ({
+            ...row,
+            label: standardEditionBusinessLabel(row),
+        }));
+    }
+'''
+if "async getOperationalStandards()" not in text:
+    if normalize_anchor not in text:
+        raise SystemExit("portal normalize anchor missing")
+    text = text.replace(normalize_anchor, portal_method, 1)
+submit_anchor = '''        if (
+            !application.declaration_accepted ||
+            !application.standard_name.trim() ||
+            !application.certification_scope.trim()
+        ) {
+            throw new BadRequestException(
+                'Đơn chưa đủ thông tin bắt buộc hoặc chưa xác nhận cam kết',
+            );
+        }
+
+        const updated =
+'''
+submit_new = '''        if (
+            !application.declaration_accepted ||
+            !application.standard_name.trim() ||
+            !application.certification_scope.trim()
+        ) {
+            throw new BadRequestException(
+                'Đơn chưa đủ thông tin bắt buộc hoặc chưa xác nhận cam kết',
+            );
+        }
+
+        await this.applications.validateOperationalStandardSelection(
+            application.standard_name,
+        );
+
+        const updated =
+'''
+if "await this.applications.validateOperationalStandardSelection(" not in text:
+    if submit_anchor not in text:
+        raise SystemExit("portal submit anchor missing")
+    text = text.replace(submit_anchor, submit_new, 1)
+portal_service.write_text(text, encoding="utf-8")
+
+portal_controller = Path("src/customer-portal/customer-portal.controller.ts")
+text = portal_controller.read_text(encoding="utf-8")
+applications_anchor = '''    @Get('me/applications')
+    @ApiOperation({
+        summary: 'Danh sách đơn đăng ký của customer hiện tại',
+    })
+'''
+endpoint = '''    @Get('me/operational-standards')
+    @ApiOperation({
+        summary: 'Danh sách tiêu chuẩn đang sẵn sàng cho đơn đăng ký mới',
+    })
+    operationalStandards() {
+        return this.customerPortalService.getOperationalStandards();
+    }
+
+    @Get('me/applications')
+    @ApiOperation({
+        summary: 'Danh sách đơn đăng ký của customer hiện tại',
+    })
+'''
+if "@Get('me/operational-standards')" not in text:
+    if applications_anchor not in text:
+        raise SystemExit("portal controller applications anchor missing")
+    text = text.replace(applications_anchor, endpoint, 1)
+portal_controller.write_text(text, encoding="utf-8")
+
+auto_spec = Path("src/certification-applications/certification-applications-auto-code.spec.ts")
+text = auto_spec.read_text(encoding="utf-8")
+if "standard_editions:" not in text:
+    insertion = '''            standard_editions: {
+                findMany: jest.fn().mockResolvedValue([
+                    { standard_code: 'ISO 9001', edition: '2015' },
+                ]),
+            },
+'''
+    text = text.replace("        const prisma = {\n", "        const prisma = {\n" + insertion)
+auto_spec.write_text(text, encoding="utf-8")
+
+policy_spec = r'''import { BadRequestException } from '@nestjs/common';
+
+import { assertOperationalStandardSelection } from './operational-standard-policy';
+
+describe('operational standard policy', () => {
+    function harness(rows: Array<{ standard_code: string; edition: string }>) {
+        return {
+            standard_editions: {
+                findMany: jest.fn().mockResolvedValue(rows),
+            },
+        } as any;
+    }
+
+    it('accepts a single operational edition and an integrated selection', async () => {
+        const prisma = harness([
+            { standard_code: 'ISO 9001', edition: '2015' },
+            { standard_code: 'ISO 14001', edition: '2015' },
+        ]);
+        await expect(assertOperationalStandardSelection(prisma, 'ISO 9001:2015')).resolves.toBeUndefined();
+        await expect(assertOperationalStandardSelection(prisma, 'ISO 9001:2015 + ISO 14001:2015')).resolves.toBeUndefined();
+    });
+
+    it('rejects a standard that is not operational for new business', async () => {
+        const prisma = harness([{ standard_code: 'ISO 9001', edition: '2015' }]);
+        await expect(
+            assertOperationalStandardSelection(prisma, 'ISO 9001:2026'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+    });
+});
+'''
+Path("src/master-data-configuration/operational-standard-policy.spec.ts").write_text(policy_spec, encoding="utf-8")
