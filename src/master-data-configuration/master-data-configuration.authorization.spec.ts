@@ -17,8 +17,16 @@ describe('MasterDataConfigurationController authorization', () => {
         expect(metadata(PERMISSIONS_KEY, method)).toEqual(['classifications.read']);
     });
 
+    it('exposes operational standards only to internal application users', () => {
+        const roles = metadata(ROLES_KEY, 'listOperationalStandards') as string[];
+        expect(roles).toEqual(expect.arrayContaining(['ADMIN', 'STAFF', 'SALES', 'COORDINATOR']));
+        expect(roles).not.toContain('CUSTOMER');
+        expect(metadata(PERMISSIONS_KEY, 'listOperationalStandards')).toEqual(['applications.read']);
+    });
+
     it.each([
         'createScheme', 'updateScheme', 'createStandard', 'updateStandard',
+        'stopStandard', 'restoreStandard', 'deleteStandard',
         'createConfiguration', 'activateConfiguration', 'saveOrganizationProfile',
         'createNumberingSeries', 'importDefinitions', 'listImports', 'validateImport',
         'getImport', 'commitImport',
