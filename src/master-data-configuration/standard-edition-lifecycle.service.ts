@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     ConflictException,
     Injectable,
     NotFoundException,
@@ -26,6 +27,55 @@ export class StandardEditionLifecycleService {
                 { standard_name: { contains: edition } },
             ],
         };
+    }
+
+    async restoreStandardEdition(id: string, userId: string) {
+        const row = await this.prisma.standard_editions.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                standard_code: true,
+                edition: true,
+                status: true,
+                withdrawn_at: true,
+            },
+        });
+        if (!row) {
+            throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
+        }
+
+        const stoppedByDate = Boolean(
+            row.withdrawn_at && row.withdrawn_at.getTime() <= Date.now(),
+        );
+        const restorable = row.status === 'WITHDRAWN'
+            || (row.status === 'ACTIVE' && stoppedByDate);
+
+        if (!restorable) {
+            throw new BadRequestException(
+                `${this.label(row)} không ở trạng thái có thể khôi phục áp dụng.`,
+            );
+        }
+
+        const restored = await this.prisma.standard_editions.update({
+            where: { id },
+            data: {
+                status: 'ACTIVE',
+                withdrawn_at: null,
+                updated_by: userId,
+            },
+            include: { scheme: true },
+        });
+
+        await this.audit.write({
+            userId,
+            action: 'MASTER_STANDARD_RESTORED',
+            entityType: 'standard_edition',
+            entityId: id,
+            outcome: 'success',
+            statusCode: 200,
+        });
+
+        return restored;
     }
 
     async deleteStandardEdition(id: string, userId: string) {
