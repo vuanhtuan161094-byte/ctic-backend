@@ -20,6 +20,15 @@ export class StandardEditionLifecycleService {
         return code.includes(edition) ? code : `${code}:${edition}`;
     }
 
+    private todayUtc() {
+        const now = new Date();
+        return new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate(),
+        ));
+    }
+
     private historyMatch(standardCode: string, edition: string) {
         return {
             AND: [
@@ -27,6 +36,58 @@ export class StandardEditionLifecycleService {
                 { standard_name: { contains: edition } },
             ],
         };
+    }
+
+    async stopStandardEdition(id: string, userId: string) {
+        const row = await this.prisma.standard_editions.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                standard_code: true,
+                edition: true,
+                status: true,
+                effective_from: true,
+                withdrawn_at: true,
+            },
+        });
+        if (!row) {
+            throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
+        }
+
+        const today = this.todayUtc();
+        const alreadyStopped = row.status !== 'ACTIVE'
+            || Boolean(row.withdrawn_at && row.withdrawn_at <= today);
+        if (alreadyStopped) {
+            throw new BadRequestException(
+                `${this.label(row)} đã ngừng áp dụng.`,
+            );
+        }
+        if (row.effective_from > today) {
+            throw new BadRequestException(
+                `${this.label(row)} chưa đến ngày áp dụng. Nếu tạo nhầm, hãy sửa hoặc xóa phiên bản khi chưa được sử dụng.`,
+            );
+        }
+
+        const stopped = await this.prisma.standard_editions.update({
+            where: { id },
+            data: {
+                status: 'WITHDRAWN',
+                withdrawn_at: today,
+                updated_by: userId,
+            },
+            include: { scheme: true },
+        });
+
+        await this.audit.write({
+            userId,
+            action: 'MASTER_STANDARD_STOPPED',
+            entityType: 'standard_edition',
+            entityId: id,
+            outcome: 'success',
+            statusCode: 200,
+        });
+
+        return stopped;
     }
 
     async restoreStandardEdition(id: string, userId: string) {
