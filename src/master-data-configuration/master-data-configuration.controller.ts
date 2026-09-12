@@ -92,6 +92,13 @@ export class MasterDataConfigurationController {
         return this.service.updateStandard(id, dto, this.userId(request));
     }
 
+    @Post('standards/:id/restore')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    restoreStandard(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthRequest) {
+        return this.standardLifecycle.restoreStandardEdition(id, this.userId(request));
+    }
+
     @Delete('standards/:id')
     @Roles('ADMIN')
     @Permissions('classifications.manage')
