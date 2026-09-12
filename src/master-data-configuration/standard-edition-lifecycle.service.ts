@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecurityAuditService } from '../security/security-audit.service';
+import { operationalStandardWhere } from './operational-standard-policy';
 import {
     CreateStandardEditionDto,
     UpdateStandardEditionDto,
@@ -75,45 +76,8 @@ export class StandardEditionLifecycleService {
     }
 
     async listOperationalStandardEditions() {
-        const now = this.todayUtc();
         return this.prisma.standard_editions.findMany({
-            where: {
-                status: 'ACTIVE',
-                effective_from: { lte: now },
-                OR: [
-                    { withdrawn_at: null },
-                    { withdrawn_at: { gt: now } },
-                ],
-                scheme: {
-                    status: 'ACTIVE',
-                    AND: [
-                        {
-                            OR: [
-                                { effective_from: null },
-                                { effective_from: { lte: now } },
-                            ],
-                        },
-                        {
-                            OR: [
-                                { effective_to: null },
-                                { effective_to: { gte: now } },
-                            ],
-                        },
-                        {
-                            configurations: {
-                                some: {
-                                    status: 'ACTIVE',
-                                    effective_from: { lte: now },
-                                    OR: [
-                                        { effective_to: null },
-                                        { effective_to: { gte: now } },
-                                    ],
-                                },
-                            },
-                        },
-                    ],
-                },
-            },
+            where: operationalStandardWhere(this.todayUtc()),
             include: { scheme: true },
             orderBy: [
                 { scheme: { code: 'asc' } },

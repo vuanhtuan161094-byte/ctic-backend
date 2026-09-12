@@ -184,6 +184,14 @@ export class CustomerPortalController {
         );
     }
 
+    @Get('me/operational-standards')
+    @ApiOperation({
+        summary: 'Danh sách tiêu chuẩn đang sẵn sàng cho đơn đăng ký mới',
+    })
+    operationalStandards() {
+        return this.customerPortalService.getOperationalStandards();
+    }
+
     @Get('me/applications')
     @ApiOperation({
         summary: 'Danh sách đơn đăng ký của customer hiện tại',

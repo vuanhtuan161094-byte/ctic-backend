@@ -12,6 +12,7 @@ import {
 import {
     PrismaService,
 } from '../prisma/prisma.service';
+import { operationalStandardWhere, standardEditionBusinessLabel } from '../master-data-configuration/operational-standard-policy';
 import {
     ResourceAccessService,
     type ResourceActor,
@@ -67,6 +68,38 @@ export class CustomerPortalService {
         return (value ?? '')
             .trim()
             .toLowerCase();
+    }
+
+    async getOperationalStandards() {
+        const rows = await this.prisma.standard_editions.findMany({
+            where: operationalStandardWhere(),
+            select: {
+                id: true,
+                scheme_id: true,
+                standard_code: true,
+                standard_name: true,
+                edition: true,
+                effective_from: true,
+                scheme: {
+                    select: {
+                        id: true,
+                        code: true,
+                        name: true,
+                    },
+                },
+            },
+            orderBy: [
+                { scheme: { code: 'asc' } },
+                { standard_code: 'asc' },
+                { effective_from: 'desc' },
+            ],
+            take: 300,
+        });
+
+        return rows.map((row) => ({
+            ...row,
+            label: standardEditionBusinessLabel(row),
+        }));
     }
 
     private isCustomerSafeNotification(input: {
@@ -1743,6 +1776,10 @@ export class CustomerPortalService {
                 'Đơn chưa đủ thông tin bắt buộc hoặc chưa xác nhận cam kết',
             );
         }
+
+        await this.applications.validateOperationalStandardSelection(
+            application.standard_name,
+        );
 
         const updated =
             await this.prisma.certification_applications.update({

@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { assertOperationalStandardSelection } from '../master-data-configuration/operational-standard-policy';
 import { CreateCertificationApplicationDto } from './dto/create-certification-application.dto';
 
 @Injectable()
@@ -15,6 +16,10 @@ export class CertificationApplicationsService {
     constructor(
         private readonly prisma: PrismaService,
     ) { }
+
+    async validateOperationalStandardSelection(value: string) {
+        await assertOperationalStandardSelection(this.prisma, value);
+    }
 
     private prismaErrorCode(error: unknown) {
         if (
@@ -173,6 +178,8 @@ export class CertificationApplicationsService {
                 'Khách hàng phải xác nhận cam kết thông tin đăng ký',
             );
         }
+
+        await this.validateOperationalStandardSelection(dto.standard_name);
 
         const sites = (dto.sites ?? [])
             .filter((site) => site.address.trim())
@@ -488,6 +495,13 @@ export class CertificationApplicationsService {
             throw new BadRequestException(
                 `Đơn đã liên kết với hồ sơ ${existing.certification_projects[0].project_code}; không thể sửa thông tin gốc`,
             );
+        }
+
+        if (
+            this.normalizedText(existing.standard_name).toUpperCase() !==
+            this.normalizedText(dto.standard_name).toUpperCase()
+        ) {
+            await this.validateOperationalStandardSelection(dto.standard_name);
         }
 
         const latestReview = existing.application_reviews[0];

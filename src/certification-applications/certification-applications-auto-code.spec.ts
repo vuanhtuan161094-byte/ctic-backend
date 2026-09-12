@@ -33,6 +33,11 @@ describe('CertificationApplicationsService application code', () => {
             },
         };
         const prisma = {
+            standard_editions: {
+                findMany: jest.fn().mockResolvedValue([
+                    { standard_code: 'ISO 9001', edition: '2015' },
+                ]),
+            },
             customers: {
                 findUnique: jest.fn().mockResolvedValue({
                     id: baseDto.customer_id,
@@ -63,6 +68,11 @@ describe('CertificationApplicationsService application code', () => {
             },
         };
         const prisma = {
+            standard_editions: {
+                findMany: jest.fn().mockResolvedValue([
+                    { standard_code: 'ISO 9001', edition: '2015' },
+                ]),
+            },
             customers: {
                 findUnique: jest.fn().mockResolvedValue({
                     id: baseDto.customer_id,
