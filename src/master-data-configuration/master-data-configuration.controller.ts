@@ -92,6 +92,13 @@ export class MasterDataConfigurationController {
         return this.service.updateStandard(id, dto, this.userId(request));
     }
 
+    @Post('standards/:id/stop')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    stopStandard(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthRequest) {
+        return this.standardLifecycle.stopStandardEdition(id, this.userId(request));
+    }
+
     @Post('standards/:id/restore')
     @Roles('ADMIN')
     @Permissions('classifications.manage')
