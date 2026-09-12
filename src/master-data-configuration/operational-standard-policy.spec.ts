@@ -19,7 +19,10 @@ describe('operational standard policy', () => {
         expect(APPLICATION_RUNTIME_PROGRAM_CODES).toEqual(['QMS', 'EMS', 'OHSMS']);
         const where = operationalStandardWhere(new Date('2026-09-12T00:00:00.000Z')) as any;
         expect(where.scheme.code.in).toEqual(['QMS', 'EMS', 'OHSMS']);
-        expect(where.scheme.configurations.some.status).toBe('ACTIVE');
+        const configurationGate = where.scheme.AND.find(
+            (item: any) => item.configurations,
+        );
+        expect(configurationGate.configurations.some.status).toBe('ACTIVE');
     });
 
     it('accepts a single operational edition and an integrated selection', async () => {
