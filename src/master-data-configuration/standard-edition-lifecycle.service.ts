@@ -50,11 +50,7 @@ export class StandardEditionLifecycleService {
 
     private todayUtc() {
         const now = new Date();
-        return new Date(Date.UTC(
-            now.getUTCFullYear(),
-            now.getUTCMonth(),
-            now.getUTCDate(),
-        ));
+        return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     }
 
     private async assertScheme(id: string) {
@@ -124,7 +120,7 @@ export class StandardEditionLifecycleService {
     }
 
     async updateStandardEdition(id: string, dto: UpdateStandardEditionDto, userId: string) {
-        if (dto.status !== undefined || dto.withdrawn_at !== undefined) {
+        if (dto.status !== undefined) {
             throw new BadRequestException(
                 'Trạng thái áp dụng không sửa trực tiếp. Hãy dùng thao tác Ngừng áp dụng hoặc Khôi phục áp dụng.',
             );
@@ -148,7 +144,10 @@ export class StandardEditionLifecycleService {
         const effectiveFrom = dto.effective_from === undefined
             ? current.effective_from
             : this.date(dto.effective_from, 'Ngày áp dụng', true)!;
-        this.period(effectiveFrom, current.withdrawn_at);
+        const withdrawnAt = dto.withdrawn_at === undefined
+            ? current.withdrawn_at
+            : this.date(dto.withdrawn_at, 'Ngày ngừng áp dụng');
+        this.period(effectiveFrom, withdrawnAt);
         if (dto.superseded_by_id) {
             if (dto.superseded_by_id === id) {
                 throw new BadRequestException('Phiên bản không thể tự thay thế chính nó');
@@ -164,6 +163,7 @@ export class StandardEditionLifecycleService {
                 standard_name: dto.standard_name?.trim(),
                 edition,
                 effective_from: effectiveFrom,
+                withdrawn_at: withdrawnAt,
                 superseded_by_id: dto.superseded_by_id === undefined ? undefined : dto.superseded_by_id,
                 updated_by: userId,
             },
@@ -193,16 +193,12 @@ export class StandardEditionLifecycleService {
                 withdrawn_at: true,
             },
         });
-        if (!row) {
-            throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
-        }
+        if (!row) throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
 
         const today = this.todayUtc();
         const alreadyStopped = row.status !== 'ACTIVE'
             || Boolean(row.withdrawn_at && row.withdrawn_at <= today);
-        if (alreadyStopped) {
-            throw new BadRequestException(`${this.label(row)} đã ngừng áp dụng.`);
-        }
+        if (alreadyStopped) throw new BadRequestException(`${this.label(row)} đã ngừng áp dụng.`);
         if (row.effective_from > today) {
             throw new BadRequestException(
                 `${this.label(row)} chưa đến ngày áp dụng. Nếu tạo nhầm, hãy sửa hoặc xóa phiên bản khi chưa được sử dụng.`,
@@ -218,7 +214,6 @@ export class StandardEditionLifecycleService {
             },
             include: { scheme: true },
         });
-
         await this.audit.write({
             userId,
             action: 'MASTER_STANDARD_STOPPED',
@@ -241,19 +236,13 @@ export class StandardEditionLifecycleService {
                 withdrawn_at: true,
             },
         });
-        if (!row) {
-            throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
-        }
+        if (!row) throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
 
-        const stoppedByDate = Boolean(
-            row.withdrawn_at && row.withdrawn_at.getTime() <= Date.now(),
-        );
+        const stoppedByDate = Boolean(row.withdrawn_at && row.withdrawn_at.getTime() <= Date.now());
         const restorable = row.status === 'WITHDRAWN'
             || (row.status === 'ACTIVE' && stoppedByDate);
         if (!restorable) {
-            throw new BadRequestException(
-                `${this.label(row)} không ở trạng thái có thể khôi phục áp dụng.`,
-            );
+            throw new BadRequestException(`${this.label(row)} không ở trạng thái có thể khôi phục áp dụng.`);
         }
 
         const restored = await this.prisma.standard_editions.update({
@@ -265,7 +254,6 @@ export class StandardEditionLifecycleService {
             },
             include: { scheme: true },
         });
-
         await this.audit.write({
             userId,
             action: 'MASTER_STANDARD_RESTORED',
@@ -280,30 +268,14 @@ export class StandardEditionLifecycleService {
     async deleteStandardEdition(id: string, userId: string) {
         const row = await this.prisma.standard_editions.findUnique({
             where: { id },
-            select: {
-                id: true,
-                standard_code: true,
-                edition: true,
-            },
+            select: { id: true, standard_code: true, edition: true },
         });
-        if (!row) {
-            throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
-        }
+        if (!row) throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
 
         const historyWhere = this.historyMatch(row.standard_code, row.edition);
-        const [
-            capabilityCount,
-            supersedingReferenceCount,
-            applicationCount,
-            projectCount,
-            certificateCount,
-        ] = await Promise.all([
-            this.prisma.certification_body_capabilities.count({
-                where: { standard_edition_id: id },
-            }),
-            this.prisma.standard_editions.count({
-                where: { superseded_by_id: id },
-            }),
+        const [capabilityCount, supersedingReferenceCount, applicationCount, projectCount, certificateCount] = await Promise.all([
+            this.prisma.certification_body_capabilities.count({ where: { standard_edition_id: id } }),
+            this.prisma.standard_editions.count({ where: { superseded_by_id: id } }),
             this.prisma.certification_applications.count({ where: historyWhere }),
             this.prisma.certification_projects.count({ where: historyWhere }),
             this.prisma.certificates.count({ where: historyWhere }),
@@ -343,7 +315,6 @@ export class StandardEditionLifecycleService {
             outcome: 'success',
             statusCode: 200,
         });
-
         return { id, deleted: true };
     }
 }
