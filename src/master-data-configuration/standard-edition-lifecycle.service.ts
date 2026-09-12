@@ -6,6 +6,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecurityAuditService } from '../security/security-audit.service';
+import {
+    CreateStandardEditionDto,
+    UpdateStandardEditionDto,
+} from './dto/master-data-configuration.dto';
 
 @Injectable()
 export class StandardEditionLifecycleService {
@@ -20,6 +24,30 @@ export class StandardEditionLifecycleService {
         return code.includes(edition) ? code : `${code}:${edition}`;
     }
 
+    private code(value: string, max = 100) {
+        return value.trim().toUpperCase().slice(0, max);
+    }
+
+    private date(value: string | undefined, field: string, required = false) {
+        if (!value) {
+            if (required) throw new BadRequestException(`${field} là bắt buộc`);
+            return null;
+        }
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+        if (!match) throw new BadRequestException(`${field} phải theo định dạng YYYY-MM-DD`);
+        const result = new Date(Date.UTC(+match[1], +match[2] - 1, +match[3]));
+        if (result.toISOString().slice(0, 10) !== value.trim()) {
+            throw new BadRequestException(`${field} không hợp lệ`);
+        }
+        return result;
+    }
+
+    private period(from: Date | null, to: Date | null) {
+        if (from && to && to < from) {
+            throw new BadRequestException('Ngày ngừng áp dụng phải bằng hoặc sau ngày bắt đầu áp dụng');
+        }
+    }
+
     private todayUtc() {
         const now = new Date();
         return new Date(Date.UTC(
@@ -29,6 +57,18 @@ export class StandardEditionLifecycleService {
         ));
     }
 
+    private async assertScheme(id: string) {
+        const row = await this.prisma.certification_schemes.findUnique({ where: { id } });
+        if (!row) throw new BadRequestException('Chương trình chứng nhận không tồn tại');
+        return row;
+    }
+
+    private async assertEdition(id: string) {
+        const row = await this.prisma.standard_editions.findUnique({ where: { id } });
+        if (!row) throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
+        return row;
+    }
+
     private historyMatch(standardCode: string, edition: string) {
         return {
             AND: [
@@ -36,6 +76,109 @@ export class StandardEditionLifecycleService {
                 { standard_name: { contains: edition } },
             ],
         };
+    }
+
+    async createStandardEdition(dto: CreateStandardEditionDto, userId: string) {
+        await this.assertScheme(dto.scheme_id);
+        const standardCode = this.code(dto.standard_code);
+        const edition = dto.edition.trim();
+        const duplicate = await this.prisma.standard_editions.findFirst({
+            where: {
+                scheme_id: dto.scheme_id,
+                standard_code: standardCode,
+                edition,
+            },
+        });
+        if (duplicate) throw new ConflictException('Phiên bản tiêu chuẩn đã tồn tại trong chương trình này');
+
+        const effectiveFrom = this.date(dto.effective_from, 'Ngày áp dụng', true)!;
+        const withdrawnAt = this.date(dto.withdrawn_at, 'Ngày ngừng áp dụng');
+        this.period(effectiveFrom, withdrawnAt);
+        if (dto.superseded_by_id) await this.assertEdition(dto.superseded_by_id);
+
+        const row = await this.prisma.standard_editions.create({
+            data: {
+                scheme_id: dto.scheme_id,
+                standard_code: standardCode,
+                standard_name: dto.standard_name.trim(),
+                edition,
+                effective_from: effectiveFrom,
+                withdrawn_at: withdrawnAt,
+                superseded_by_id: dto.superseded_by_id ?? null,
+                status: 'ACTIVE',
+                created_by: userId,
+                updated_by: userId,
+            },
+            include: { scheme: true },
+        });
+
+        await this.audit.write({
+            userId,
+            action: 'MASTER_STANDARD_CREATED',
+            entityType: 'standard_edition',
+            entityId: row.id,
+            outcome: 'success',
+            statusCode: 201,
+        });
+        return row;
+    }
+
+    async updateStandardEdition(id: string, dto: UpdateStandardEditionDto, userId: string) {
+        if (dto.status !== undefined || dto.withdrawn_at !== undefined) {
+            throw new BadRequestException(
+                'Trạng thái áp dụng không sửa trực tiếp. Hãy dùng thao tác Ngừng áp dụng hoặc Khôi phục áp dụng.',
+            );
+        }
+
+        const current = await this.assertEdition(id);
+        const schemeId = dto.scheme_id ?? current.scheme_id;
+        await this.assertScheme(schemeId);
+        const standardCode = dto.standard_code ? this.code(dto.standard_code) : current.standard_code;
+        const edition = dto.edition?.trim() ?? current.edition;
+        const duplicate = await this.prisma.standard_editions.findFirst({
+            where: {
+                scheme_id: schemeId,
+                standard_code: standardCode,
+                edition,
+                id: { not: id },
+            },
+        });
+        if (duplicate) throw new ConflictException('Phiên bản tiêu chuẩn đã tồn tại trong chương trình này');
+
+        const effectiveFrom = dto.effective_from === undefined
+            ? current.effective_from
+            : this.date(dto.effective_from, 'Ngày áp dụng', true)!;
+        this.period(effectiveFrom, current.withdrawn_at);
+        if (dto.superseded_by_id) {
+            if (dto.superseded_by_id === id) {
+                throw new BadRequestException('Phiên bản không thể tự thay thế chính nó');
+            }
+            await this.assertEdition(dto.superseded_by_id);
+        }
+
+        const row = await this.prisma.standard_editions.update({
+            where: { id },
+            data: {
+                scheme_id: schemeId,
+                standard_code: standardCode,
+                standard_name: dto.standard_name?.trim(),
+                edition,
+                effective_from: effectiveFrom,
+                superseded_by_id: dto.superseded_by_id === undefined ? undefined : dto.superseded_by_id,
+                updated_by: userId,
+            },
+            include: { scheme: true },
+        });
+
+        await this.audit.write({
+            userId,
+            action: 'MASTER_STANDARD_UPDATED',
+            entityType: 'standard_edition',
+            entityId: id,
+            outcome: 'success',
+            statusCode: 200,
+        });
+        return row;
     }
 
     async stopStandardEdition(id: string, userId: string) {
@@ -58,9 +201,7 @@ export class StandardEditionLifecycleService {
         const alreadyStopped = row.status !== 'ACTIVE'
             || Boolean(row.withdrawn_at && row.withdrawn_at <= today);
         if (alreadyStopped) {
-            throw new BadRequestException(
-                `${this.label(row)} đã ngừng áp dụng.`,
-            );
+            throw new BadRequestException(`${this.label(row)} đã ngừng áp dụng.`);
         }
         if (row.effective_from > today) {
             throw new BadRequestException(
@@ -86,7 +227,6 @@ export class StandardEditionLifecycleService {
             outcome: 'success',
             statusCode: 200,
         });
-
         return stopped;
     }
 
@@ -110,7 +250,6 @@ export class StandardEditionLifecycleService {
         );
         const restorable = row.status === 'WITHDRAWN'
             || (row.status === 'ACTIVE' && stoppedByDate);
-
         if (!restorable) {
             throw new BadRequestException(
                 `${this.label(row)} không ở trạng thái có thể khôi phục áp dụng.`,
@@ -135,7 +274,6 @@ export class StandardEditionLifecycleService {
             outcome: 'success',
             statusCode: 200,
         });
-
         return restored;
     }
 
@@ -152,10 +290,7 @@ export class StandardEditionLifecycleService {
             throw new NotFoundException('Không tìm thấy phiên bản tiêu chuẩn');
         }
 
-        const historyWhere = this.historyMatch(
-            row.standard_code,
-            row.edition,
-        );
+        const historyWhere = this.historyMatch(row.standard_code, row.edition);
         const [
             capabilityCount,
             supersedingReferenceCount,
@@ -169,33 +304,17 @@ export class StandardEditionLifecycleService {
             this.prisma.standard_editions.count({
                 where: { superseded_by_id: id },
             }),
-            this.prisma.certification_applications.count({
-                where: historyWhere,
-            }),
-            this.prisma.certification_projects.count({
-                where: historyWhere,
-            }),
-            this.prisma.certificates.count({
-                where: historyWhere,
-            }),
+            this.prisma.certification_applications.count({ where: historyWhere }),
+            this.prisma.certification_projects.count({ where: historyWhere }),
+            this.prisma.certificates.count({ where: historyWhere }),
         ]);
 
         const dependencies = [
-            capabilityCount
-                ? `${capabilityCount} phạm vi năng lực`
-                : null,
-            supersedingReferenceCount
-                ? `${supersedingReferenceCount} phiên bản thay thế`
-                : null,
-            applicationCount
-                ? `${applicationCount} đơn đăng ký`
-                : null,
-            projectCount
-                ? `${projectCount} hồ sơ chứng nhận`
-                : null,
-            certificateCount
-                ? `${certificateCount} chứng chỉ`
-                : null,
+            capabilityCount ? `${capabilityCount} phạm vi năng lực` : null,
+            supersedingReferenceCount ? `${supersedingReferenceCount} phiên bản thay thế` : null,
+            applicationCount ? `${applicationCount} đơn đăng ký` : null,
+            projectCount ? `${projectCount} hồ sơ chứng nhận` : null,
+            certificateCount ? `${certificateCount} chứng chỉ` : null,
         ].filter(Boolean);
 
         if (dependencies.length) {
@@ -205,9 +324,7 @@ export class StandardEditionLifecycleService {
         }
 
         try {
-            await this.prisma.standard_editions.delete({
-                where: { id },
-            });
+            await this.prisma.standard_editions.delete({ where: { id } });
         } catch (error) {
             const candidate = error as { code?: string };
             if (candidate?.code === 'P2003') {
@@ -227,9 +344,6 @@ export class StandardEditionLifecycleService {
             statusCode: 200,
         });
 
-        return {
-            id,
-            deleted: true,
-        };
+        return { id, deleted: true };
     }
 }
