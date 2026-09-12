@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     ConflictException,
     NotFoundException,
 } from '@nestjs/common';
@@ -10,6 +11,14 @@ function harness() {
             findUnique: jest.fn(),
             count: jest.fn().mockResolvedValue(0),
             delete: jest.fn().mockResolvedValue({ id: 'standard-1' }),
+            update: jest.fn().mockResolvedValue({
+                id: 'standard-1',
+                standard_code: 'ISO 9001',
+                edition: '2015',
+                status: 'ACTIVE',
+                withdrawn_at: null,
+                scheme: { id: 'scheme-1', code: 'QMS' },
+            }),
         },
         certification_body_capabilities: {
             count: jest.fn().mockResolvedValue(0),
@@ -35,6 +44,70 @@ function harness() {
 }
 
 describe('StandardEditionLifecycleService', () => {
+    it('restores a stopped edition by clearing its stop date', async () => {
+        const { service, prisma, audit } = harness();
+        prisma.standard_editions.findUnique.mockResolvedValue({
+            id: 'standard-1',
+            standard_code: 'ISO 9001',
+            edition: '2015',
+            status: 'WITHDRAWN',
+            withdrawn_at: new Date('2026-09-01T00:00:00.000Z'),
+        });
+
+        await expect(
+            service.restoreStandardEdition('standard-1', 'admin'),
+        ).resolves.toEqual(expect.objectContaining({
+            id: 'standard-1',
+            status: 'ACTIVE',
+            withdrawn_at: null,
+        }));
+
+        expect(prisma.standard_editions.update).toHaveBeenCalledWith({
+            where: { id: 'standard-1' },
+            data: {
+                status: 'ACTIVE',
+                withdrawn_at: null,
+                updated_by: 'admin',
+            },
+            include: { scheme: true },
+        });
+        expect(audit.write).toHaveBeenCalledWith(expect.objectContaining({
+            action: 'MASTER_STANDARD_RESTORED',
+            entityId: 'standard-1',
+        }));
+    });
+
+    it('also restores an active edition whose stop date has already passed', async () => {
+        const { service, prisma } = harness();
+        prisma.standard_editions.findUnique.mockResolvedValue({
+            id: 'standard-1',
+            standard_code: 'ISO 9001',
+            edition: '2015',
+            status: 'ACTIVE',
+            withdrawn_at: new Date('2020-01-01T00:00:00.000Z'),
+        });
+
+        await expect(
+            service.restoreStandardEdition('standard-1', 'admin'),
+        ).resolves.toEqual(expect.objectContaining({ status: 'ACTIVE' }));
+    });
+
+    it('does not restore an edition that is not stopped', async () => {
+        const { service, prisma } = harness();
+        prisma.standard_editions.findUnique.mockResolvedValue({
+            id: 'standard-1',
+            standard_code: 'ISO 9001',
+            edition: '2015',
+            status: 'ACTIVE',
+            withdrawn_at: null,
+        });
+
+        await expect(
+            service.restoreStandardEdition('standard-1', 'admin'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.standard_editions.update).not.toHaveBeenCalled();
+    });
+
     it('hard deletes a mistaken edition when it has no business dependencies', async () => {
         const { service, prisma, audit } = harness();
         prisma.standard_editions.findUnique.mockResolvedValue({
@@ -96,6 +169,9 @@ describe('StandardEditionLifecycleService', () => {
 
         await expect(
             service.deleteStandardEdition('missing', 'admin'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+            service.restoreStandardEdition('missing', 'admin'),
         ).rejects.toBeInstanceOf(NotFoundException);
     });
 
