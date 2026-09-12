@@ -74,18 +74,67 @@ export class StandardEditionLifecycleService {
         };
     }
 
+    async listOperationalStandardEditions() {
+        const now = this.todayUtc();
+        return this.prisma.standard_editions.findMany({
+            where: {
+                status: 'ACTIVE',
+                effective_from: { lte: now },
+                OR: [
+                    { withdrawn_at: null },
+                    { withdrawn_at: { gt: now } },
+                ],
+                scheme: {
+                    status: 'ACTIVE',
+                    AND: [
+                        {
+                            OR: [
+                                { effective_from: null },
+                                { effective_from: { lte: now } },
+                            ],
+                        },
+                        {
+                            OR: [
+                                { effective_to: null },
+                                { effective_to: { gte: now } },
+                            ],
+                        },
+                        {
+                            configurations: {
+                                some: {
+                                    status: 'ACTIVE',
+                                    effective_from: { lte: now },
+                                    OR: [
+                                        { effective_to: null },
+                                        { effective_to: { gte: now } },
+                                    ],
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+            include: { scheme: true },
+            orderBy: [
+                { scheme: { code: 'asc' } },
+                { standard_code: 'asc' },
+                { effective_from: 'desc' },
+            ],
+            take: 300,
+        });
+    }
+
     async createStandardEdition(dto: CreateStandardEditionDto, userId: string) {
         await this.assertScheme(dto.scheme_id);
         const standardCode = this.code(dto.standard_code);
         const edition = dto.edition.trim();
         const duplicate = await this.prisma.standard_editions.findFirst({
             where: {
-                scheme_id: dto.scheme_id,
                 standard_code: standardCode,
                 edition,
             },
         });
-        if (duplicate) throw new ConflictException('Phiên bản tiêu chuẩn đã tồn tại trong chương trình này');
+        if (duplicate) throw new ConflictException('Phiên bản tiêu chuẩn đã tồn tại');
 
         const effectiveFrom = this.date(dto.effective_from, 'Ngày áp dụng', true)!;
         const withdrawnAt = this.date(dto.withdrawn_at, 'Ngày ngừng áp dụng');
@@ -133,13 +182,12 @@ export class StandardEditionLifecycleService {
         const edition = dto.edition?.trim() ?? current.edition;
         const duplicate = await this.prisma.standard_editions.findFirst({
             where: {
-                scheme_id: schemeId,
                 standard_code: standardCode,
                 edition,
                 id: { not: id },
             },
         });
-        if (duplicate) throw new ConflictException('Phiên bản tiêu chuẩn đã tồn tại trong chương trình này');
+        if (duplicate) throw new ConflictException('Phiên bản tiêu chuẩn đã tồn tại');
 
         const effectiveFrom = dto.effective_from === undefined
             ? current.effective_from
