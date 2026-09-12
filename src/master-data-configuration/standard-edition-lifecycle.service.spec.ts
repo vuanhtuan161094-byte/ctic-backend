@@ -13,6 +13,7 @@ function harness() {
         standard_editions: {
             findUnique: jest.fn(),
             findFirst: jest.fn().mockResolvedValue(null),
+            findMany: jest.fn().mockResolvedValue([]),
             count: jest.fn().mockResolvedValue(0),
             create: jest.fn().mockImplementation(({ data }: any) => ({
                 id: 'standard-1',
@@ -43,7 +44,31 @@ function harness() {
 }
 
 describe('StandardEditionLifecycleService', () => {
-    it('creates an edition with uniqueness scoped to its program', async () => {
+    it('lists only editions whose program and rule package are operational now', async () => {
+        const { service, prisma } = harness();
+
+        await service.listOperationalStandardEditions();
+
+        expect(prisma.standard_editions.findMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({
+                status: 'ACTIVE',
+                effective_from: expect.any(Object),
+                scheme: expect.objectContaining({
+                    status: 'ACTIVE',
+                    AND: expect.arrayContaining([
+                        expect.objectContaining({
+                            configurations: {
+                                some: expect.objectContaining({ status: 'ACTIVE' }),
+                            },
+                        }),
+                    ]),
+                }),
+            }),
+            include: { scheme: true },
+        }));
+    });
+
+    it('creates an edition consistently with the database-wide code plus edition uniqueness', async () => {
         const { service, prisma, audit } = harness();
         const dto = {
             scheme_id: '00000000-0000-4000-8000-000000000001',
@@ -58,7 +83,6 @@ describe('StandardEditionLifecycleService', () => {
 
         expect(prisma.standard_editions.findFirst).toHaveBeenCalledWith({
             where: {
-                scheme_id: dto.scheme_id,
                 standard_code: 'ISO 9001',
                 edition: '2015',
             },
@@ -74,7 +98,7 @@ describe('StandardEditionLifecycleService', () => {
         expect(audit.write).toHaveBeenCalledWith(expect.objectContaining({ action: 'MASTER_STANDARD_CREATED' }));
     });
 
-    it('updates edition metadata without allowing lifecycle fields through generic PATCH', async () => {
+    it('updates edition metadata without allowing raw status mutation', async () => {
         const { service, prisma } = harness();
         prisma.standard_editions.findUnique.mockResolvedValue({
             id: 'standard-1',
@@ -93,7 +117,6 @@ describe('StandardEditionLifecycleService', () => {
 
         expect(prisma.standard_editions.findFirst).toHaveBeenCalledWith({
             where: expect.objectContaining({
-                scheme_id: 'scheme-1',
                 standard_code: 'ISO 9001',
                 edition: '2015',
                 id: { not: 'standard-1' },
