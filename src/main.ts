@@ -305,7 +305,7 @@ async function bootstrap() {
                     platformBranding.platformTitle,
                 )
                 .setDescription(
-                    'API quản lý quy trình chứng nhận hệ thống quản lý P.09',
+                    'API quản lý quy trình chứng nhận hệ thống quản lý quy tr├¼nh chß╗⌐ng nhß║¡n',
                 )
                 .setVersion('1.0')
                 .addBearerAuth(
