@@ -82,14 +82,14 @@ export class MasterDataConfigurationController {
     @Roles('ADMIN')
     @Permissions('classifications.manage')
     createStandard(@Body() dto: CreateStandardEditionDto, @Req() request: AuthRequest) {
-        return this.service.createStandard(dto, this.userId(request));
+        return this.standardLifecycle.createStandardEdition(dto, this.userId(request));
     }
 
     @Patch('standards/:id')
     @Roles('ADMIN')
     @Permissions('classifications.manage')
     updateStandard(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateStandardEditionDto, @Req() request: AuthRequest) {
-        return this.service.updateStandard(id, dto, this.userId(request));
+        return this.standardLifecycle.updateStandardEdition(id, dto, this.userId(request));
     }
 
     @Post('standards/:id/stop')
