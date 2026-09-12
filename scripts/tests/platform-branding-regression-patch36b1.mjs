@@ -36,7 +36,10 @@ const shell = read(path.join(frontendRoot, 'app/components/DashboardShell.tsx'))
 const app = read(path.join(frontendRoot, 'app/components/CticApplication.tsx'));
 const projects = read(path.join(frontendRoot, 'app/components/CertificationProjectsScreen.tsx'));
 const indexHtml = read(path.join(frontendRoot, 'index.html'));
-const layout = read(path.join(frontendRoot, 'app/layout.tsx'));
+const entry = read(path.join(frontendRoot, 'src/main.tsx'));
+const uiRuntime = read(path.join(frontendRoot, 'app/components/UiRuntime.tsx'));
+const authenticatedRuntime = read(path.join(frontendRoot, 'app/components/AuthenticatedRuntime.tsx'));
+const loginRuntime = read(path.join(frontendRoot, 'app/components/LoginRuntime.tsx'));
 const frontendEnv = read(path.join(frontendRoot, '.env.example'));
 
 check(brandingFrontend.includes('VITE_BRAND_SHORT_NAME'), 'Frontend có cấu hình tên viết tắt thương hiệu');
@@ -45,10 +48,24 @@ check(brandingFrontend.includes('VITE_DOCUMENT_CODE_PREFIX'), 'Frontend có cấ
 check(brandingFrontend.includes('VITE_BRAND_PRIMARY_COLOR'), 'Frontend có cấu hình màu thương hiệu');
 check(login.includes('PLATFORM_BRANDING.organizationName') && !/CTIC VIETNAM/.test(login), 'Màn hình đăng nhập dùng branding cấu hình');
 check(shell.includes('PLATFORM_BRANDING.shortName') && !/CTIC VIETNAM/.test(shell), 'Sidebar dùng branding cấu hình');
-check(app.includes('applyPlatformBrandingToDocument') && app.includes('PLATFORM_BRANDING.primaryColor'), 'Application áp dụng title/meta/màu thương hiệu');
+check(/useEffect\(\(\) =>\s*\{\s*applyPlatformBrandingToDocument\(\)/.test(app)
+  && /colorPrimary:\s*PLATFORM_BRANDING.primaryColor/.test(uiRuntime)
+  && /document.title\s*=\s*PLATFORM_BRANDING.browserTitle/.test(brandingFrontend)
+  && /description.content\s*=\s*PLATFORM_BRANDING.browserDescription/.test(brandingFrontend), 'Application áp dụng title/meta/màu thương hiệu');
 check(projects.includes('generateNextCode(PLATFORM_BRANDING.documentCodePrefix'), 'Số hợp đồng mới không gắn cứng CTIC');
 check(!/CTIC VIETNAM/.test(indexHtml) && !/CTIC Certification/.test(indexHtml), 'index.html dùng metadata trung tính');
-check(!/CTIC VIETNAM/.test(layout) && !/CTIC Certification/.test(layout), 'Next metadata dùng nội dung trung tính');
+check(!/CTIC VIETNAM|CTIC Certification/.test(entry + uiRuntime + authenticatedRuntime + loginRuntime)
+  && entry.includes('<CticApplication />') && indexHtml.includes('/src/main.tsx'), 'Vite entry/runtime thay Next metadata và giữ nội dung trung tính');
+check(app.includes('import("./AuthenticatedRuntime")') && app.includes('<AuthenticatedRuntime session=')
+  && app.includes('import("./LoginRuntime")') && app.includes('<LoginRuntime onLogin='), 'Application thực sự tải login/authenticated runtime');
+check([authenticatedRuntime, loginRuntime].every((source) => source.includes('import { UiRuntime } from "./UiRuntime"') && source.includes('<UiRuntime>'))
+  && authenticatedRuntime.includes('<DashboardShell session=') && loginRuntime.includes('<LoginScreen onLogin='), 'Brand UI provider bao bọc cả shell và login production');
+check(uiRuntime.includes('import { PLATFORM_BRANDING } from "../lib/platform-branding"')
+  && /siderBg:\s*PLATFORM_BRANDING.darkColor/.test(uiRuntime), 'UI runtime consume authority branding cho theme và sidebar');
+check(brandingFrontend.includes('readEnv("VITE_BRAND_SHORT_NAME", "CB")')
+  && brandingFrontend.includes('"TỔ CHỨC CHỨNG NHẬN"')
+  && brandingFrontend.includes('"Certification Management Platform"')
+  && brandingFrontend.includes('return normalized || fallback'), 'Neutral defaults vẫn có hiệu lực khi chưa cấu hình thương hiệu');
 check(frontendEnv.includes('VITE_BRAND_SHORT_NAME=CB'), '.env.example frontend có mẫu branding trung tính');
 
 const brandingBackend = read(path.join(backendRoot, 'src/common/platform-branding.ts'));
@@ -69,7 +86,10 @@ const runtimeFrontendFiles = [
   'app/components/LoginScreen.tsx',
   'app/components/DashboardShell.tsx',
   'app/components/CertificationProjectsScreen.tsx',
-  'app/layout.tsx',
+  'src/main.tsx',
+  'app/components/UiRuntime.tsx',
+  'app/components/AuthenticatedRuntime.tsx',
+  'app/components/LoginRuntime.tsx',
   'index.html',
 ];
 const runtimeFrontendText = runtimeFrontendFiles

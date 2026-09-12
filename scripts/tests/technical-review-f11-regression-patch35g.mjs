@@ -94,6 +94,16 @@ for (const file of frontendFiles) {
 }
 
 const service = read('src/technical-reviews/technical-reviews.service.ts');
+const reviewerPolicy = read('src/technical-reviews/technical-review-reviewer-policy.service.ts');
+// Parse named production methods, not comments or unrelated methods.
+function methodText(source, className, name) {
+  const file = ts.createSourceFile('authority.ts', source, ts.ScriptTarget.Latest, true);
+  const owner = file.statements.find((node) => ts.isClassDeclaration(node) && node.name?.text === className);
+  const method = owner?.members.find((node) => name === 'constructor'
+    ? ts.isConstructorDeclaration(node) : ts.isMethodDeclaration(node) && node.name?.getText(file) === name);
+  return method ? ts.createPrinter({ removeComments: true }).printNode(ts.EmitHint.Unspecified, method, file) : '';
+}
+const reviewMethod = (name) => methodText(service, 'TechnicalReviewsService', name).replace(/\s+/g, '');
 const controller = read('src/technical-reviews/technical-reviews.controller.ts');
 const moduleSource = read('src/technical-reviews/technical-reviews.module.ts');
 const auditService = read('src/audit-documents/audit-documents.service.ts');
@@ -118,7 +128,20 @@ check(moduleSource.includes('AuditDocumentsModule'), 'TechnicalReviewsModule dù
 check(moduleSource.includes('TechnicalReviewsService'), 'TechnicalReviewsService vẫn được export');
 
 check(service.includes('assertReviewerIndependent'), 'Backend kiểm tra độc lập người thẩm xét');
-check(service.includes('Người thẩm xét không được là thành viên đoàn đánh giá'), 'Có thông báo rõ khi người thẩm xét thuộc đoàn');
+check(methodText(reviewerPolicy, 'TechnicalReviewReviewerPolicyService', 'assertReviewerIndependent')
+  .includes('Người thẩm xét không được là thành viên đoàn đánh giá'), 'Có thông báo rõ khi người thẩm xét thuộc đoàn');
+check(/if\s*\(auditMember\)\s*\{\s*throw new BadRequestException/.test(methodText(reviewerPolicy, 'TechnicalReviewReviewerPolicyService', 'assertReviewerIndependent'))
+  && methodText(reviewerPolicy, 'TechnicalReviewReviewerPolicyService', 'assertReviewerIndependent').replace(/\s+/g, '').includes('member.experts?.user_id===reviewerId'),
+  'Reviewer policy chặn đúng user thuộc đoàn, không chỉ giữ message');
+check(reviewMethod('constructor').includes('this.reviewerPolicyService=reviewerPolicyService??newTechnicalReviewReviewerPolicyService(prisma)')
+  && /providers:\s*\[[^\]]*TechnicalReviewReviewerPolicyService/.test(moduleSource), 'Reviewer policy được inject và đăng ký provider');
+check(reviewMethod('assertReviewerIndependent').includes('returnthis.reviewerPolicyService.assertReviewerIndependent(plan,reviewerId)'), 'Wrapper production delegate đúng plan/reviewer tới policy');
+for (const flow of ['assignForPlan', 'reassign']) {
+  check(reviewMethod(flow).includes('this.assertReviewerIndependent(context.plan,dto.reviewer_id)'), `${flow} vẫn kiểm độc lập trước phân công`);
+}
+check(reviewMethod('assertCanPerformReview').includes('this.assertReviewerIndependent(context.plan,review.reviewer_id)')
+  && reviewMethod('assertCanPerformReview').includes('this.assertReviewerIndependent(context.plan,actorId)')
+  && reviewMethod('complete').includes('awaitthis.assertCanPerformReview(id,actor)'), 'Complete giữ kiểm tra độc lập reviewer và người được ủy quyền');
 check(service.includes('assertReportReady'), 'Backend kiểm tra báo cáo sẵn sàng thẩm xét');
 check(service.includes('Còn ${unresolvedNc.length} NC chưa được đóng'), 'Backend chặn thẩm xét khi còn NC chưa đóng');
 check(service.includes('PRELIMINARY_REVIEW_CRITERIA'), 'Backend dùng thư viện tiêu chí thẩm xét sơ bộ');

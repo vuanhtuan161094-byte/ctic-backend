@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +16,18 @@ if (!frontendRoot) {
 
 const read = (root, relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 const teamService = read(backendRoot, 'src/audit-team-appointments/audit-team-appointments.service.ts');
+const programService = read(backendRoot, 'src/audit-team-appointments/audit-team-program-competency.service.ts');
+const teamModule = read(backendRoot, 'src/audit-team-appointments/audit-team-appointments.module.ts');
+const ts = createRequire(import.meta.url)('typescript');
+function methodText(source, className, name) {
+  const file = ts.createSourceFile('authority.ts', source, ts.ScriptTarget.Latest, true);
+  const owner = file.statements.find((node) => ts.isClassDeclaration(node) && node.name?.text === className);
+  const method = owner?.members.find((node) => name === 'constructor'
+    ? ts.isConstructorDeclaration(node) : ts.isMethodDeclaration(node) && node.name?.getText(file) === name);
+  return method ? ts.createPrinter({ removeComments: true }).printNode(ts.EmitHint.Unspecified, method, file) : '';
+}
+const teamMethod = (name, source = teamService) => methodText(source, 'AuditTeamAppointmentsService', name).replace(/\s+/g, '');
+const callsProgramPolicy = (name, source = teamService) => teamMethod(name, source).includes('this.programCompetencyService.evaluatePlanProgramAllocation(');
 const mandayService = read(backendRoot, 'src/manday-calculations/manday-calculations.service.ts');
 const mandayDto = read(backendRoot, 'src/manday-calculations/dto/create-manday-calculation.dto.ts');
 const scheduleUi = read(frontendRoot, 'app/components/ScheduleResourcesScreen.tsx');
@@ -32,13 +45,12 @@ function check(name, condition, detail = '') {
   }
 }
 
-const planEvaluatorStart = teamService.indexOf('private async evaluatePlanProgramAllocation');
-const planEvaluatorEnd = teamService.indexOf('private async getProjectOrThrow', planEvaluatorStart);
-const planEvaluator = teamService.slice(planEvaluatorStart, planEvaluatorEnd);
+// Preserve the old 11 contracts; authority moved, production flows did not disappear.
+const planEvaluator = methodText(programService, 'AuditTeamProgramCompetencyService', 'evaluatePlanProgramAllocation');
 
 console.log('\n=== PATCH 35A.2 — PHÂN CÔNG CHƯƠNG TRÌNH & ĐỒNG BỘ MAN-DAY ===');
 
-check('Backend có bộ đánh giá phân công theo chương trình', planEvaluatorStart >= 0);
+check('Backend có bộ đánh giá phân công theo chương trình', planEvaluator.length > 0 && planEvaluator.includes('this.getApprovedProjectPrograms(projectId)'));
 check('Phân công kế hoạch yêu cầu chỉ định đoàn cấp hồ sơ đã ban hành', planEvaluator.includes("status: 'issued'") && planEvaluator.includes('projectTeamAuditType'));
 check(
   'Phân công kế hoạch chặn chuyên gia ngoài F.04 áp dụng',
@@ -47,7 +59,7 @@ check(
 );
 check(
   'Vai trò GĐ1/GĐ2 kế thừa nguyên trạng từ F.04',
-  planEvaluator.includes('inheritedRole !== this.normalizeCompetencyValue(member.team_role)')
+  planEvaluator.includes('inheritedRole !== normalizeCompetencyValue(member.team_role)')
     && planEvaluator.includes('phải giữ nguyên theo quyết định chỉ định đoàn cấp hồ sơ'),
 );
 check('Đối chiếu năng lực theo standard_code', planEvaluator.includes('competency.standard_code') && planEvaluator.includes('program.standard_code'));
@@ -59,12 +71,38 @@ check('Trưởng đoàn cấp kế hoạch phải có LEAD_AUDITOR', planEvaluat
 check('Kết quả năng lực thành viên được cập nhật khi kiểm tra/ban hành', planEvaluator.includes('competency_status') && planEvaluator.includes('competency_note'));
 check('API suitability trả required_programs', teamService.includes('required_programs: programs.map'));
 check('API suitability trả program_capabilities từng chuyên gia', teamService.includes('program_capabilities: programCapabilities'));
-check('Tạo chỉ định tách kiểm tra hồ sơ và kế hoạch', teamService.includes('if (isProjectContext)') && teamService.includes('await this.evaluatePlanProgramAllocation('));
+check('Tạo chỉ định tách kiểm tra hồ sơ và kế hoạch', teamMethod('create').includes('if(isProjectContext)')
+  && teamMethod('create').includes('awaitthis.validateDraftCompetencyCoverage(') && callsProgramPolicy('create'));
 check(
   'Tạo, cập nhật và kiểm tra dùng kiểm tra chương trình; ban hành dùng authority readiness chung',
-  (teamService.match(/evaluatePlanProgramAllocation\(/g) ?? []).length >= 4
-    && /teamReadiness\.assertReadyForIssue\(id\)/.test(teamService),
+  ['create', 'update', 'checkCompetency'].every((flow) => callsProgramPolicy(flow))
+    && teamMethod('issue').includes('awaitthis.teamReadiness.assertReadyForIssue(id)'),
 );
+check('Program authority được inject và đăng ký provider',
+  teamMethod('constructor').includes('this.programCompetencyService=programCompetencyService??newAuditTeamProgramCompetencyService(prisma)')
+  && /providers:\s*\[[^\]]*AuditTeamProgramCompetencyService/.test(teamModule));
+for (const flow of ['create', 'update', 'checkCompetency']) {
+  check(`${flow} delegate tới đúng program authority`, callsProgramPolicy(flow));
+  // In-memory mutation: an orphaned method must fail even if other methods still call it.
+  const originalMethod = methodText(teamService, 'AuditTeamAppointmentsService', flow);
+  const ast = ts.createSourceFile('team.ts', teamService, ts.ScriptTarget.Latest, true);
+  const owner = ast.statements.find((node) => ts.isClassDeclaration(node) && node.name?.text === 'AuditTeamAppointmentsService');
+  const node = owner.members.find((item) => ts.isMethodDeclaration(item) && item.name.getText(ast) === flow);
+  const orphan = teamService.slice(0, node.getStart(ast))
+    + originalMethod.replaceAll('this.programCompetencyService.evaluatePlanProgramAllocation', 'this.orphanedPolicy.evaluatePlanProgramAllocation')
+    + teamService.slice(node.end);
+  check(`${flow} guard từ chối authority bị orphan (mutation trong memory)`, !callsProgramPolicy(flow, orphan));
+}
+check('Create/update truyền resolved expert, role, scopes và không ghi competency status ở draft',
+  ['create', 'update'].every((flow) => ['resolvedMembers.map(', 'expert_id:member.expert_id', 'team_role:member.team_role', 'project_scope_id:scope.project_scope_id??null', 'false,this.isStage1Plan(']
+    .every((part) => teamMethod(flow).includes(part))));
+check('Check competency truyền member identity và bật cập nhật status',
+  teamMethod('checkCompetency').includes('member_id:member.id')
+  && teamMethod('checkCompetency').includes('true,this.isInitialStage2Plan(appointment.audit_plans)'));
+check('Issue vẫn giữ manday allocation và readiness trước ghi issued',
+  teamMethod('issue').includes('awaitthis.mandayAllocationService.validateForIssue(id)')
+  && teamMethod('issue').indexOf('awaitthis.teamReadiness.assertReadyForIssue(id)') >= 0
+  && teamMethod('issue').indexOf('awaitthis.teamReadiness.assertReadyForIssue(id)') < teamMethod('issue').indexOf('status:\'issued\''));
 check('Ban hành kế hoạch dùng kiểm tra chương trình', teamService.includes('appointment.audit_plans.planned_start_date ?? appointment.appointment_date'));
 
 check('Frontend có trường program_keys', scheduleUi.includes('program_keys?: string[]'));
