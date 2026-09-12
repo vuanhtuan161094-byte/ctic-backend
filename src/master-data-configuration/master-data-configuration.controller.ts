@@ -1,6 +1,7 @@
 import {
     Body,
     Controller,
+    Delete,
     Get,
     Param,
     ParseUUIDPipe,
@@ -30,6 +31,7 @@ import {
     UpdateStandardEditionDto,
 } from './dto/master-data-configuration.dto';
 import { MasterDataConfigurationService } from './master-data-configuration.service';
+import { StandardEditionLifecycleService } from './standard-edition-lifecycle.service';
 
 type AuthRequest = { user: { userId?: string; id?: string; sub?: string } };
 const INTERNAL_READ_ROLES = ['ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER', 'AUDITOR', 'LEAD_AUDITOR', 'DECISION_MAKER'];
@@ -39,7 +41,10 @@ const INTERNAL_READ_ROLES = ['ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER', 'AUDI
 @ApiBearerAuth('jwt')
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class MasterDataConfigurationController {
-    constructor(private readonly service: MasterDataConfigurationService) { }
+    constructor(
+        private readonly service: MasterDataConfigurationService,
+        private readonly standardLifecycle: StandardEditionLifecycleService,
+    ) { }
 
     private userId(request: AuthRequest) {
         return request.user.userId ?? request.user.id ?? request.user.sub ?? '';
@@ -85,6 +90,13 @@ export class MasterDataConfigurationController {
     @Permissions('classifications.manage')
     updateStandard(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateStandardEditionDto, @Req() request: AuthRequest) {
         return this.service.updateStandard(id, dto, this.userId(request));
+    }
+
+    @Delete('standards/:id')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    deleteStandard(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthRequest) {
+        return this.standardLifecycle.deleteStandardEdition(id, this.userId(request));
     }
 
     @Get('scheme-configurations')
