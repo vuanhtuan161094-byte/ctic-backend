@@ -28,6 +28,6 @@ check('Scheduler exposes only safe lifecycle state and retains shutdown wait', /
 check('Customer access projects the controlled direct/request authority and imports remain Phase 7 scoped', /mutation_authority: 'CONTROLLED_DIRECT_OR_REQUEST_WORKFLOW'/.test(service) && /supported_scope_remains_phase_7: true/.test(service));
 check('Audit explorer remains paginated and read-only', /api\.get<Page<AuditLog>>\(`\/audit-logs\?\$\{auditQuery\}`\)/.test(frontend) && /Nhật ký hệ thống chỉ đọc/.test(frontend));
 check('Administration UI reuses Phase 7 configuration components', /MasterDataConfigurationPanel/.test(frontend) && /CertificationBodyCapabilitiesPanel/.test(frontend));
-check('P09 contract includes migration 28 and Phase 9 real SQL suite', /20260825050000_system_administration_governance/.test(p09) && /system-administration-governance\.e2e-spec\.ts/.test(p09));
+check('P09 derives repository migration contract and includes Phase 9 real SQL suite', /readCanonicalMigrationNames/.test(p09) && /system-administration-governance\.e2e-spec\.ts/.test(p09));
 console.log(`\nPhase 9 system administration governance regression: ${15 - failed}/15 PASS`);
 if (failed) process.exitCode = 1;

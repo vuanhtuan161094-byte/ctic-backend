@@ -53,7 +53,7 @@ assert.match(expertsController, /@Roles\('ADMIN'\)[\s\S]*createAvailability/);
 assert.match(expertsController, /@Roles\('ADMIN'\)[\s\S]*reviewConflict/);
 assert.doesNotMatch(expertsController, /@Roles\([^)]*'CUSTOMER'[^)]*\)[\s\S]{0,300}resource-governance/);
 
-assert.match(p09, /20260824120000_expert_resource_independence/);
+assert.match(p09, /readCanonicalMigrationNames/);
 assert.match(p09, /expert-resource-independence\.e2e-spec\.ts/);
 
 console.log('Phase 4C expert resource and independence regression: PASS');

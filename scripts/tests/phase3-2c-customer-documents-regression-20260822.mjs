@@ -57,7 +57,7 @@ check('Portal projection không expose reviewer nội bộ/password', !/password
 check('Portal UI có upload application document + evidence response', /applications\/\$\{applicationModal\.id\}\/upload/.test(portalUi) && /requests\/\$\{requestModal\.id\}\/submit/.test(portalUi));
 check('Internal UI có tạo request + accept/revision review', /Tạo yêu cầu bổ sung tài liệu/.test(internalUi) && /REVISION_REQUIRED/.test(internalUi) && /ACCEPT/.test(internalUi));
 check('DashboardShell tách portal documents và internal document request queue', /customer-documents/.test(shell) && /customer-document-requests/.test(shell));
-check('Runner chốt migration 20 và suite E2E Phase 3.2C', /20260822100000_customer_document_requests/.test(runner) && /customer-document-requests\.e2e-spec\.ts/.test(runner));
+check('Runner derives repository migration contract and includes suite E2E Phase 3.2C', /readCanonicalMigrationNames/.test(runner) && /customer-document-requests\.e2e-spec\.ts/.test(runner));
 check('Có real SQL Server E2E Phase 3.2C', exists('test/customer-document-requests.e2e-spec.ts'));
 const e2e = read('test/customer-document-requests.e2e-spec.ts');
 check('E2E chứng minh version 1 -> version 2 cho application document', /version_no\)\.toBe\(1\)/.test(e2e) && /version_no\)\.toBe\(2\)/.test(e2e));

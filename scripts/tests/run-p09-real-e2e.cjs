@@ -1,4 +1,6 @@
 const { spawnSync } = require('node:child_process');
+const { existsSync, readdirSync } = require('node:fs');
+const path = require('node:path');
 
 const { PrismaMssql } = require('@prisma/adapter-mssql');
 const { PrismaClient } = require('@prisma/client');
@@ -14,36 +16,32 @@ const CERTIFICATE_LIFECYCLE_MIGRATION =
   '20260821150000_certificate_lifecycle_core';
 const CERTIFICATE_LIFECYCLE_RECOVERY_CONFIRMATION =
   'I_UNDERSTAND_THIS_RECOVERS_ONLY_THE_FAILED_PHASE11_TEST_MIGRATION';
-const EXPECTED_MIGRATIONS = [
-  '00000000000000_baseline',
-  '20260805230000_patch35a3_integrated_manday_allocation',
-  '20260810001500_patch36b5_document_file_integrity',
-  '20260810013000_patch36b6_security_audit',
-  '20260810120000_patch36c1_legacy_schema_consolidation',
-  '20260810180000_p09_customer_user_access',
-  '20260812120000_application_review_cb_capability',
-  '20260812204000_application_review_invalidation_country',
-  '20260812223000_customer_tax_code_filtered_unique',
-  '20260812230000_uat_country_review_roundtrip',
-  '20260813171500_surveillance_information_snapshot',
-  '20260821150000_certificate_lifecycle_core',
-  '20260821190000_certificate_status_decision_audit',
-  '20260821230000_work_item_authorization_core',
-  '20260822010000_notification_sla_engine',
-  '20260822013000_notification_customer_permission',
-  '20260822030000_delegation_reviewer_assignment_sod',
-  '20260822070000_customer_organization_change_request',
-  '20260822090000_customer_user_access_requests',
-  '20260822100000_customer_document_requests',
-  '20260822164000_expert_competency_governance',
-  '20260822190000_expert_training_monitoring',
-  '20260824120000_expert_resource_independence',
-  '20260824150000_document_control_core',
-  '20260824190000_change_special_audit_complaints_appeals',
-  '20260824230000_master_data_configuration_import',
-  '20260825010000_commercial_management_reporting',
-  '20260825050000_system_administration_governance',
-];
+const MIGRATIONS_ROOT = path.resolve(__dirname, '../../prisma/migrations');
+
+function readCanonicalMigrationNames(migrationsRoot = MIGRATIONS_ROOT) {
+  const directories = readdirSync(migrationsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const missingMigrationSql = directories
+    .filter(
+      (entry) =>
+        !existsSync(path.join(migrationsRoot, entry.name, 'migration.sql')),
+    )
+    .map((entry) => entry.name);
+
+  if (missingMigrationSql.length > 0) {
+    fail(
+      `Migration directories missing migration.sql: ${missingMigrationSql.join(', ')}.`,
+    );
+  }
+  if (directories.length === 0) {
+    fail('Repository canonical migration set is empty.');
+  }
+
+  return directories.map((entry) => entry.name);
+}
+
+const EXPECTED_MIGRATIONS = Object.freeze(readCanonicalMigrationNames());
 
 loadDotEnv({
   path: '.env',
@@ -661,6 +659,7 @@ if (require.main === module) {
 module.exports = {
   TEST_DATABASE_NAME,
   EXPECTED_MIGRATIONS,
+  readCanonicalMigrationNames,
   createClient,
   enforceTestDatabaseOptions,
   parseSqlServerUrl,

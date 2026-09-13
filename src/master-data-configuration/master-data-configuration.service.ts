@@ -9,14 +9,26 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecurityAuditService } from '../security/security-audit.service';
 import {
+    CancelScheduledNumberingSeriesDto,
     CreateNumberingSeriesDto,
     CreateSchemeConfigurationDto,
     CreateSchemeDto,
     CreateStandardEditionDto,
+    EndNumberingSeriesDto,
     OrganizationProfileDto,
+    ReplaceNumberingSeriesDto,
     UpdateSchemeDto,
     UpdateStandardEditionDto,
 } from './dto/master-data-configuration.dto';
+import {
+    isConfigurableNumberingEntity,
+    MANDATORY_NUMBERING_ENTITY_TYPES,
+    NUMBERING_CAPABILITIES,
+    numberingBusinessDate,
+    numberingCapabilities,
+    numberingRuleLifecycleState,
+    numberingSequenceNamespace,
+} from './numbering-runtime-policy';
 
 type CsvRow = Record<string, string>;
 type ValidatedRow = {
@@ -72,10 +84,84 @@ export class MasterDataConfigurationService {
         }
     }
 
-    private async writeAudit(userId: string, action: string, entityType: string, entityId: string, statusCode = 200) {
+    private async writeAudit(
+        userId: string,
+        action: string,
+        entityType: string,
+        entityId: string,
+        statusCode = 200,
+        details?: Record<string, unknown>,
+    ) {
         await this.audit.write({
-            userId, action, entityType, entityId, outcome: 'success', statusCode,
+            userId, action, entityType, entityId, outcome: 'success', statusCode, details,
         });
+    }
+
+    private numberingEntity(value: string) {
+        const entityType = this.code(value, 50);
+        if (!isConfigurableNumberingEntity(entityType)) {
+            throw new BadRequestException(
+                'Loại hồ sơ không dùng Numbering Rules. Đơn đăng ký và Chứng chỉ giữ cơ chế cấp số riêng.',
+            );
+        }
+        return entityType;
+    }
+
+    private numberingLifecycleReason(value: string) {
+        const reason = value.trim();
+        if (!reason) {
+            throw new BadRequestException('Lý do thay đổi không được để trống');
+        }
+        return reason;
+    }
+
+    private numberingOverlapWhere(
+        entityType: string,
+        from: Date,
+        to: Date | null,
+        excludeId?: string,
+    ) {
+        return {
+            entity_type: entityType,
+            status: 'ACTIVE',
+            ...(excludeId ? { id: { not: excludeId } } : {}),
+            effective_from: {
+                lte: to ?? new Date('9999-12-31T00:00:00.000Z'),
+            },
+            OR: [
+                { effective_to: null },
+                { effective_to: { gte: from } },
+            ],
+        };
+    }
+
+    private async lockNumberingEntity(
+        tx: Prisma.TransactionClient,
+        entityType: string,
+    ) {
+        await tx.$queryRaw(Prisma.sql`
+            SELECT [id]
+            FROM [dbo].[numbering_series_configs] WITH (UPDLOCK, HOLDLOCK)
+            WHERE [entity_type] = ${entityType}
+        `);
+    }
+
+    private publicNumberingRule<TRow extends {
+        series_key: string;
+        prefix: string;
+        status: string;
+        effective_from: Date;
+        effective_to: Date | null;
+    }>(row: TRow, at = numberingBusinessDate()) {
+        const { series_key: persistedSeriesKey, ...publicRow } = row;
+        const runtimeSeriesKey = numberingSequenceNamespace(row.prefix);
+        return {
+            ...publicRow,
+            runtime_series_key: runtimeSeriesKey,
+            legacy_series_key_mismatch:
+                persistedSeriesKey !== runtimeSeriesKey,
+            lifecycle_state: numberingRuleLifecycleState(row, at),
+        };
     }
 
     async listSchemes(search?: string, activeOnly = false) {
@@ -522,6 +608,7 @@ export class MasterDataConfigurationService {
 
     async configurationReadiness() {
         const now = new Date();
+        const numberingToday = numberingBusinessDate(now);
         const [
             schemes,
             profile,
@@ -593,13 +680,16 @@ export class MasterDataConfigurationService {
             this.prisma.numbering_series_configs.findMany({
                 where: {
                     status: 'ACTIVE',
-                    effective_from: { lte: now },
-                    OR: [{ effective_to: null }, { effective_to: { gte: now } }],
                 },
                 select: {
+                    id: true,
                     entity_type: true,
+                    series_key: true,
                     prefix: true,
                     padding: true,
+                    status: true,
+                    effective_from: true,
+                    effective_to: true,
                 },
             }),
             this.prisma.industry_classifications.count({
@@ -619,14 +709,39 @@ export class MasterDataConfigurationService {
             }),
         ]);
 
-        const runtimeNumberingEntities = [
-            'DOCUMENT',
-            'COMPLAINT',
-            'APPEAL',
-            'CHANGE',
-            'SPECIAL_AUDIT',
-        ];
-        const numberingTypes = new Set(numbering.map((item) => item.entity_type));
+        const currentNumbering = numbering.filter((item) =>
+            numberingRuleLifecycleState(item, numberingToday) === 'CURRENT');
+        const numberingReasons = NUMBERING_CAPABILITIES.flatMap((capability) => {
+            const current = currentNumbering.filter(
+                (item) => item.entity_type === capability.entity_type,
+            );
+            if (current.length === 1) return [];
+            const scheduled = numbering.some((item) =>
+                item.entity_type === capability.entity_type &&
+                numberingRuleLifecycleState(item, numberingToday) === 'SCHEDULED');
+            return [{
+                code: current.length > 1
+                    ? 'NUMBERING_ACTIVE_OVERLAP'
+                    : scheduled
+                        ? 'NUMBERING_RULE_SCHEDULED_NOT_CURRENT'
+                        : 'NUMBERING_RULE_MISSING',
+                entity_type: capability.entity_type,
+                label: capability.label,
+                blocking: capability.mandatory_for_global_readiness,
+                message: current.length > 1
+                    ? `Có nhiều quy tắc đang hiệu lực cho ${capability.label}.`
+                    : scheduled
+                        ? `${capability.label} mới có quy tắc chờ hiệu lực, chưa có quy tắc hiện hành.`
+                        : `Chưa có quy tắc hiện hành cho ${capability.label}.`,
+            }];
+        });
+        const blockingNumberingReasons = numberingReasons.filter(
+            (item) => item.blocking,
+        );
+        const missingNumbering = blockingNumberingReasons
+            .filter((item) => item.code !== 'NUMBERING_ACTIVE_OVERLAP')
+            .map((item) => item.entity_type);
+        const numberingReady = blockingNumberingReasons.length === 0;
         const schemeRows = schemes.map((scheme) => {
             const activeConfiguration = scheme.configurations[0] ?? null;
             const issues: string[] = [];
@@ -653,14 +768,12 @@ export class MasterDataConfigurationService {
             iafCount > 0 &&
             isicNaceCount > 0 &&
             naceIafCount > 0;
-        const missingNumbering = runtimeNumberingEntities
-            .filter((entityType) => !numberingTypes.has(entityType));
         const ready =
             Boolean(profile) &&
             taxonomyReady &&
             schemeRows.length > 0 &&
             schemeRows.every((item) => item.status === 'READY') &&
-            missingNumbering.length === 0;
+            numberingReady;
 
         return {
             status: ready ? 'READY' : 'NEEDS_ATTENTION',
@@ -682,9 +795,15 @@ export class MasterDataConfigurationService {
                 nace_iaf_mapping_count: naceIafCount,
             },
             numbering: {
-                ready: missingNumbering.length === 0,
-                configured: numbering,
+                ready: numberingReady,
+                configured: currentNumbering.map((item) =>
+                    this.publicNumberingRule(item, numberingToday)),
                 missing_entity_types: missingNumbering,
+                mandatory_entity_types: [...MANDATORY_NUMBERING_ENTITY_TYPES],
+                optional_entity_types: NUMBERING_CAPABILITIES
+                    .filter((item) => !item.mandatory_for_global_readiness)
+                    .map((item) => item.entity_type),
+                reasons: numberingReasons,
             },
             runtime_wiring: [
                 {
@@ -752,35 +871,325 @@ export class MasterDataConfigurationService {
         return row;
     }
 
-    listNumberingSeries() {
-        return this.prisma.numbering_series_configs.findMany({ orderBy: [{ entity_type: 'asc' }, { effective_from: 'desc' }] });
+    numberingCapabilities() {
+        return numberingCapabilities();
+    }
+
+    async listNumberingSeries() {
+        const at = numberingBusinessDate();
+        const rows = await this.prisma.numbering_series_configs.findMany({
+            orderBy: [
+                { entity_type: 'asc' },
+                { effective_from: 'desc' },
+            ],
+        });
+        return rows.map((row) => this.publicNumberingRule(row, at));
     }
 
     async createNumberingSeries(dto: CreateNumberingSeriesDto, userId: string) {
+        const entityType = this.numberingEntity(dto.entity_type);
         const from = this.date(dto.effective_from, 'Ngày hiệu lực', true)!;
         const to = this.date(dto.effective_to, 'Ngày hết hiệu lực');
         this.period(from, to);
-        const seriesKey = this.code(dto.series_key);
-        const prefix = this.code(dto.prefix, 50);
-        const overlap = await this.prisma.numbering_series_configs.findFirst({
-            where: {
-                entity_type: dto.entity_type, status: 'ACTIVE', effective_from: { lte: to ?? new Date('9999-12-31T00:00:00.000Z') },
-                OR: [{ effective_to: null }, { effective_to: { gte: from } }],
-            },
-        });
-        if (overlap) throw new ConflictException('Khoảng hiệu lực numbering chồng lấn cấu hình ACTIVE hiện có');
-        const row = await this.prisma.numbering_series_configs.create({
-            data: { series_key: seriesKey, entity_type: dto.entity_type, prefix, padding: dto.padding, effective_from: from, effective_to: to, created_by: userId },
+        const prefix = numberingSequenceNamespace(dto.prefix);
+        const row = await this.prisma.$transaction(async (tx) => {
+            await this.lockNumberingEntity(tx, entityType);
+            const overlap = await tx.numbering_series_configs.findFirst({
+                where: this.numberingOverlapWhere(entityType, from, to),
+            });
+            if (overlap) {
+                throw new ConflictException(
+                    'Khoảng hiệu lực chồng lấn quy tắc hiện có. Hãy dùng thao tác Thay thế quy tắc.',
+                );
+            }
+            return tx.numbering_series_configs.create({
+                data: {
+                    series_key: prefix,
+                    entity_type: entityType,
+                    prefix,
+                    padding: dto.padding,
+                    effective_from: from,
+                    effective_to: to,
+                    created_by: userId,
+                },
+            });
+        }, {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
         await this.writeAudit(userId, 'NUMBERING_CONFIG_CREATED', 'numbering_series_config', row.id, 201);
-        return row;
+        return this.publicNumberingRule(row);
+    }
+
+    async replaceNumberingSeries(
+        id: string,
+        dto: ReplaceNumberingSeriesDto,
+        userId: string,
+    ) {
+        const replacementFrom = this.date(
+            dto.effective_from,
+            'Ngày bắt đầu quy tắc mới',
+            true,
+        )!;
+        const replacementTo = this.date(
+            dto.effective_to,
+            'Ngày kết thúc quy tắc mới',
+        );
+        this.period(replacementFrom, replacementTo);
+        const today = numberingBusinessDate();
+        if (replacementFrom < today) {
+            throw new BadRequestException(
+                'Không thể thay đổi lịch sử. Quy tắc mới phải bắt đầu từ hôm nay hoặc một ngày tương lai.',
+            );
+        }
+        const prefix = numberingSequenceNamespace(dto.prefix);
+        const reason = this.numberingLifecycleReason(dto.reason);
+
+        const result = await this.prisma.$transaction(async (tx) => {
+            const target = await tx.numbering_series_configs.findUnique({
+                where: { id },
+            });
+            if (!target) throw new NotFoundException('Không tìm thấy quy tắc đánh số');
+            const entityType = this.numberingEntity(target.entity_type);
+            await this.lockNumberingEntity(tx, entityType);
+            const lockedTarget = await tx.numbering_series_configs.findUnique({
+                where: { id },
+            });
+            if (!lockedTarget || lockedTarget.status !== 'ACTIVE') {
+                throw new ConflictException('Chỉ quy tắc hiện hành mới có thể được thay thế');
+            }
+            if (numberingRuleLifecycleState(lockedTarget, today) !== 'CURRENT') {
+                throw new ConflictException(
+                    'Quy tắc đã chọn không còn hiện hành. Hãy tải lại danh sách trước khi thao tác.',
+                );
+            }
+            if (
+                lockedTarget.effective_to &&
+                replacementFrom > new Date(lockedTarget.effective_to.getTime() + 86_400_000)
+            ) {
+                throw new BadRequestException(
+                    'Ngày bắt đầu quy tắc mới tạo khoảng trống sau quy tắc hiện hành.',
+                );
+            }
+            if (
+                replacementFrom.getTime() === lockedTarget.effective_from.getTime() &&
+                prefix === numberingSequenceNamespace(lockedTarget.prefix)
+            ) {
+                throw new ConflictException(
+                    'Không thể tạo hai phiên bản cùng tiền tố trong cùng ngày bắt đầu. Hãy chọn ngày kế tiếp để giữ lịch sử.',
+                );
+            }
+            const overlap = await tx.numbering_series_configs.findFirst({
+                where: this.numberingOverlapWhere(
+                    entityType,
+                    replacementFrom,
+                    replacementTo,
+                    id,
+                ),
+            });
+            if (overlap) {
+                throw new ConflictException(
+                    'Quy tắc mới chồng lấn một quy tắc hiện hành hoặc đã lên lịch khác.',
+                );
+            }
+
+            const previousEnd = this.previousDay(replacementFrom);
+            const sameStart = previousEnd < lockedTarget.effective_from;
+            const previous = await tx.numbering_series_configs.update({
+                where: { id },
+                data: sameStart
+                    ? { status: 'INACTIVE' }
+                    : { effective_to: previousEnd },
+            });
+            const replacement = await tx.numbering_series_configs.create({
+                data: {
+                    series_key: prefix,
+                    entity_type: entityType,
+                    prefix,
+                    padding: dto.padding,
+                    status: 'ACTIVE',
+                    effective_from: replacementFrom,
+                    effective_to: replacementTo,
+                    created_by: userId,
+                },
+            });
+            return { previous, replacement };
+        }, {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+
+        await this.writeAudit(
+            userId,
+            'NUMBERING_CONFIG_REPLACED',
+            'numbering_series_config',
+            result.replacement.id,
+            201,
+            {
+                reason,
+                previous_rule_id: result.previous.id,
+                effective_from: dto.effective_from,
+                effective_to: dto.effective_to ?? null,
+                runtime_series_key: prefix,
+            },
+        );
+        return {
+            rule: this.publicNumberingRule(result.replacement, today),
+            previous_rule: this.publicNumberingRule(result.previous, today),
+        };
+    }
+
+    async endNumberingSeries(
+        id: string,
+        dto: EndNumberingSeriesDto,
+        userId: string,
+    ) {
+        const endAt = this.date(dto.effective_to, 'Ngày kết thúc', true)!;
+        const today = numberingBusinessDate();
+        if (endAt < today) {
+            throw new BadRequestException('Không thể sửa ngày kết thúc vào quá khứ');
+        }
+        const reason = this.numberingLifecycleReason(dto.reason);
+        const row = await this.prisma.$transaction(async (tx) => {
+            const target = await tx.numbering_series_configs.findUnique({ where: { id } });
+            if (!target) throw new NotFoundException('Không tìm thấy quy tắc đánh số');
+            const entityType = this.numberingEntity(target.entity_type);
+            await this.lockNumberingEntity(tx, entityType);
+            const lockedTarget = await tx.numbering_series_configs.findUnique({ where: { id } });
+            if (
+                !lockedTarget ||
+                lockedTarget.status !== 'ACTIVE' ||
+                numberingRuleLifecycleState(lockedTarget, today) !== 'CURRENT'
+            ) {
+                throw new ConflictException('Chỉ quy tắc hiện hành mới có thể đặt ngày kết thúc');
+            }
+            this.period(lockedTarget.effective_from, endAt);
+            const next = await tx.numbering_series_configs.findFirst({
+                where: {
+                    entity_type: entityType,
+                    status: 'ACTIVE',
+                    id: { not: id },
+                    effective_from: { gt: lockedTarget.effective_from },
+                },
+                orderBy: { effective_from: 'asc' },
+            });
+            if (next && endAt >= next.effective_from) {
+                throw new ConflictException(
+                    'Ngày kết thúc chồng lấn quy tắc đã lên lịch tiếp theo.',
+                );
+            }
+            return tx.numbering_series_configs.update({
+                where: { id },
+                data: { effective_to: endAt },
+            });
+        }, {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+        await this.writeAudit(
+            userId,
+            'NUMBERING_CONFIG_END_SCHEDULED',
+            'numbering_series_config',
+            id,
+            200,
+            { reason, effective_to: dto.effective_to },
+        );
+        return this.publicNumberingRule(row, today);
+    }
+
+    async cancelScheduledNumberingSeries(
+        id: string,
+        dto: CancelScheduledNumberingSeriesDto,
+        userId: string,
+    ) {
+        const today = numberingBusinessDate();
+        const reason = this.numberingLifecycleReason(dto.reason);
+        const result = await this.prisma.$transaction(async (tx) => {
+            const target = await tx.numbering_series_configs.findUnique({ where: { id } });
+            if (!target) throw new NotFoundException('Không tìm thấy quy tắc đánh số');
+            const entityType = this.numberingEntity(target.entity_type);
+            await this.lockNumberingEntity(tx, entityType);
+            const lockedTarget = await tx.numbering_series_configs.findUnique({ where: { id } });
+            if (
+                !lockedTarget ||
+                lockedTarget.status !== 'ACTIVE' ||
+                numberingRuleLifecycleState(lockedTarget, today) !== 'SCHEDULED'
+            ) {
+                throw new ConflictException('Chỉ quy tắc đang chờ hiệu lực mới có thể hủy lịch');
+            }
+            const previous = await tx.numbering_series_configs.findFirst({
+                where: {
+                    entity_type: entityType,
+                    status: 'ACTIVE',
+                    id: { not: id },
+                    effective_from: { lt: lockedTarget.effective_from },
+                },
+                orderBy: { effective_from: 'desc' },
+            });
+            const next = await tx.numbering_series_configs.findFirst({
+                where: {
+                    entity_type: entityType,
+                    status: 'ACTIVE',
+                    id: { not: id },
+                    effective_from: { gt: lockedTarget.effective_from },
+                },
+                orderBy: { effective_from: 'asc' },
+            });
+            const cancelled = await tx.numbering_series_configs.update({
+                where: { id },
+                data: { status: 'INACTIVE' },
+            });
+            let restoredPrevious: typeof previous = null;
+            if (
+                previous?.effective_to &&
+                previous.effective_to.getTime() ===
+                    this.previousDay(lockedTarget.effective_from).getTime()
+            ) {
+                const restoredEnd = next
+                    ? this.previousDay(next.effective_from)
+                    : null;
+                if (restoredEnd && restoredEnd < previous.effective_from) {
+                    throw new ConflictException(
+                        'Không thể khôi phục quy tắc trước mà không tạo chồng lấn.',
+                    );
+                }
+                restoredPrevious = await tx.numbering_series_configs.update({
+                    where: { id: previous.id },
+                    data: { effective_to: restoredEnd },
+                });
+            }
+            return { cancelled, restoredPrevious };
+        }, {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+        await this.writeAudit(
+            userId,
+            'NUMBERING_CONFIG_SCHEDULE_CANCELLED',
+            'numbering_series_config',
+            id,
+            200,
+            {
+                reason,
+                restored_previous_rule_id: result.restoredPrevious?.id ?? null,
+            },
+        );
+        return {
+            rule: this.publicNumberingRule(result.cancelled, today),
+            previous_rule: result.restoredPrevious
+                ? this.publicNumberingRule(result.restoredPrevious, today)
+                : null,
+        };
     }
 
     async resolveNumbering(entityType: string, at = new Date()) {
+        const normalizedEntityType = this.numberingEntity(entityType);
+        const effectiveAt = numberingBusinessDate(at);
         return this.prisma.numbering_series_configs.findFirst({
             where: {
-                entity_type: this.code(entityType, 50), status: 'ACTIVE', effective_from: { lte: at },
-                OR: [{ effective_to: null }, { effective_to: { gte: at } }],
+                entity_type: normalizedEntityType,
+                status: 'ACTIVE',
+                effective_from: { lte: effectiveAt },
+                OR: [
+                    { effective_to: null },
+                    { effective_to: { gte: effectiveAt } },
+                ],
             },
             orderBy: { effective_from: 'desc' },
         });

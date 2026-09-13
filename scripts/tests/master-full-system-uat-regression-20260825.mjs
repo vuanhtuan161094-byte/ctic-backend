@@ -45,7 +45,12 @@ check('UAT runner chạy backend regression/build/Jest', runner.includes("'test:
 check('UAT runner chạy frontend test/lint', runner.includes("runNpm(['test'], frontend)") && runner.includes("runNpm(['run', 'lint'], frontend)"));
 check('UAT runner gọi P09 real SQL gate', runner.includes("'test:e2e:p09'"));
 check('UAT runner từ chối production', runner.includes("NODE_ENV=production"));
-check('P09 vẫn khóa canonical migration 28 và 18 suite baseline', p09.includes('20260825050000_system_administration_governance') && p09.includes('system-administration-governance.e2e-spec.ts'));
+check(
+  'P09 derives canonical migration contract from repository and keeps the 18-suite baseline',
+  p09.includes('readCanonicalMigrationNames')
+    && p09.includes("path.join(migrationsRoot, entry.name, 'migration.sql')")
+    && p09.includes('system-administration-governance.e2e-spec.ts'),
+);
 check('F.12 vẫn đứng sau quyết định F.13', notification.includes('const requiresDecision = true;'));
 check('Dossier giữ Decision trước Notification', dossier.includes("{ code: 'MAKE_DECISION'") && dossier.includes("{ code: 'NOTIFY_RESULT'"));
 check('Certificate lifecycle vẫn dùng decision type authority', decision.includes('normalizeDecisionType') && decision.includes('decisionRequiresCertificateVersion'));

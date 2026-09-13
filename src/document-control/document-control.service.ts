@@ -10,6 +10,11 @@ import { existsSync } from 'fs';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveDocumentStoragePath } from '../common/storage-config';
+import {
+    isConfigurableNumberingEntity,
+    numberingBusinessDate,
+    numberingBusinessYear,
+} from '../master-data-configuration/numbering-runtime-policy';
 import { ResourceAccessService } from '../security/resource-access.service';
 import type { ResourceActor } from '../security/resource-access.service';
 import { TEMPLATE_ALLOWED_TOKENS } from './template-field-catalog';
@@ -482,11 +487,20 @@ export class DocumentControlService {
         yearInput?: number,
         entityType?: string,
     ) {
-        const effectiveAt = new Date();
-        const configured = entityType && 'numbering_series_configs' in tx
+        const normalizedEntityType = entityType?.trim().toUpperCase();
+        if (
+            normalizedEntityType &&
+            !isConfigurableNumberingEntity(normalizedEntityType)
+        ) {
+            throw new BadRequestException(
+                `Loại hồ sơ ${normalizedEntityType} không thuộc Numbering Rules runtime`,
+            );
+        }
+        const effectiveAt = numberingBusinessDate();
+        const configured = normalizedEntityType && 'numbering_series_configs' in tx
             ? await tx.numbering_series_configs.findFirst({
                 where: {
-                    entity_type: entityType,
+                    entity_type: normalizedEntityType,
                     status: 'ACTIVE',
                     effective_from: { lte: effectiveAt },
                     OR: [
@@ -501,10 +515,11 @@ export class DocumentControlService {
             configured?.prefix ?? prefixInput,
             50,
         );
-        // document_number only contains prefix + year + sequence, therefore
-        // that visible namespace must also be the one and only sequence key.
+        // Persisted numbering_series_configs.series_key is a legacy storage
+        // column. Runtime sequence continuation is explicitly owned by the
+        // normalized visible prefix plus business year.
         const seriesKey = requestedPrefix;
-        const year = yearInput ?? new Date().getFullYear();
+        const year = yearInput ?? numberingBusinessYear();
         const rows = await tx.$queryRaw<Array<{
             prefix: string;
             next_value: number;

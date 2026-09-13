@@ -30,7 +30,7 @@ check('Import is validate preview then CREATE_ONLY commit with repeat guard', /v
 check('Import blocks formulas, unsupported files and oversized payloads', /spreadsheet không được phép/.test(service) && /Chỉ chấp nhận file CSV/.test(service) && /2 MB/.test(service));
 check('Customer never appears in Phase 7 admin controller roles', !/CUSTOMER/.test(controller) && /@Roles\('ADMIN'\)/.test(controller));
 check('Organization profile overrides neutral environment fallback for future document snapshots', /PlatformBrandingProfile/.test(branding) && /profile\?\.display_name/.test(branding));
-check('P09 contract includes migration 26 and Phase 7 real SQL suite', /20260824230000_master_data_configuration_import/.test(p09) && /master-data-configuration-import\.e2e-spec\.ts/.test(p09));
+check('P09 derives repository migration contract and includes Phase 7 real SQL suite', /readCanonicalMigrationNames/.test(p09) && /master-data-configuration-import\.e2e-spec\.ts/.test(p09));
 
 console.log(`\nPhase 7 master/config/import regression: ${13 - failed}/13 PASS`);
 if (failed) process.exitCode = 1;

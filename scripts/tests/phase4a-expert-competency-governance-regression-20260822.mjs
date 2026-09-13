@@ -55,7 +55,7 @@ check('Frontend upload evidence qua secure DocumentFile pipeline', /entity_type"
 check('Frontend có review, renew, reactivate và void-with-reason', /\/reviews`/.test(ui) && /\/renew`/.test(ui) && /\/reactivate`/.test(ui) && /competencyVoidEvidenceForm/.test(ui));
 check('Frontend suspend bắt buộc nhập lý do thay vì reason hard-code', /competencySuspendForm/.test(ui) && /Lý do đình chỉ/.test(ui) && !/Tạm đình chỉ theo quyết định quản lý năng lực/.test(ui));
 check('Frontend hiển thị KPI quá hạn đánh giá và thiếu evidence', /Đánh giá năng lực quá hạn/.test(ui) && /Thiếu bằng chứng năng lực/.test(ui));
-check('Runner chốt migration 21 + real SQL E2E Phase 4A', /20260822164000_expert_competency_governance/.test(runner) && /expert-competency-governance\.e2e-spec\.ts/.test(runner));
+check('Runner derives repository migration contract + real SQL E2E Phase 4A', /readCanonicalMigrationNames/.test(runner) && /expert-competency-governance\.e2e-spec\.ts/.test(runner));
 check('Có real SQL Server E2E Phase 4A', exists('test/expert-competency-governance.e2e-spec.ts'));
 
 console.log(`Phase 4A expert competency governance regression: ${pass} PASS / ${fail} FAIL`);

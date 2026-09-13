@@ -21,12 +21,15 @@ import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import {
+    CancelScheduledNumberingSeriesDto,
     CreateNumberingSeriesDto,
     CreateSchemeConfigurationDto,
     CreateSchemeDto,
     CreateStandardEditionDto,
+    EndNumberingSeriesDto,
     ImportUploadDto,
     OrganizationProfileDto,
+    ReplaceNumberingSeriesDto,
     UpdateSchemeDto,
     UpdateStandardEditionDto,
 } from './dto/master-data-configuration.dto';
@@ -184,11 +187,51 @@ export class MasterDataConfigurationController {
         return this.service.listNumberingSeries();
     }
 
+    @Get('numbering-capabilities')
+    @Roles(...INTERNAL_READ_ROLES)
+    @Permissions('classifications.read')
+    numberingCapabilities() {
+        return this.service.numberingCapabilities();
+    }
+
     @Post('numbering-series')
     @Roles('ADMIN')
     @Permissions('classifications.manage')
     createNumberingSeries(@Body() dto: CreateNumberingSeriesDto, @Req() request: AuthRequest) {
         return this.service.createNumberingSeries(dto, this.userId(request));
+    }
+
+    @Post('numbering-series/:id/replace')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    replaceNumberingSeries(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: ReplaceNumberingSeriesDto,
+        @Req() request: AuthRequest,
+    ) {
+        return this.service.replaceNumberingSeries(id, dto, this.userId(request));
+    }
+
+    @Post('numbering-series/:id/end')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    endNumberingSeries(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: EndNumberingSeriesDto,
+        @Req() request: AuthRequest,
+    ) {
+        return this.service.endNumberingSeries(id, dto, this.userId(request));
+    }
+
+    @Post('numbering-series/:id/cancel-scheduled')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    cancelScheduledNumberingSeries(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: CancelScheduledNumberingSeriesDto,
+        @Req() request: AuthRequest,
+    ) {
+        return this.service.cancelScheduledNumberingSeries(id, dto, this.userId(request));
     }
 
     @Get('imports/definitions')

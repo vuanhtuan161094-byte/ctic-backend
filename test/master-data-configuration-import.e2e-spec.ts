@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { DocumentControlService } from '../src/document-control/document-control.service';
 import { MasterDataConfigurationService } from '../src/master-data-configuration/master-data-configuration.service';
+import { numberingBusinessDate, numberingBusinessYear } from '../src/master-data-configuration/numbering-runtime-policy';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SecurityAuditService } from '../src/security/security-audit.service';
 
@@ -31,6 +32,7 @@ describeRealDatabase('Phase 7 master data/configuration/import (real SQL Server 
     let standardId = '';
     const configIds: string[] = [];
     const numberingIds: string[] = [];
+    const numberingPrefixes: string[] = [];
     const importIds: string[] = [];
 
     async function assertTestDatabase() {
@@ -62,7 +64,7 @@ describeRealDatabase('Phase 7 master data/configuration/import (real SQL Server 
         await prisma.customers.deleteMany({ where: { id: ids.customer } });
         if (standardId) await prisma.standard_editions.deleteMany({ where: { id: standardId } });
         await prisma.certification_schemes.deleteMany({ where: { code: { in: [schemeCode, importedCode] } } });
-        await prisma.controlled_number_sequences.deleteMany({ where: { series_key: `PX${run}` } });
+        await prisma.controlled_number_sequences.deleteMany({ where: { series_key: { in: numberingPrefixes } } });
         await prisma.audit_logs.deleteMany({ where: { user_id: adminId } });
         await prisma.users.deleteMany({ where: { id: adminId } });
         await prisma.$disconnect();
@@ -93,17 +95,58 @@ describeRealDatabase('Phase 7 master data/configuration/import (real SQL Server 
         const v1 = await service.createConfiguration({ ...baseInput, version_no: 1, effective_from: '2026-01-01', effective_to: '2026-12-31' }, adminId);
         const v2 = await service.createConfiguration({ ...baseInput, version_no: 2, effective_from: '2027-01-01', reminder_lead_days: 75 }, adminId);
         configIds.push(v1.id, v2.id);
-        await service.activateConfiguration(v1.id, adminId); await service.activateConfiguration(v2.id, adminId);
         expect((await service.resolveConfiguration(schemeCode, '2026-08-24')).version_no).toBe(1);
         expect((await service.resolveConfiguration(schemeCode, '2027-01-01')).version_no).toBe(2);
     });
 
-    it('applies numbering revision only to future allocation through the Phase 5 atomic allocator', async () => {
-        const row = await service.createNumberingSeries({ series_key: `PX${run}`, entity_type: 'COMPLAINT', prefix: `PX${run}`, padding: 5, effective_from: '2026-01-01' }, adminId);
+    it('keeps prefix-year sequence authority atomic across schedule and cancellation', async () => {
+        const prefix = `PX${run}`;
+        const today = numberingBusinessDate();
+        const tomorrow = new Date(today.getTime() + 86_400_000);
+        const effectiveFrom = new Date(today.getTime() - (30 * 86_400_000)).toISOString().slice(0, 10);
+        const tomorrowText = tomorrow.toISOString().slice(0, 10);
+        const year = numberingBusinessYear();
+        numberingPrefixes.push(prefix);
+
+        const row = await service.createNumberingSeries({ entity_type: 'COMPLAINT', prefix, padding: 5, effective_from: effectiveFrom }, adminId);
         numberingIds.push(row.id);
-        const first = await prisma.$transaction((tx) => documents.allocateControlledNumber(tx, 'CMP', 2026, 'COMPLAINT'), { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-        const second = await prisma.$transaction((tx) => documents.allocateControlledNumber(tx, 'CMP', 2026, 'COMPLAINT'), { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-        expect(first).toBe(`PX${run}-2026-00001`); expect(second).toBe(`PX${run}-2026-00002`);
+        const allocated = await Promise.all(Array.from({ length: 10 }, () =>
+            prisma.$transaction(
+                (tx) => documents.allocateControlledNumber(tx, 'CMP', year, 'COMPLAINT'),
+                { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+            ),
+        ));
+        expect(new Set(allocated).size).toBe(10);
+        expect(allocated.sort()).toEqual(Array.from({ length: 10 }, (_, index) =>
+            `${prefix}-${year}-${String(index + 1).padStart(5, '0')}`));
+
+        const counterBeforeLifecycle = await prisma.controlled_number_sequences.findUniqueOrThrow({
+            where: { series_key_year_no: { series_key: prefix, year_no: year } },
+        });
+        const replacement = await service.replaceNumberingSeries(row.id, {
+            prefix,
+            padding: 6,
+            effective_from: tomorrowText,
+            reason: 'Verify safe future lifecycle without resetting the counter',
+        }, adminId);
+        numberingIds.push(replacement.rule.id);
+        expect((await service.resolveNumbering('COMPLAINT', today)).id).toBe(row.id);
+        expect((await service.resolveNumbering('COMPLAINT', tomorrow)).id).toBe(replacement.rule.id);
+
+        await service.cancelScheduledNumberingSeries(replacement.rule.id, {
+            reason: 'Verify cancellation restores the prior current rule',
+        }, adminId);
+        expect((await service.resolveNumbering('COMPLAINT', tomorrow)).id).toBe(row.id);
+        const counterAfterLifecycle = await prisma.controlled_number_sequences.findUniqueOrThrow({
+            where: { series_key_year_no: { series_key: prefix, year_no: year } },
+        });
+        expect(counterAfterLifecycle.next_value).toBe(counterBeforeLifecycle.next_value);
+        const next = await prisma.$transaction(
+            (tx) => documents.allocateControlledNumber(tx, 'CMP', year, 'COMPLAINT'),
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+        expect(next).toBe(`${prefix}-${year}-00011`);
+        expect(allocated[0]).toMatch(new RegExp(`^${prefix}-${year}-`));
     });
 
     it('validates without master writes, commits once, retains history and blocks repeat commit', async () => {

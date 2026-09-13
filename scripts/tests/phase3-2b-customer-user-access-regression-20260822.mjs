@@ -61,7 +61,7 @@ check('Portal UI có add/revoke/reactivate và chặn revoke cuối cùng', /ADD
 check('Admin UI chỉ yêu cầu credentials khi tạo user mới', /CREATE_NEW_USER/.test(reviewUi) && /temporary_password/.test(reviewUi) && /Input\.Password/.test(reviewUi));
 check('Admin UI hiển thị conflict account thay vì auto nâng quyền', /CONFLICT/.test(reviewUi) && /không phù hợp để cấp Portal tự động/.test(reviewUi));
 check('DashboardShell tách menu customer users và Admin review queue', /customer-portal-users/.test(shell) && /customer-user-requests/.test(shell));
-check('Runner chốt migration 19 và suite E2E 3.2B', /20260822090000_customer_user_access_requests/.test(runner) && /customer-user-access-request\.e2e-spec\.ts/.test(runner));
+check('Runner derives repository migration contract and includes suite E2E 3.2B', /readCanonicalMigrationNames/.test(runner) && /customer-user-access-request\.e2e-spec\.ts/.test(runner));
 check('Có real SQL Server E2E Phase 3.2B', exists('test/customer-user-access-request.e2e-spec.ts'));
 const e2e = read('test/customer-user-access-request.e2e-spec.ts');
 check('E2E chứng minh customer request không tự tạo user', /findUnique\(\{ where: \{ email: newUserEmail \} \}\)\)\.toBeNull/.test(e2e));

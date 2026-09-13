@@ -29,7 +29,7 @@ check('Overdue uses Phase 2 Work Item OPEN IN_PROGRESS authority', /OPEN_WORK_ST
 check('Utilization percentage is unavailable without denominator', /utilization_percentage: null/.test(service) && /chưa có mẫu số/.test(service));
 check('Commercial and cockpit APIs exclude CUSTOMER and technical-only roles server-side', /const MANAGEMENT_ROLES = \['ADMIN', 'STAFF', 'SALES', 'COORDINATOR'\]/.test(controller) && !/MANAGEMENT_ROLES.*CUSTOMER/.test(controller));
 check('Frontend uses backend KPI definitions, Phase 7 schemes and same-filter server CSV', /cockpit\.executive\.map/.test(frontend) && /master-data-configuration\/schemes/.test(frontend) && /cockpit\/export\.csv\?\$\{filterQuery\}/.test(frontend));
-check('P09 contract includes migration 27 and Phase 8 real SQL suite', /20260825010000_commercial_management_reporting/.test(p09) && /commercial-management-reporting\.e2e-spec\.ts/.test(p09));
+check('P09 derives repository migration contract and includes Phase 8 real SQL suite', /readCanonicalMigrationNames/.test(p09) && /commercial-management-reporting\.e2e-spec\.ts/.test(p09));
 
 console.log(`\nPhase 8 commercial/reporting regression: ${13 - failed}/13 PASS`);
 if (failed) process.exitCode = 1;

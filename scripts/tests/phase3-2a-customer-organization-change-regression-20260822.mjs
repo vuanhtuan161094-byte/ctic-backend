@@ -58,7 +58,7 @@ check('Frontend profile có form gửi yêu cầu và lịch sử snapshot', /Y�
 check('Frontend hỗ trợ đính kèm file sau khi tạo request', /document-files\/customer\/organization-change-requests/.test(frontendProfile) && /FormData/.test(frontendProfile));
 check('Coordinator có màn hình review riêng', /Yêu cầu thay đổi hồ sơ/.test(frontendReview) && /customer-change-requests/.test(frontendReview));
 check('DashboardShell chỉ mở màn review cho internal Coordinator/Admin', /customer-change-requests/.test(frontendShell) && /CustomerChangeRequestsScreen/.test(frontendShell));
-check('P09 runner có migration 18 và E2E Phase 3.2A', /20260822070000_customer_organization_change_request/.test(runner) && /customer-organization-change\.e2e-spec\.ts/.test(runner));
+check('P09 derives repository migration contract and includes E2E Phase 3.2A', /readCanonicalMigrationNames/.test(runner) && /customer-organization-change\.e2e-spec\.ts/.test(runner));
 check('Có real SQL Server E2E cho organization change', exists('test/customer-organization-change.e2e-spec.ts'));
 const organizationChangeE2e = read('test/customer-organization-change.e2e-spec.ts');
 check('Phase 3.2A E2E cleanup xóa audit log theo user trước khi xóa user fixture', /audit_logs\.deleteMany\(\{ where: \{ user_id: \{ in: userIds \} \} \}\);[\s\S]*users\.deleteMany/.test(organizationChangeE2e));

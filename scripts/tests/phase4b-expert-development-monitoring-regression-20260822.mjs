@@ -63,7 +63,7 @@ check('Frontend có F.12 create/complete/cancel monitoring', /F\.12-P\.08/.test(
 check('Frontend có F.09 rating 4-1-N', /F\.09/.test(ui) && /Rất tốt/.test(ui) && /Không áp dụng/.test(ui) && /witness_items/.test(ui));
 check('Frontend upload evidence qua secure DocumentFile pipeline', /expert_training_record/.test(ui) && /expert_monitoring_record/.test(ui) && /\/document-files\/upload/.test(ui));
 check('Frontend cảnh báo management action nhưng nói rõ không tự đình chỉ', /management_action_required/.test(ui) && /Hệ thống không tự đình chỉ competency/i.test(ui));
-check('Runner chốt migration 22 + real SQL E2E Phase 4B', /20260822190000_expert_training_monitoring/.test(runner) && /expert-development-monitoring\.e2e-spec\.ts/.test(runner));
+check('Runner derives repository migration contract + real SQL E2E Phase 4B', /readCanonicalMigrationNames/.test(runner) && /expert-development-monitoring\.e2e-spec\.ts/.test(runner));
 check('P09 migration contract kiểm đủ 3 bảng 4B', /training_object_id/.test(runner) && /monitoring_object_id/.test(runner) && /witness_object_id/.test(runner));
 check('Có real SQL Server E2E Phase 4B', exists('test/expert-development-monitoring.e2e-spec.ts'));
 const e2e = read('test/expert-development-monitoring.e2e-spec.ts');

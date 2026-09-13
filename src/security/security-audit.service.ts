@@ -18,6 +18,7 @@ export interface SecurityAuditInput {
     outcome: 'success' | 'failure' | 'blocked';
     statusCode?: number | null;
     durationMs?: number | null;
+    details?: Record<string, unknown> | null;
 }
 
 @Injectable()
@@ -72,6 +73,10 @@ export class SecurityAuditService {
                         input.statusCode ?? null,
                     duration_ms:
                         input.durationMs ?? null,
+                    details_json:
+                        input.details
+                            ? JSON.stringify(input.details)
+                            : null,
                 },
             });
         } catch (error) {

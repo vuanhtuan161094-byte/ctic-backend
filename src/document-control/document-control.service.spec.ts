@@ -1,4 +1,8 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { DocumentControlService } from './document-control.service';
@@ -19,6 +23,9 @@ function createHarness() {
             updateMany: jest.fn(),
         },
         controlled_number_sequences: {},
+        numbering_series_configs: {
+            findFirst: jest.fn().mockResolvedValue(null),
+        },
         controlled_documents: {
             create: jest.fn(),
             findUnique: jest.fn(),
@@ -51,6 +58,53 @@ function createHarness() {
 }
 
 describe('DocumentControlService', () => {
+    it.each([
+        'DOCUMENT',
+        'COMPLAINT',
+        'APPEAL',
+        'CHANGE',
+        'SPECIAL_AUDIT',
+    ])('uses active configuration for supported entity %s', async (entityType) => {
+        const harness = createHarness();
+        harness.tx.numbering_series_configs.findFirst.mockResolvedValue({
+            series_key: 'LEGACY-STORAGE-KEY',
+            prefix: 'CFG',
+            padding: 5,
+        });
+        harness.tx.$queryRaw.mockResolvedValue([{
+            prefix: 'CFG',
+            next_value: 2,
+        }]);
+
+        await expect(harness.service.allocateControlledNumber(
+            harness.tx,
+            'FALLBACK',
+            2026,
+            entityType,
+        )).resolves.toBe('CFG-2026-00001');
+        expect(harness.tx.numbering_series_configs.findFirst)
+            .toHaveBeenCalledWith(expect.objectContaining({
+                where: expect.objectContaining({ entity_type: entityType }),
+            }));
+        const sql = harness.tx.$queryRaw.mock.calls[0][0];
+        expect(sql.values).toEqual(expect.arrayContaining(['CFG', 2026]));
+        expect(sql.values).not.toContain('LEGACY-STORAGE-KEY');
+    });
+
+    it.each(['APPLICATION', 'CERTIFICATE'])(
+        'rejects unsupported controlled-numbering entity %s',
+        async (entityType) => {
+            const harness = createHarness();
+            await expect(harness.service.allocateControlledNumber(
+                harness.tx,
+                'BAD',
+                2026,
+                entityType,
+            )).rejects.toBeInstanceOf(BadRequestException);
+            expect(harness.tx.$queryRaw).not.toHaveBeenCalled();
+        },
+    );
+
     it('keeps effective template content immutable', async () => {
         const harness = createHarness();
         harness.prisma.controlled_template_versions.findUnique.mockResolvedValue({

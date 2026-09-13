@@ -18,6 +18,9 @@ import {
     MaxLength,
     Min,
 } from 'class-validator';
+import {
+    CONFIGURABLE_NUMBERING_ENTITY_TYPES,
+} from '../numbering-runtime-policy';
 
 export class CreateSchemeDto {
     @IsString() @IsNotEmpty() @MaxLength(100) @Matches(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
@@ -80,15 +83,31 @@ export class OrganizationProfileDto {
 }
 
 export class CreateNumberingSeriesDto {
-    @IsString() @IsNotEmpty() @MaxLength(100) @Matches(/^[A-Z0-9._-]+$/)
-    series_key!: string;
-    @IsIn(['CERTIFICATE', 'APPLICATION', 'DOCUMENT', 'COMPLAINT', 'APPEAL', 'CHANGE', 'SPECIAL_AUDIT'])
+    @IsIn([...CONFIGURABLE_NUMBERING_ENTITY_TYPES])
     entity_type!: string;
     @IsString() @IsNotEmpty() @MaxLength(50) @Matches(/^[A-Z0-9._/-]+$/)
     prefix!: string;
     @Type(() => Number) @IsInt() @Min(3) @Max(12) padding!: number;
     @IsDateString() effective_from!: string;
     @IsOptional() @IsDateString() effective_to?: string;
+}
+
+export class ReplaceNumberingSeriesDto {
+    @IsString() @IsNotEmpty() @MaxLength(50) @Matches(/^[A-Z0-9._/-]+$/)
+    prefix!: string;
+    @Type(() => Number) @IsInt() @Min(3) @Max(12) padding!: number;
+    @IsDateString() effective_from!: string;
+    @IsOptional() @IsDateString() effective_to?: string;
+    @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
+}
+
+export class EndNumberingSeriesDto {
+    @IsDateString() effective_to!: string;
+    @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
+}
+
+export class CancelScheduledNumberingSeriesDto {
+    @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
 }
 
 export class ImportUploadDto {
