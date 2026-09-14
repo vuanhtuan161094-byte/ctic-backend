@@ -591,6 +591,30 @@ async function verifyMigratedDatabase(testUrl) {
   }
 }
 
+const FULL_E2E_SUITES = [
+  'customer-cap-access.e2e-spec.ts',
+  'certificate-full-lifecycle.e2e-spec.ts',
+  'work-items.e2e-spec.ts',
+  'notification-sla.e2e-spec.ts',
+  'phase-2-full-role.e2e-spec.ts',
+  'customer-portal-foundation.e2e-spec.ts',
+  'customer-organization-change.e2e-spec.ts',
+  'customer-user-access-request.e2e-spec.ts',
+  'customer-document-requests.e2e-spec.ts',
+  'expert-competency-governance.e2e-spec.ts',
+  'expert-development-monitoring.e2e-spec.ts',
+  'expert-resource-independence.e2e-spec.ts',
+  'audit-team-intelligence.e2e-spec.ts',
+  'document-control-lifecycle.e2e-spec.ts',
+  'governance-cases.e2e-spec.ts',
+  'master-data-configuration-import.e2e-spec.ts',
+  'commercial-management-reporting.e2e-spec.ts',
+  'system-administration-governance.e2e-spec.ts',
+];
+const NUMBERING_E2E_SUITES = [
+  'master-data-configuration-import.e2e-spec.ts',
+];
+
 async function main() {
   const testUrl = resolveTestDatabaseUrl();
   const target = assertTestTarget(testUrl);
@@ -618,35 +642,18 @@ async function main() {
   runNpm(['exec', 'prisma', '--', 'generate'], childEnv);
   await verifyMigratedDatabase(testUrl);
 
+  const numberingOnly = process.argv.includes('--numbering-only');
+  const suites = numberingOnly ? NUMBERING_E2E_SUITES : FULL_E2E_SUITES;
+  const scopeLabel = numberingOnly ? 'numbering E2E' : 'E2E';
   for (let run = 1; run <= 2; run += 1) {
-    console.log(`P09 real E2E run ${run}/2...`);
+    console.log(`P09 real ${scopeLabel} run ${run}/2...`);
     runJestE2e(
-      [
-        'customer-cap-access.e2e-spec.ts',
-        'certificate-full-lifecycle.e2e-spec.ts',
-        'work-items.e2e-spec.ts',
-        'notification-sla.e2e-spec.ts',
-        'phase-2-full-role.e2e-spec.ts',
-        'customer-portal-foundation.e2e-spec.ts',
-        'customer-organization-change.e2e-spec.ts',
-        'customer-user-access-request.e2e-spec.ts',
-        'customer-document-requests.e2e-spec.ts',
-        'expert-competency-governance.e2e-spec.ts',
-        'expert-development-monitoring.e2e-spec.ts',
-        'expert-resource-independence.e2e-spec.ts',
-        'audit-team-intelligence.e2e-spec.ts',
-        'document-control-lifecycle.e2e-spec.ts',
-        'governance-cases.e2e-spec.ts',
-        'master-data-configuration-import.e2e-spec.ts',
-        'commercial-management-reporting.e2e-spec.ts',
-        'system-administration-governance.e2e-spec.ts',
-        '--runInBand',
-      ],
+      [...suites, '--runInBand'],
       childEnv,
     );
   }
 
-  console.log('P09 real E2E repeatability: 2/2 PASS.');
+  console.log(`P09 real ${scopeLabel} repeatability: 2/2 PASS.`);
 }
 
 if (require.main === module) {

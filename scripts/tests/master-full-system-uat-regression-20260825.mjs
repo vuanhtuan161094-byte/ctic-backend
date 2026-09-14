@@ -51,6 +51,12 @@ check(
     && p09.includes("path.join(migrationsRoot, entry.name, 'migration.sql')")
     && p09.includes('system-administration-governance.e2e-spec.ts'),
 );
+check(
+  'P09 exposes a bounded numbering-only path without weakening migration preflight',
+  p09.includes("process.argv.includes('--numbering-only')")
+    && p09.includes("'master-data-configuration-import.e2e-spec.ts'")
+    && p09.includes('verifyMigratedDatabase(testUrl)'),
+);
 check('F.12 vẫn đứng sau quyết định F.13', notification.includes('const requiresDecision = true;'));
 check('Dossier giữ Decision trước Notification', dossier.includes("{ code: 'MAKE_DECISION'") && dossier.includes("{ code: 'NOTIFY_RESULT'"));
 check('Certificate lifecycle vẫn dùng decision type authority', decision.includes('normalizeDecisionType') && decision.includes('decisionRequiresCertificateVersion'));
