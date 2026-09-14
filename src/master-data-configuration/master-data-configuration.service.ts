@@ -3,6 +3,7 @@ import {
     ConflictException,
     Injectable,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -29,6 +30,7 @@ import {
     numberingRuleLifecycleState,
     numberingSequenceNamespace,
 } from './numbering-runtime-policy';
+import { TaxonomyRuntimePolicyService } from '../industry-classifications/taxonomy-runtime-policy.service';
 
 type CsvRow = Record<string, string>;
 type ValidatedRow = {
@@ -51,10 +53,17 @@ const IMPORT_DEFINITIONS: Record<string, string[]> = {
 
 @Injectable()
 export class MasterDataConfigurationService {
+    private readonly taxonomyPolicy: TaxonomyRuntimePolicyService;
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly audit: SecurityAuditService,
-    ) { }
+        @Optional()
+        taxonomyPolicy?: TaxonomyRuntimePolicyService,
+    ) {
+        this.taxonomyPolicy = taxonomyPolicy ??
+            new TaxonomyRuntimePolicyService(prisma);
+    }
 
     private code(value: string, max = 100) {
         return value.trim().toUpperCase().slice(0, max);
@@ -613,11 +622,7 @@ export class MasterDataConfigurationService {
             schemes,
             profile,
             numbering,
-            isicCount,
-            naceCount,
-            iafCount,
-            isicNaceCount,
-            naceIafCount,
+            taxonomy,
         ] = await Promise.all([
             this.prisma.certification_schemes.findMany({
                 where: {
@@ -692,21 +697,7 @@ export class MasterDataConfigurationService {
                     effective_to: true,
                 },
             }),
-            this.prisma.industry_classifications.count({
-                where: { classification_type: 'ISIC', is_active: true },
-            }),
-            this.prisma.industry_classifications.count({
-                where: { classification_type: 'NACE', is_active: true },
-            }),
-            this.prisma.iaf_scopes.count({
-                where: { is_active: true },
-            }),
-            this.prisma.industry_code_mappings.count({
-                where: { mapping_status: 'APPROVED' },
-            }),
-            this.prisma.nace_iaf_mappings.count({
-                where: { mapping_status: 'APPROVED' },
-            }),
+            this.taxonomyPolicy.getReadiness(now),
         ]);
 
         const currentNumbering = numbering.filter((item) =>
@@ -762,15 +753,9 @@ export class MasterDataConfigurationService {
             };
         });
 
-        const taxonomyReady =
-            isicCount > 0 &&
-            naceCount > 0 &&
-            iafCount > 0 &&
-            isicNaceCount > 0 &&
-            naceIafCount > 0;
         const ready =
             Boolean(profile) &&
-            taxonomyReady &&
+            taxonomy.ready &&
             schemeRows.length > 0 &&
             schemeRows.every((item) => item.status === 'READY') &&
             numberingReady;
@@ -787,12 +772,7 @@ export class MasterDataConfigurationService {
                 items: schemeRows,
             },
             taxonomy: {
-                ready: taxonomyReady,
-                isic_count: isicCount,
-                nace_count: naceCount,
-                iaf_count: iafCount,
-                isic_nace_mapping_count: isicNaceCount,
-                nace_iaf_mapping_count: naceIafCount,
+                ...taxonomy,
             },
             numbering: {
                 ready: numberingReady,

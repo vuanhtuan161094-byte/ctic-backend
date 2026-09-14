@@ -52,7 +52,7 @@ function createHarness() {
         notifications: { upsert: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
-        application_reviews: { findUnique: jest.fn() },
+        application_reviews: { findUnique: jest.fn(), findMany: jest.fn() },
         certification_applications: { findUnique: jest.fn() },
         users: { findFirst: jest.fn().mockResolvedValue(reviewer) },
         experts: { findMany: jest.fn() },
@@ -97,6 +97,18 @@ function submittedReview(overrides: Record<string, unknown> = {}) {
 }
 
 describe('ApplicationReviewsService one-reviewer workflow', () => {
+
+    it('returns historical industry scope snapshots without revalidating current taxonomy', async () => {
+        const { service, prisma } = createHarness();
+        const historical = [{
+            id: 'review-old',
+            industry_scopes_json: JSON.stringify([normalizedScope]),
+        }];
+        prisma.application_reviews.findMany.mockResolvedValue(historical);
+        const validate = (service as any).validateIndustryScopes as jest.Mock;
+        await expect(service.findAll()).resolves.toBe(historical);
+        expect(validate).not.toHaveBeenCalled();
+    });
 
     it('persists EMS and OH&S risk selections so reopening the review does not lose them', async () => {
         const { service, prisma, tx } = createHarness();

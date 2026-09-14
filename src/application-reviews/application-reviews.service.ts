@@ -13,6 +13,7 @@ import { CreateApplicationReviewDto } from './dto/create-application-review.dto'
 import { ReviewApplicationReviewDto } from './dto/review-workflow-action.dto';
 import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 import { WorkItemsService } from '../work-items/work-items.service';
+import { TaxonomyRuntimePolicyService } from '../industry-classifications/taxonomy-runtime-policy.service';
 
 type NormalizedIndustryScope = {
     isic_code_id: string;
@@ -39,13 +40,20 @@ const REVIEWER_ROLES = new Set([
 
 @Injectable()
 export class ApplicationReviewsService {
+    private readonly taxonomyPolicy: TaxonomyRuntimePolicyService;
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly certificationBodyCapabilities: CertificationBodyCapabilitiesService,
         private readonly securityAudit: SecurityAuditService,
         @Optional()
+        taxonomyPolicy?: TaxonomyRuntimePolicyService,
+        @Optional()
         private readonly workItems?: WorkItemsService,
-    ) { }
+    ) {
+        this.taxonomyPolicy = taxonomyPolicy ??
+            new TaxonomyRuntimePolicyService(prisma);
+    }
 
     private normalizeRole(value: string) {
         return value.trim().toUpperCase();
@@ -126,86 +134,7 @@ export class ApplicationReviewsService {
     private async validateIndustryScopes(
         scopes: NonNullable<CreateApplicationReviewDto['industry_scopes']>,
     ): Promise<NormalizedIndustryScope[]> {
-        const uniqueKeys = new Set<string>();
-        const normalized: NormalizedIndustryScope[] = [];
-
-        for (const [index, scope] of scopes.entries()) {
-            const uniqueKey = [
-                scope.isic_nace_mapping_id,
-                scope.nace_iaf_mapping_id,
-                scope.management_system,
-            ].join(':');
-
-            if (uniqueKeys.has(uniqueKey)) {
-                throw new BadRequestException(
-                    `Phạm vi mã ngành số ${index + 1} bị trùng`,
-                );
-            }
-            uniqueKeys.add(uniqueKey);
-
-            const isicNaceMapping =
-                await this.prisma.industry_code_mappings.findUnique({
-                    where: { id: scope.isic_nace_mapping_id },
-                    include: {
-                        source_code: true,
-                        target_code: true,
-                    },
-                });
-
-            if (
-                !isicNaceMapping ||
-                isicNaceMapping.mapping_status !== 'APPROVED' ||
-                isicNaceMapping.source_code_id !== scope.isic_code_id ||
-                isicNaceMapping.target_code_id !== scope.nace_code_id ||
-                isicNaceMapping.source_code.classification_type !== 'ISIC' ||
-                isicNaceMapping.target_code.classification_type !== 'NACE'
-            ) {
-                throw new BadRequestException(
-                    `Ánh xạ ISIC–NACE số ${index + 1} chưa hợp lệ hoặc chưa được phê duyệt`,
-                );
-            }
-
-            const naceIafMapping =
-                await this.prisma.nace_iaf_mappings.findUnique({
-                    where: { id: scope.nace_iaf_mapping_id },
-                    include: { iaf_scope: true },
-                });
-
-            if (
-                !naceIafMapping ||
-                naceIafMapping.mapping_status !== 'APPROVED' ||
-                naceIafMapping.nace_code_id !== scope.nace_code_id ||
-                naceIafMapping.management_system !== scope.management_system ||
-                !naceIafMapping.iaf_scope.is_active
-            ) {
-                throw new BadRequestException(
-                    `Ánh xạ NACE–IAF số ${index + 1} chưa hợp lệ hoặc chưa được phê duyệt`,
-                );
-            }
-
-            normalized.push({
-                isic_code_id: isicNaceMapping.source_code.id,
-                isic_code: isicNaceMapping.source_code.code,
-                isic_revision: isicNaceMapping.source_code.revision,
-                isic_title:
-                    isicNaceMapping.source_code.title_vi ??
-                    isicNaceMapping.source_code.title_en,
-                isic_nace_mapping_id: isicNaceMapping.id,
-                nace_code_id: isicNaceMapping.target_code.id,
-                nace_code: isicNaceMapping.target_code.code,
-                nace_title:
-                    isicNaceMapping.target_code.title_vi ??
-                    isicNaceMapping.target_code.title_en,
-                nace_iaf_mapping_id: naceIafMapping.id,
-                iaf_code: naceIafMapping.iaf_scope.iaf_code,
-                iaf_name: naceIafMapping.iaf_scope.iaf_name,
-                management_system: scope.management_system,
-                scope_description: scope.scope_description.trim(),
-                is_primary: scope.is_primary ?? index === 0,
-            });
-        }
-
-        return normalized;
+        return this.taxonomyPolicy.validateIndustryScopes(scopes);
     }
 
     private async findAssigneeUsers() {

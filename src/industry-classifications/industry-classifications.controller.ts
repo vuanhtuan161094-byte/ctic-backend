@@ -318,6 +318,25 @@ export class IndustryClassificationsController {
         );
     }
 
+    @Get('nace-iaf-projection')
+    @ApiOperation({ summary: 'Đọc projection NACE → IAF từ policy vận hành' })
+    @ApiQuery({ name: 'management_system', required: true, example: 'QMS' })
+    @Roles('ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER')
+    @Permissions('classifications.read')
+    getNaceIafProjection(
+        @Query('management_system') managementSystem: string,
+    ): Promise<unknown> {
+        return this.service.getNaceIafProjection(managementSystem);
+    }
+
+    @Get('readiness')
+    @ApiOperation({ summary: 'Kiểm tra taxonomy runtime readiness có mã lý do' })
+    @Roles('ADMIN', 'COORDINATOR', 'TECHNICAL_REVIEWER')
+    @Permissions('classifications.read')
+    getTaxonomyReadiness(): Promise<unknown> {
+        return this.service.getTaxonomyReadiness();
+    }
+
     @Get('resolve')
     @ApiOperation({ summary: 'Xác định NACE và IAF từ mã ngành đầu vào' })
     @ApiQuery({ name: 'classification_type', required: true, enum: ['ISIC', 'NACE'] })

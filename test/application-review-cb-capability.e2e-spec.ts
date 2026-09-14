@@ -217,18 +217,18 @@ describeDatabase('Application Review + CB Capability real database E2E', () => {
     });
 
     it('completes draft, submit, return, resubmit and one-reviewer approval with durable evidence', async () => {
-        let isic = await prisma.industry_classifications.findFirst({ where: { classification_type: 'ISIC', code: '2220', is_active: true } });
+        let isic = await prisma.industry_classifications.findFirst({ where: { classification_type: 'ISIC', revision: 'ISIC_REV_4', code: '2220', is_active: true } });
         if (!isic) {
             isic = await prisma.industry_classifications.create({ data: {
-                classification_type: 'ISIC', revision: 'ISIC_REV4_E2E', code: '2220',
+                classification_type: 'ISIC', revision: 'ISIC_REV_4', code: '2220',
                 title_en: 'Manufacture of plastics products', level: 4, is_active: true,
             } });
             createdClassificationIds.push(isic.id);
         }
-        let nace = await prisma.industry_classifications.findFirst({ where: { classification_type: 'NACE', code: '22.2', is_active: true } });
+        let nace = await prisma.industry_classifications.findFirst({ where: { classification_type: 'NACE', revision: 'NACE_REV_2', code: '22.2', is_active: true } });
         if (!nace) {
             nace = await prisma.industry_classifications.create({ data: {
-                classification_type: 'NACE', revision: 'NACE_REV2_E2E', code: '22.2',
+                classification_type: 'NACE', revision: 'NACE_REV_2', code: '22.2',
                 title_en: 'Manufacture of plastics products', level: 3, is_active: true,
             } });
             createdClassificationIds.push(nace.id);

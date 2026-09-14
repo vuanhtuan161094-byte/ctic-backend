@@ -64,11 +64,22 @@ function harness() {
         nace_iaf_mappings: { count: jest.fn().mockResolvedValue(1) },
     };
     const audit: any = { write: jest.fn().mockResolvedValue(undefined) };
+    const taxonomyPolicy: any = {
+        getReadiness: jest.fn().mockResolvedValue({
+            ready: true,
+            operational_revisions: { ISIC: 'ISIC_REV_4', NACE: 'NACE_REV_2' },
+            isic_count: 1,
+            nace_count: 1,
+            iaf_count: 1,
+            coverage: [],
+            reasons: [],
+        }),
+    };
     return {
         audit,
         numbering,
         prisma,
-        service: new MasterDataConfigurationService(prisma, audit),
+        service: new MasterDataConfigurationService(prisma, audit, taxonomyPolicy),
         tx,
     };
 }

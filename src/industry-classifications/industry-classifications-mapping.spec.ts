@@ -1,108 +1,385 @@
-import { IndustryClassificationsService } from './industry-classifications.service';
+import { BadRequestException } from '@nestjs/common';
+import {
+  TAXONOMY_OPERATIONAL_REVISIONS,
+  TaxonomyRuntimePolicyService,
+} from './taxonomy-runtime-policy.service';
 
-describe('IndustryClassificationsService canonical resolution', () => {
-    it('resolves ISIC 2220 through all candidate NACE classes to IAF 14', async () => {
-        const isic = { id: 'isic-2220', classification_type: 'ISIC', revision: 'ISIC_REV_4', code: '2220', level: 4, is_active: true };
-        const nace = { id: 'nace-22-29', classification_type: 'NACE', revision: 'NACE_REV_2', code: '22.29', title_en: 'Other plastic products', title_vi: 'Sản xuất sản phẩm nhựa khác', parent_code: '22.2', level: 4, is_active: true };
-        const prisma = {
-            industry_classifications: { findFirst: jest.fn().mockResolvedValue(isic) },
-            industry_code_mappings: {
-                findMany: jest.fn().mockResolvedValue([{
-                    id: 'map-isic-nace',
-                    source_code_id: isic.id,
-                    target_code_id: nace.id,
-                    source_code: { code: '2220' },
-                    target_code: nace,
-                    mapping_type: 'EXACT',
-                    valid_from: null,
-                    valid_to: null,
-                }]),
-            },
-            nace_iaf_mappings: {
-                findMany: jest.fn().mockResolvedValue([{
-                    id: 'map-nace-iaf',
-                    iaf_scope: { iaf_code: '14', iaf_name: 'Cao su và sản phẩm nhựa', is_active: true },
-                    source_document: 'IAF ID 1:2023',
-                    valid_from: null,
-                    valid_to: null,
-                }]),
-            },
-        };
-        const service = new IndustryClassificationsService(prisma as any);
-        const result = await service.resolve('ISIC', 'ISIC_REV_4', '2220', 'QMS');
-        expect(result.nace_candidates[0].nace.code).toBe('22.29');
-        expect(result.nace_candidates[0].iaf_candidates[0].iaf_code).toBe('14');
-        expect(result.iaf_summary.status).toBe('UNIQUE');
-        expect(result.iaf_auto_resolved).toBe(true);
-    });
+const date = (value: string) => new Date(`${value}T00:00:00.000Z`);
+const at = date('2026-09-14');
+const code = (
+  id: string,
+  type: 'ISIC' | 'NACE',
+  value: string,
+  level = 4,
+  parent: string | null = null,
+  overrides: Record<string, unknown> = {},
+) => ({
+  id,
+  classification_type: type,
+  revision: TAXONOMY_OPERATIONAL_REVISIONS[type],
+  code: value,
+  title_en: value,
+  title_vi: null,
+  parent_code: parent,
+  level,
+  valid_from: null,
+  valid_to: null,
+  is_active: true,
+  ...overrides,
+});
+const iaf = (id: string, value: string, active = true) => ({
+  id,
+  iaf_code: value,
+  iaf_name: `IAF ${value}`,
+  is_active: active,
+});
+const industryMap = (
+  id: string,
+  source: ReturnType<typeof code>,
+  target: ReturnType<typeof code>,
+  overrides: Record<string, unknown> = {},
+) => ({
+  id,
+  source_code_id: source.id,
+  target_code_id: target.id,
+  mapping_type: 'EXACT',
+  mapping_status: 'APPROVED',
+  valid_from: null,
+  valid_to: null,
+  source_code: source,
+  target_code: target,
+  ...overrides,
+});
+const iafMap = (
+  id: string,
+  nace: ReturnType<typeof code>,
+  scope: ReturnType<typeof iaf>,
+  system = 'QMS',
+  overrides: Record<string, unknown> = {},
+) => ({
+  id,
+  nace_code_id: nace.id,
+  iaf_scope_id: scope.id,
+  management_system: system,
+  mapping_status: 'APPROVED',
+  source_document: 'IAF ID 1',
+  valid_from: null,
+  valid_to: null,
+  nace_code: nace,
+  iaf_scope: scope,
+  ...overrides,
+});
+const policy = (
+  classifications: unknown[],
+  industryMappings: unknown[] = [],
+  naceIafMappings: unknown[] = [],
+  iafScopes: unknown[] = [],
+) =>
+  new TaxonomyRuntimePolicyService({
+    industry_classifications: {
+      findMany: jest.fn().mockResolvedValue(classifications),
+    },
+    industry_code_mappings: {
+      findMany: jest.fn().mockResolvedValue(industryMappings),
+    },
+    nace_iaf_mappings: {
+      findMany: jest.fn().mockResolvedValue(naceIafMappings),
+    },
+    iaf_scopes: { findMany: jest.fn().mockResolvedValue(iafScopes) },
+  } as any);
 
-    it('resolves parent NACE 26.5 from child classes 26.51 and 26.52 to unique IAF 19', async () => {
-        const source = { id: 'nace-265', classification_type: 'NACE', revision: 'NACE_REV_2', code: '26.5', title_en: 'Measuring instruments and watches', title_vi: null, parent_code: '26', level: 3, is_active: true };
-        const child1 = { id: 'nace-2651', classification_type: 'NACE', revision: 'NACE_REV_2', code: '26.51', title_en: 'Measuring instruments', title_vi: null, parent_code: '26.5', level: 4, is_active: true };
-        const child2 = { id: 'nace-2652', classification_type: 'NACE', revision: 'NACE_REV_2', code: '26.52', title_en: 'Watches and clocks', title_vi: null, parent_code: '26.5', level: 4, is_active: true };
-        const iaf19 = { id: 'iaf-19', iaf_code: '19', iaf_name: 'Thiết bị điện và quang học', is_active: true };
-        const prisma = {
-            industry_classifications: {
-                findFirst: jest.fn().mockResolvedValue(source),
-                findMany: jest.fn().mockResolvedValue([source, child1, child2]),
-            },
-            nace_iaf_mappings: {
-                findMany: jest.fn()
-                    .mockResolvedValueOnce([])
-                    .mockResolvedValueOnce([
-                        { id: 'm1', nace_code_id: child1.id, nace_code: { code: '26.51' }, iaf_scope: iaf19, source_document: 'IAF ID 1:2023', valid_from: null, valid_to: null },
-                        { id: 'm2', nace_code_id: child2.id, nace_code: { code: '26.52' }, iaf_scope: iaf19, source_document: 'IAF ID 1:2023', valid_from: null, valid_to: null },
-                    ]),
-            },
-        };
-        const service = new IndustryClassificationsService(prisma as any);
-        const result = await service.resolve('NACE', 'NACE_REV_2', '26.5', 'QMS');
-        expect(result.iaf_summary.status).toBe('UNIQUE');
-        expect(result.iaf_summary.iaf_codes).toEqual(['19']);
-        expect(result.nace_candidates[0].mapping_type).toBe('DERIVED_FROM_CHILDREN');
-        expect(result.nace_candidates[0].derived_from_nace_classes).toEqual(['26.51', '26.52']);
-    });
+describe('TaxonomyRuntimePolicyService canonical resolution', () => {
+  it('resolves exact ISIC to NACE to IAF', async () => {
+    const isic = code('isic', 'ISIC', '2220');
+    const nace = code('nace', 'NACE', '22.29');
+    const scope = iaf('iaf14', '14');
+    const result = await policy(
+      [isic, nace],
+      [industryMap('in', isic, nace)],
+      [iafMap('ni', nace, scope)],
+      [scope],
+    ).resolve('ISIC', 'ISIC_REV_4', '2220', 'QMS', at);
+    expect(result.iaf_summary.status).toBe('UNIQUE');
+    expect(result.nace_candidates[0].iaf_candidates[0].mapping_id).toBe('ni');
+  });
 
-    it('keeps a broad NACE code as multiple IAF when descendants span more than one IAF', async () => {
-        const source = { id: 'nace-23', classification_type: 'NACE', revision: 'NACE_REV_2', code: '23', title_en: 'Non-metallic mineral products', title_vi: null, parent_code: 'C', level: 2, is_active: true };
-        const child1 = { id: 'nace-2311', classification_type: 'NACE', revision: 'NACE_REV_2', code: '23.11', title_en: 'Flat glass', title_vi: null, parent_code: '23.1', level: 4, is_active: true };
-        const child2 = { id: 'nace-2351', classification_type: 'NACE', revision: 'NACE_REV_2', code: '23.51', title_en: 'Cement', title_vi: null, parent_code: '23.5', level: 4, is_active: true };
-        const prisma = {
-            industry_classifications: {
-                findFirst: jest.fn().mockResolvedValue(source),
-                findMany: jest.fn().mockResolvedValue([
-                    source,
-                    { id: 'nace-231', classification_type: 'NACE', revision: 'NACE_REV_2', code: '23.1', title_en: 'Glass', title_vi: null, parent_code: '23', level: 3, is_active: true },
-                    { id: 'nace-235', classification_type: 'NACE', revision: 'NACE_REV_2', code: '23.5', title_en: 'Cement', title_vi: null, parent_code: '23', level: 3, is_active: true },
-                    child1,
-                    child2,
-                ]),
-            },
-            nace_iaf_mappings: {
-                findMany: jest.fn()
-                    .mockResolvedValueOnce([])
-                    .mockResolvedValueOnce([
-                        { id: 'm15', nace_code: { code: '23.11' }, iaf_scope: { iaf_code: '15', iaf_name: 'Sản phẩm khoáng phi kim loại', is_active: true }, source_document: 'IAF ID 1:2023', valid_from: null, valid_to: null },
-                        { id: 'm16', nace_code: { code: '23.51' }, iaf_scope: { iaf_code: '16', iaf_name: 'Bê tông, xi măng, vôi, thạch cao', is_active: true }, source_document: 'IAF ID 1:2023', valid_from: null, valid_to: null },
-                    ]),
-            },
-        };
-        const service = new IndustryClassificationsService(prisma as any);
-        const result = await service.resolve('NACE', 'NACE_REV_2', '23', 'QMS');
-        expect(result.iaf_summary.status).toBe('MULTIPLE');
-        expect(result.iaf_summary.iaf_codes).toEqual(['15', '16']);
-        expect(result.requires_selection).toBe(true);
-    });
+  it('retains one-to-many NACE candidates for an ISIC', async () => {
+    const isic = code('isic', 'ISIC', '2220');
+    const n1 = code('n1', 'NACE', '22.21');
+    const n2 = code('n2', 'NACE', '22.22');
+    const scope = iaf('iaf14', '14');
+    const result = await policy(
+      [isic, n1, n2],
+      [industryMap('m1', isic, n1), industryMap('m2', isic, n2)],
+      [iafMap('i1', n1, scope), iafMap('i2', n2, scope)],
+      [scope],
+    ).resolve('ISIC', 'ISIC_REV_4', '2220', 'QMS', at);
+    expect(result.nace_candidates).toHaveLength(2);
+    expect(result.requires_selection).toBe(true);
+  });
 
-    it('marks NACE 97/98/99 as outside IAF table instead of pretending the mapping is missing', async () => {
-        const source = { id: 'nace-9700', classification_type: 'NACE', revision: 'NACE_REV_2', code: '97.00', title_en: 'Households as employers', title_vi: null, parent_code: '97', level: 4, is_active: true };
-        const prisma = {
-            industry_classifications: { findFirst: jest.fn().mockResolvedValue(source) },
-            nace_iaf_mappings: { findMany: jest.fn().mockResolvedValue([]) },
-        };
-        const service = new IndustryClassificationsService(prisma as any);
-        const result = await service.resolve('NACE', 'NACE_REV_2', '97.00', 'QMS');
-        expect(result.iaf_summary.status).toBe('OUTSIDE_IAF_TABLE');
-        expect(result.nace_candidates[0].outside_iaf_table).toBe(true);
-    });
+  it('resolves direct NACE to IAF', async () => {
+    const nace = code('nace', 'NACE', '22.29');
+    const scope = iaf('iaf14', '14');
+    const result = await policy(
+      [nace],
+      [],
+      [iafMap('ni', nace, scope)],
+      [scope],
+    ).resolve('NACE', 'NACE_REV_2', '22.29', 'QMS', at);
+    expect(result.nace_candidates[0].resolution_status).toBe('DIRECT_UNIQUE');
+  });
+
+  it('derives unique IAF from homogeneous child mappings', async () => {
+    const parent = code('p', 'NACE', '26.5', 3, '26');
+    const c1 = code('c1', 'NACE', '26.51', 4, '26.5');
+    const c2 = code('c2', 'NACE', '26.52', 4, '26.5');
+    const scope = iaf('iaf19', '19');
+    const result = await policy(
+      [parent, c1, c2],
+      [],
+      [iafMap('m1', c1, scope), iafMap('m2', c2, scope)],
+      [scope],
+    ).resolve('NACE', 'NACE_REV_2', '26.5', 'QMS', at);
+    expect(result.nace_candidates[0].resolution_status).toBe('DERIVED_UNIQUE');
+    expect(result.iaf_summary.iaf_codes).toEqual(['19']);
+  });
+
+  it('returns multiple when child mappings span IAF scopes', async () => {
+    const parent = code('p', 'NACE', '23', 2, 'C');
+    const g1 = code('g1', 'NACE', '23.1', 3, '23');
+    const g2 = code('g2', 'NACE', '23.5', 3, '23');
+    const c1 = code('c1', 'NACE', '23.11', 4, '23.1');
+    const c2 = code('c2', 'NACE', '23.51', 4, '23.5');
+    const s15 = iaf('i15', '15');
+    const s16 = iaf('i16', '16');
+    const result = await policy(
+      [parent, g1, g2, c1, c2],
+      [],
+      [iafMap('m1', c1, s15), iafMap('m2', c2, s16)],
+      [s15, s16],
+    ).resolve('NACE', 'NACE_REV_2', '23', 'QMS', at);
+    expect(result.iaf_summary.status).toBe('MULTIPLE');
+  });
+
+  it('gives direct parent mapping precedence over child mappings', async () => {
+    const parent = code('p', 'NACE', '26.5', 3, '26');
+    const child = code('c', 'NACE', '26.51', 4, '26.5');
+    const direct = iaf('i19', '19');
+    const childScope = iaf('i20', '20');
+    const result = await policy(
+      [parent, child],
+      [],
+      [iafMap('direct', parent, direct), iafMap('child', child, childScope)],
+      [direct, childScope],
+    ).resolve('NACE', 'NACE_REV_2', '26.5', 'QMS', at);
+    expect(result.iaf_summary.iaf_codes).toEqual(['19']);
+    expect(result.nace_candidates[0].resolution_status).toBe('DIRECT_UNIQUE');
+  });
+
+  it.each(['97.00', '98.10', '99'])(
+    'marks NACE %s outside the IAF table',
+    async (value) => {
+      const nace = code('nace', 'NACE', value);
+      const result = await policy([nace]).resolve(
+        'NACE',
+        'NACE_REV_2',
+        value,
+        'QMS',
+        at,
+      );
+      expect(result.iaf_summary.status).toBe('OUTSIDE_IAF_TABLE');
+    },
+  );
+
+  it('returns unresolved for certifiable NACE without current IAF mapping', async () => {
+    const nace = code('nace', 'NACE', '22.29');
+    const result = await policy([nace]).resolve(
+      'NACE',
+      'NACE_REV_2',
+      '22.29',
+      'QMS',
+      at,
+    );
+    expect(result.iaf_summary.status).toBe('UNRESOLVED');
+  });
+
+  it.each([
+    ['expired', { valid_to: date('2026-09-13') }],
+    ['future', { valid_from: date('2026-09-15') }],
+  ])('ignores a %s mapping', async (_, validity) => {
+    const nace = code('nace', 'NACE', '22.29');
+    const scope = iaf('iaf14', '14');
+    const result = await policy(
+      [nace],
+      [],
+      [iafMap('ni', nace, scope, 'QMS', validity)],
+      [scope],
+    ).resolve('NACE', 'NACE_REV_2', '22.29', 'QMS', at);
+    expect(result.iaf_summary.status).toBe('UNRESOLVED');
+  });
+
+  it('rejects inactive source classification', async () => {
+    const isic = code('isic', 'ISIC', '2220', 4, null, { is_active: false });
+    await expect(
+      policy([isic]).resolve('ISIC', 'ISIC_REV_4', '2220', 'QMS', at),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('ignores inactive NACE target classification', async () => {
+    const isic = code('isic', 'ISIC', '2220');
+    const nace = code('nace', 'NACE', '22.29', 4, null, { is_active: false });
+    const result = await policy(
+      [isic, nace],
+      [industryMap('in', isic, nace)],
+    ).resolve('ISIC', 'ISIC_REV_4', '2220', 'QMS', at);
+    expect(result.nace_candidates).toHaveLength(0);
+  });
+
+  it('ignores inactive IAF target', async () => {
+    const nace = code('nace', 'NACE', '22.29');
+    const scope = iaf('iaf14', '14', false);
+    const result = await policy(
+      [nace],
+      [],
+      [iafMap('ni', nace, scope)],
+      [scope],
+    ).resolve('NACE', 'NACE_REV_2', '22.29', 'QMS', at);
+    expect(result.iaf_summary.status).toBe('UNRESOLVED');
+  });
+
+  it('does not reuse mapping from wrong management system', async () => {
+    const nace = code('nace', 'NACE', '22.29');
+    const scope = iaf('iaf14', '14');
+    const result = await policy(
+      [nace],
+      [],
+      [iafMap('ni', nace, scope, 'EMS')],
+      [scope],
+    ).resolve('NACE', 'NACE_REV_2', '22.29', 'QMS', at);
+    expect(result.iaf_summary.status).toBe('UNRESOLVED');
+  });
+
+  it('rejects non-operational revision', async () => {
+    const nace = code('nace', 'NACE', '22.29');
+    await expect(
+      policy([nace]).resolve('NACE', 'NACE_REV_1', '22.29', 'QMS', at),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('TaxonomyRuntimePolicyService write validation and readiness', () => {
+  const chain = () => ({
+    isic: code('isic', 'ISIC', '2220'),
+    nace: code('nace', 'NACE', '22.29'),
+    scope: iaf('iaf14', '14'),
+  });
+  const input = {
+    isic_code_id: 'isic',
+    isic_nace_mapping_id: 'in',
+    nace_code_id: 'nace',
+    nace_iaf_mapping_id: 'ni',
+    management_system: 'QMS' as const,
+    scope_description: 'Plastic products',
+  };
+
+  it('accepts current resolved Application Review selection', async () => {
+    const { isic, nace, scope } = chain();
+    const result = await policy(
+      [isic, nace],
+      [industryMap('in', isic, nace)],
+      [iafMap('ni', nace, scope)],
+      [scope],
+    ).validateIndustryScopes([input], at);
+    expect(result[0].nace_iaf_mapping_id).toBe('ni');
+  });
+
+  it.each([
+    ['expired since resolve', { valid_to: date('2026-09-13') }],
+    ['future since resolve', { valid_from: date('2026-09-15') }],
+  ])('fails closed when selected mapping is %s', async (_, validity) => {
+    const { isic, nace, scope } = chain();
+    await expect(
+      policy(
+        [isic, nace],
+        [industryMap('in', isic, nace)],
+        [iafMap('ni', nace, scope, 'QMS', validity)],
+        [scope],
+      ).validateIndustryScopes([input], at),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects stale mapping id', async () => {
+    const { isic, nace, scope } = chain();
+    await expect(
+      policy(
+        [isic, nace],
+        [industryMap('current', isic, nace)],
+        [iafMap('ni', nace, scope)],
+        [scope],
+      ).validateIndustryScopes([input], at),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('reports healthy QMS EMS OHSMS coverage as ready', async () => {
+    const { isic, nace, scope } = chain();
+    const mappings = ['QMS', 'EMS', 'OHSMS'].map((system) =>
+      iafMap(`ni-${system}`, nace, scope, system),
+    );
+    const result = await policy(
+      [isic, nace],
+      [industryMap('in', isic, nace)],
+      mappings,
+      [scope],
+    ).getReadiness(at);
+    expect(result.ready).toBe(true);
+    expect(result.coverage).toHaveLength(3);
+  });
+
+  it('returns reason code when operational ISIC revision is missing', async () => {
+    const nace = code('nace', 'NACE', '97.00');
+    const result = await policy(
+      [nace],
+      [],
+      [],
+      [iaf('iaf14', '14')],
+    ).getReadiness(at);
+    expect(result.reasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'TAXONOMY_ISIC_DATA_MISSING' }),
+      ]),
+    );
+  });
+
+  it('fails readiness when certifiable coverage is incomplete', async () => {
+    const { isic, nace, scope } = chain();
+    const result = await policy(
+      [isic, nace],
+      [industryMap('in', isic, nace)],
+      [],
+      [scope],
+    ).getReadiness(at);
+    expect(result.ready).toBe(false);
+    expect(
+      result.reasons.filter(
+        (reason) => reason.code === 'TAXONOMY_COVERAGE_INCOMPLETE',
+      ),
+    ).toHaveLength(3);
+  });
+
+  it('does not count outside-table activity as unresolved coverage', async () => {
+    const isic = code('isic', 'ISIC', '9700');
+    const nace = code('nace', 'NACE', '97.00');
+    const scope = iaf('iaf14', '14');
+    const result = await policy(
+      [isic, nace],
+      [industryMap('in', isic, nace)],
+      [],
+      [scope],
+    ).getReadiness(at);
+    expect(result.coverage.every((coverage) => coverage.unresolved === 0)).toBe(
+      true,
+    );
+    expect(result.ready).toBe(true);
+  });
 });
