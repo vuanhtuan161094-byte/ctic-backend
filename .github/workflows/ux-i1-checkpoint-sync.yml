@@ -1,0 +1,153 @@
+name: UX-I1 Checkpoint Sync
+
+on:
+  push:
+    branches:
+      - feature/ux-fix-batch01
+    paths:
+      - .github/workflows/ux-i1-checkpoint-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ux-fix-batch01
+
+      - name: Update canonical checkpoint
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('AI_context.md')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('Updated: 2026-09-15', 'Updated: 2026-09-16', 1)
+
+          locked_marker = '- CFG-1D — Organization Runtime Wiring: PASS / LOCKED\n'
+          if locked_marker not in text:
+              raise SystemExit('Locked-roadmap marker not found')
+          if '- UX-I1 — Playwright + axe browser QA foundation: PASS / LOCKED\n' not in text:
+              text = text.replace(
+                  locked_marker,
+                  locked_marker + '- UX-I0 — Dependency / compatibility audit: PASS / LOCKED\n- UX-I1 — Playwright + axe browser QA foundation: PASS / LOCKED\n',
+                  1,
+              )
+
+          canonical_start = text.index('The current accepted code canonical checkpoints remain:')
+          canonical_end = text.index('\n## 3. Current verification state', canonical_start)
+          canonical = '''The current accepted code canonical checkpoints are:
+
+- Backend code canonical: `4714576475f6939d62093068e6321e4c61ec81eb`
+- Frontend code canonical after UX-I1 closure: `9b50401661844188e3ea8c796c5bd680038af38c`
+
+Documentation/verification commits after the frontend code canonical do not change production behavior:
+
+- UX-I1 locked standard verification candidate: `b9d1c60e42f9dc012def67f5ca1577ffb2f24834`
+- UX-I1 baseline documentation commit: `153400a59a9f9401b68baba442f0f18b5b025593`
+
+Backend code remains unchanged from `4714576475f6939d62093068e6321e4c61ec81eb`; backend branch commits after it are checkpoint/documentation only.
+'''
+          text = text[:canonical_start] + canonical + text[canonical_end:]
+
+          sec3_start = text.index('### 3A. UX-I0 / UX-I1 checkpoint')
+          sec3_end = text.index('\n## 4. Locked configuration behavior', sec3_start)
+          sec3 = '''### 3A. UX-I0 / UX-I1 checkpoint — PASS / LOCKED
+
+UX-I0 dependency/compatibility audit: **PASS / LOCKED**.
+
+- `@playwright/test@1.63.0`: approved and used for UX-I1;
+- `@axe-core/playwright@4.13.0`: approved and used for UX-I1;
+- `antd-style@4.1.0`: compatible candidate, not automatically required; decide during UX-I2 only if it materially improves the governed theme layer;
+- Storybook `10.6.0` family: deferred to UX-I3;
+- stable `@ant-design/pro-components@2.8.10`: NO-GO with AntD 6;
+- ProComponents 3.x prerelease remains only a future UX-I5 pilot candidate and must be re-audited before use.
+
+Canonical audit document:
+
+- frontend `docs/ux/UX-I0_DEPENDENCY_COMPATIBILITY.md`.
+
+UX-I1 browser-QA foundation: **PASS / LOCKED**.
+
+- Playwright + axe remain isolated under frontend `e2e/` with a separate lockfile;
+- root production dependency graph is not expanded by browser tooling;
+- required browser projects run at `1440x900` and `390x844`;
+- gates cover console/page errors, failed requests/5xx, horizontal overflow, screenshots and blocking WCAG A/AA axe findings;
+- controlled DEV fixtures remain distinct from SQL-backed business UAT.
+
+UX-I1 production closure code canonical:
+
+- frontend `9b50401661844188e3ea8c796c5bd680038af38c`.
+
+Standard locked verification candidate:
+
+- frontend `b9d1c60e42f9dc012def67f5ca1577ffb2f24834`;
+- Frontend Quality run `35018522587`: **PASS**;
+- Browser Quality run `35018522697`: **PASS**;
+- Browser artifact ID `10416588179`;
+- artifact digest `sha256:34073899dff69b19ee2a580ee0f5505ffca1d2b5c8f3dea73679bf3b7df92d30`.
+
+The browser baseline exposed real production debt and the user explicitly approved closing it. Closure completed without weakening the gate:
+
+1. normal-text contrast on covered surfaces was raised to the active WCAG AA gate;
+2. Case Overview progress indicator received an accessible name;
+3. Ant Design 6 `Drawer.width` and `Space.direction` deprecations were migrated;
+4. Form instances used inside Modals were pre-rendered before imperative control calls;
+5. deprecated `InputNumber.addonAfter` usage was replaced by an AntD `Space.Compact` unit-control pattern.
+
+No axe rule, selector or console warning was suppressed/allowlisted to obtain green CI. UX-I1 did not change database schema, backend authority, business workflow, route contracts or production dependency topology.
+
+Canonical UX-I1 document:
+
+- frontend `docs/ux/UX-I1_BROWSER_BASELINE.md`.
+
+The user explicitly approved continuing on 2026-09-16. UX-I2 may now begin. UX-I3, CFG-2, CFG-3 and Step18B have **not** started.
+'''
+          text = text[:sec3_start] + sec3 + text[sec3_end:]
+
+          sec11_start = text.index('## 11. Immediate next action')
+          sec11 = '''## 11. Immediate next action
+
+**START UX-I2 ONLY — CMP design language / governed tokens.**
+
+Before changing production styling:
+
+1. refresh both repositories and verify branch/head;
+2. read this `AI_context.md` first;
+3. inspect the existing frontend theme/token implementation (`UiRuntime`, design-system tokens and shared styles);
+4. prefer the existing Ant Design 6 `ConfigProvider` + governed CSS/TypeScript tokens unless `antd-style` provides a concrete benefit that justifies a new runtime dependency;
+5. create a central, commercial-neutral CMP design-language layer for brand/neutral palette, semantic statuses, typography, spacing, radius, elevation, density and responsive breakpoints;
+6. migrate only a selected representative set of existing shared components/styles to consume the governed tokens; do not broadly redesign production screens;
+7. verify Frontend Quality plus the locked browser gate at `1440x900` and `390x844`;
+8. write the UX-I2 checkpoint document and stop for review before starting UX-I3.
+
+Hard boundaries for UX-I2:
+
+- no Storybook yet (UX-I3);
+- no ProComponents pilot yet (UX-I5);
+- no CFG-2, CFG-3 or Step18B;
+- no database/schema change;
+- no second UI framework;
+- no CTIC-specific branding hardcoding;
+- no weakening of the UX-I1 Playwright/axe gate.
+'''
+          text = text[:sec11_start] + sec11
+
+          path.write_text(text, encoding='utf-8')
+          Path('.github/workflows/ux-i1-checkpoint-sync.yml').unlink()
+          PY
+
+          git diff --check
+          git diff -- AI_context.md
+
+      - name: Commit checkpoint sync
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AI_context.md .github/workflows/ux-i1-checkpoint-sync.yml
+          git commit -m "docs: lock UX-I1 and advance to UX-I2"
+          git push origin HEAD:feature/ux-fix-batch01
