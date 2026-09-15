@@ -40,12 +40,17 @@ Completed/locked before this checkpoint:
 - CFG-1C — Import Integrity & Operational Lifecycle: PASS / LOCKED
 - CFG-1D — Organization Runtime Wiring: PASS / LOCKED
 
-The current code canonical checkpoints are:
+The current accepted code canonical checkpoints remain:
 
 - Backend code canonical: `4714576475f6939d62093068e6321e4c61ec81eb`
 - Frontend code canonical: `9d207c39236a052157fddc397b74f9243eff2426`
 
-Important: documentation-only commits after these SHAs do not replace the code canonical unless explicitly declared.
+Important: documentation-only commits after these SHAs do not replace the code canonical unless explicitly declared. UX-I1 is currently a **candidate under review**, not a new accepted frontend canonical.
+
+Current UX-I1 frontend code candidate:
+
+- Tested UX-I1 code candidate: `0fb67d043a8e9d834a0d3403f2359d39e8e2b0c2`
+- Frontend documentation commit after the tested code candidate: `c4a6dd219f92f9953dd532074edf2c90494023a8`
 
 ## 3. Current verification state
 
@@ -63,6 +68,57 @@ At CFG-1C/1D closure:
 - Canonical regression: **64/70**, with exactly the same six historical failure signatures; zero new failure signatures
 
 Do not spend CFG-2 effort fixing those six unrelated legacy regression assertions unless a new change genuinely causes one of them to change.
+
+### 3A. UX-I0 / UX-I1 checkpoint — READY FOR USER REVIEW
+
+UX-I0 dependency/compatibility audit:
+
+- status: **COMPLETE FOR REVIEW**;
+- `@playwright/test@1.63.0`: GO for UX-I1;
+- `@axe-core/playwright@4.13.0`: GO for UX-I1;
+- `antd-style@4.1.0`: HOLD until UX-I2 is explicitly approved;
+- Storybook `10.6.0` family: HOLD until UX-I3 is explicitly approved;
+- stable `@ant-design/pro-components@2.8.10`: NO-GO with AntD 6;
+- ProComponents 3.x prerelease remains only a future UX-I5 pilot candidate and must be re-audited before use.
+
+Canonical audit document:
+
+- frontend `docs/ux/UX-I0_DEPENDENCY_COMPATIBILITY.md`.
+
+UX-I1 browser-QA foundation:
+
+- status: **IMPLEMENTED / TECHNICALLY WORKING / NOT YET ACCEPTED OR LOCKED**;
+- Playwright + axe are isolated under frontend `e2e/` with a separate `package-lock.json`;
+- root production dependency graph and root `package-lock.json` remain unchanged;
+- required Chromium projects exist at `1440x900` and `390x844`;
+- browser checks cover console/page errors, failed requests/5xx, horizontal overflow, deterministic screenshots and blocking WCAG A/AA axe findings;
+- Configuration smoke coverage includes canonical route `/admin/configuration/schemes` and the non-mutating “Thêm chương trình” dialog with accessible form/control-name assertions;
+- controlled DEV fixture/showcase evidence is **not** SQL-backed business UAT and must never be described as full E2E.
+
+Final tested UX-I1 code candidate:
+
+- frontend SHA `0fb67d043a8e9d834a0d3403f2359d39e8e2b0c2`;
+- frontend quality workflow run `34971270907`: **PASS**;
+- production app typecheck, repository TypeScript, lint, build and existing tests: **PASS**;
+- browser workflow run `34971271093`: **FAIL because real production baseline debt remains unsuppressed**;
+- browser artifact ID `10397840114`, digest `sha256:c60b7649efc6ec8ee68290c4fb7bf3f8911b16835724527a39eefe151cb8a0e8`;
+- final artifact inspection found **no remaining harness/selector/fixture failure**.
+
+Current browser baseline findings intentionally left visible:
+
+1. `color-contrast` serious findings across Registry/Case/Audit/Configuration; observed evidence includes normal-text contrast ratios below the applicable 4.5:1 AA threshold.
+2. `aria-progressbar-name` serious finding in Case Overview because the Ant Design progress indicator lacks an accessible name.
+3. Configuration emits Ant Design deprecation warnings through `console.error`: `Drawer.width` → `size` and `Space.direction` → `orientation`.
+
+No axe rule, selector, console warning or production issue above has been silently suppressed/whitelisted to make CI green. No `Horizontal overflow detected`, uncaught page-error, request-failure or HTTP-5xx signature remained in the final failure set.
+
+Scope-safety verification from frontend canonical `9d207c39236a052157fddc397b74f9243eff2426` to tested UX-I1 code candidate shows QA/docs/workflow/config/script changes only; there are **no `app/**` or `src/**` production UI changes**.
+
+Canonical UX-I1 checkpoint document:
+
+- frontend `docs/ux/UX-I1_BROWSER_BASELINE.md`.
+
+**Hard stop:** wait for user review of UX-I0 + UX-I1. Do not declare the UX-I1 candidate as the new frontend canonical and do not start UX-I2+, CFG-2, CFG-3 or Step18B until explicitly approved.
 
 ## 4. Locked configuration behavior
 
@@ -572,21 +628,18 @@ For UX infrastructure dependency work:
 - do not introduce a second design foundation
 - do not globally add Tailwind-based patterns merely for appearance
 
-## 11. Immediate next action for the new chat
+## 11. Immediate next action
 
-The next implementation assignment should be **UX-I0 + UX-I1 only** unless the user explicitly approves combining more phases.
+**STOP FOR USER REVIEW OF UX-I0 + UX-I1.**
 
-Recommended first Codex task:
+Before any further implementation:
 
-1. refresh both repositories and verify current branch/head;
+1. refresh both repositories and verify branch/head;
 2. read this `AI_context.md` first;
-3. audit exact dependency compatibility;
-4. propose/pin Playwright + axe versions;
-5. install only after compatibility evidence;
-6. create deterministic browser harness;
-7. produce current-state screenshots at 1440×900 and 390×844 for selected existing screens;
-8. run frontend typecheck/lint/build/full tests;
-9. do not redesign production UI yet;
-10. stop and report before UX-I2.
+3. review frontend `docs/ux/UX-I0_DEPENDENCY_COMPATIBILITY.md`;
+4. review frontend `docs/ux/UX-I1_BROWSER_BASELINE.md` and the unsuppressed browser findings;
+5. keep accepted frontend canonical at `9d207c39236a052157fddc397b74f9243eff2426` until the user explicitly accepts/promotes the UX-I1 candidate;
+6. do not repair production UI merely to make UX-I1 CI green unless the user explicitly authorizes that scope;
+7. do not start UX-I2+, CFG-2, CFG-3 or Step18B until the user explicitly approves the next checkpoint.
 
-Do not start CFG-2, CFG-3 or Step18B in the same assignment.
+The correct next conversational action is to report this checkpoint and obtain the user's review/decision, not to continue automatically.
