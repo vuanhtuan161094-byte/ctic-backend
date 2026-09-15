@@ -150,7 +150,10 @@ async function verifyMigration(testUrl) {
       fail('Migration physical objects are incomplete.');
     }
     const expectedIndexes = [
-      'UQ_certification_body_capability_program_iaf',
+      // Migration 32 replaces the old program-only key with edition/legacy keys.
+      'UQ_cb_capability_standard_iaf',
+      'UQ_cb_capability_legacy_program_iaf',
+      'IX_certification_body_capability_standard_iaf',
       'IX_certification_body_capability_status_dates',
       'IX_certification_body_capability_iaf',
       'IX_certification_body_capability_created_by',
@@ -237,7 +240,7 @@ async function main() {
   for (let run = 1; run <= 2; run += 1) {
     console.log(`Application Review + CB Capability E2E run ${run}/2...`);
     runNpm([
-      'run', 'test:e2e', '--', 'application-review-cb-capability.e2e-spec.ts', '--runInBand',
+      'run', 'test:e2e', '--', 'application-review-cb-capability.e2e-spec.ts', 'import-integrity.e2e-spec.ts', '--runInBand',
     ], childEnv);
   }
   console.log('Application Review + CB Capability E2E repeatability: 2/2 PASS.');
