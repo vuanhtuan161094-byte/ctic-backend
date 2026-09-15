@@ -122,6 +122,53 @@ Canonical UX-I1 document:
 
 The user explicitly approved continuing on 2026-09-16. UX-I2 may now begin. UX-I3, CFG-2, CFG-3 and Step18B have **not** started.
 
+### 3B. UX-I2 — CMP Design Language / Governed Tokens — READY FOR USER REVIEW
+
+UX-I2 implementation is technically complete and verified, but is **not yet accepted/locked**. The accepted frontend canonical remains the UX-I1 code `9b50401661844188e3ea8c796c5bd680038af38c` until explicit user review promotes UX-I2.
+
+UX-I2 code candidate:
+
+- frontend `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`.
+
+Standard verification candidate:
+
+- frontend `1ea01b0b2841cd4b6b1bef9f32d0e0235d2eb593`;
+- Frontend Quality run `35020032804`: **PASS**;
+- Browser Quality run `35020032766`: **PASS**;
+- browser artifact ID `10417486176`;
+- artifact digest `sha256:988160936ebf99f349900e655b73f686ace7a3bec11eba45bba353823a1e1b50`.
+
+Fail-closed implementation workflow `35019596013` also passed production typecheck, repository TypeScript, lint, build/full tests and the locked Playwright/axe gate before the UX-I2 production patch was committed.
+
+UX-I2 design decisions:
+
+1. Ant Design 6 remains the sole UI foundation.
+2. `antd-style` was re-evaluated and deliberately **not installed**; current `ConfigProvider` + governed CSS/TypeScript tokens satisfy the requirement without production dependency churn.
+3. `app/components/design-system/theme.ts` is the typed Ant Design theme bridge and foundation/breakpoint reference.
+4. `app/components/design-system/tokens.css` is the governed CSS contract for brand, neutral, semantic status, typography, spacing, hierarchy, opt-in density, radius, elevation and breakpoint references.
+5. `app/components/design-system/runtime-overrides.css` replaces the temporary UX-I1 accessibility-closure stylesheet; required overrides now resolve through governed tokens.
+6. `UiRuntime.tsx` consumes `createCmpAntdTheme(...)` instead of inline theme literals.
+7. Existing `--ctic-*` aliases remain temporary compatibility aliases for legacy screens; new shared UI must consume `--cmp-*`.
+8. Density/control-height references are defined but are **not applied globally**, specifically to avoid visual drift or unintended Button/Input resizing.
+9. Representative app-shell/design-system consumers were migrated using equivalent existing values; this phase is governance/normalization, not a broad UI redesign.
+
+UX-I2 scope safety:
+
+- no package dependency change;
+- no database/schema/backend authority change;
+- no business workflow or route-contract change;
+- no Storybook;
+- no ProComponents;
+- no second UI framework;
+- no CTIC-specific branding hardcoding;
+- no weakening of UX-I1 browser/axe/runtime gates.
+
+Canonical UX-I2 evidence document:
+
+- frontend `docs/ux/UX-I2_DESIGN_LANGUAGE.md`.
+
+**Hard stop:** UX-I3, CFG-2, CFG-3 and Step18B must not start until the user reviews and explicitly accepts the UX-I2 checkpoint.
+
 ## 4. Locked configuration behavior
 
 ### CFG-1A — Numbering
@@ -632,25 +679,29 @@ For UX infrastructure dependency work:
 
 ## 11. Immediate next action
 
-**START UX-I2 ONLY — CMP design language / governed tokens.**
+**HOLD FOR USER REVIEW — UX-I2 checkpoint.**
 
-Before changing production styling:
+Current accepted frontend canonical remains:
 
-1. refresh both repositories and verify branch/head;
-2. read this `AI_context.md` first;
-3. inspect the existing frontend theme/token implementation (`UiRuntime`, design-system tokens and shared styles);
-4. prefer the existing Ant Design 6 `ConfigProvider` + governed CSS/TypeScript tokens unless `antd-style` provides a concrete benefit that justifies a new runtime dependency;
-5. create a central, commercial-neutral CMP design-language layer for brand/neutral palette, semantic statuses, typography, spacing, radius, elevation, density and responsive breakpoints;
-6. migrate only a selected representative set of existing shared components/styles to consume the governed tokens; do not broadly redesign production screens;
-7. verify Frontend Quality plus the locked browser gate at `1440x900` and `390x844`;
-8. write the UX-I2 checkpoint document and stop for review before starting UX-I3.
+- `9b50401661844188e3ea8c796c5bd680038af38c` — UX-I1 PASS / LOCKED.
 
-Hard boundaries for UX-I2:
+Candidate awaiting review:
 
-- no Storybook yet (UX-I3);
-- no ProComponents pilot yet (UX-I5);
-- no CFG-2, CFG-3 or Step18B;
-- no database/schema change;
-- no second UI framework;
-- no CTIC-specific branding hardcoding;
-- no weakening of the UX-I1 Playwright/axe gate.
+- `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db` — UX-I2 governed design language;
+- standard verification `1ea01b0b2841cd4b6b1bef9f32d0e0235d2eb593`;
+- Frontend Quality `35020032804` PASS;
+- Browser Quality `35020032766` PASS.
+
+On explicit user acceptance only:
+
+1. promote UX-I2 code candidate to the accepted frontend canonical;
+2. mark UX-I2 PASS / LOCKED in this file;
+3. then start UX-I3 Storybook foundation under its own checkpoint.
+
+Until then:
+
+- do not start UX-I3;
+- do not start CFG-2;
+- do not start CFG-3;
+- do not start Step18B;
+- do not expand UX-I2 into broad production-screen redesign.
