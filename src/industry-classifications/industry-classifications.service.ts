@@ -16,6 +16,7 @@ import {
 } from './dto/industry-classification.dto';
 import {
     TAXONOMY_OPERATIONAL_REVISIONS,
+    TAXONOMY_MAPPING_TYPES,
     TaxonomyRuntimePolicyService,
 } from './taxonomy-runtime-policy.service';
 
@@ -350,6 +351,7 @@ export class IndustryClassificationsService {
         dto:
             CreateIndustryCodeMappingDto,
     ) {
+        if (!(TAXONOMY_MAPPING_TYPES as readonly string[]).includes(this.normalize(dto.mapping_type))) throw new BadRequestException('Kiểu mapping không được hỗ trợ cho vận hành');
         const source =
             await this.getClassificationOrThrow(
                 dto.source_code_id,
@@ -464,6 +466,8 @@ export class IndustryClassificationsService {
                 'Không tìm thấy quan hệ ISIC - NACE',
             );
         }
+
+        if (!(TAXONOMY_MAPPING_TYPES as readonly string[]).includes(mapping.mapping_type)) throw new BadRequestException('Kiểu mapping không được hỗ trợ cho vận hành');
 
         return this.prisma.industry_code_mappings.update({
             where: {

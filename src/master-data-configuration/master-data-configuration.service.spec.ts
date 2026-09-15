@@ -19,6 +19,8 @@ function harness() {
         nace_iaf_mappings: { findMany: jest.fn().mockResolvedValue([]) },
         import_jobs: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
     };
+    prisma.$queryRaw = jest.fn().mockResolvedValue([]);
+    prisma.$transaction = jest.fn().mockImplementation((callback) => callback(prisma));
     const audit = { write: jest.fn().mockResolvedValue(undefined) };
     return { prisma, audit, service: new MasterDataConfigurationService(prisma, audit as any) };
 }

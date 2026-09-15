@@ -12,6 +12,7 @@ export const TAXONOMY_OPERATIONAL_REVISIONS = {
 } as const;
 
 export const TAXONOMY_MANAGEMENT_SYSTEMS = ['QMS', 'EMS', 'OHSMS'] as const;
+export const TAXONOMY_MAPPING_TYPES = ['EXACT', 'PARTIAL', 'ONE_TO_MANY'] as const;
 
 type ManagementSystem = (typeof TAXONOMY_MANAGEMENT_SYSTEMS)[number];
 
@@ -104,7 +105,7 @@ export class TaxonomyRuntimePolicyService {
     return normalized as ManagementSystem;
   }
 
-  private isOperationalClassification(row: ClassificationRow, at: Date) {
+  isOperationalClassification(row: ClassificationRow, at: Date) {
     const expectedRevision =
       TAXONOMY_OPERATIONAL_REVISIONS[
         row.classification_type as keyof typeof TAXONOMY_OPERATIONAL_REVISIONS
@@ -115,6 +116,27 @@ export class TaxonomyRuntimePolicyService {
       row.is_active &&
       this.isEffective(row.valid_from, row.valid_to, at)
     );
+  }
+
+  assertPublishableMapping(mapping: IndustryMappingRow | NaceIafMappingRow, at = new Date()) {
+    const today = this.businessDate(at);
+    if (!this.isEffective(mapping.valid_from, mapping.valid_to, today)) {
+      throw new BadRequestException('Mapping chưa hoặc không còn hiệu lực');
+    }
+    if ('source_code' in mapping) {
+      if (mapping.source_code.classification_type !== 'ISIC' ||
+          mapping.target_code.classification_type !== 'NACE' ||
+          !this.isOperationalClassification(mapping.source_code, today) ||
+          !this.isOperationalClassification(mapping.target_code, today) ||
+          !(TAXONOMY_MAPPING_TYPES as readonly string[]).includes(mapping.mapping_type)) {
+        throw new BadRequestException('Tham chiếu hoặc kiểu ánh xạ ISIC–NACE không hợp lệ cho vận hành');
+      }
+    } else if (mapping.nace_code.classification_type !== 'NACE' ||
+        !this.isOperationalClassification(mapping.nace_code, today) ||
+        !mapping.iaf_scope.is_active ||
+        !(TAXONOMY_MANAGEMENT_SYSTEMS as readonly string[]).includes(mapping.management_system)) {
+      throw new BadRequestException('Tham chiếu hoặc hệ thống NACE–IAF không hợp lệ cho vận hành');
+    }
   }
 
   private async loadSnapshot(at = new Date()): Promise<TaxonomySnapshot> {
@@ -400,6 +422,7 @@ export class TaxonomyRuntimePolicyService {
     const mappings = snapshot.industryMappings.filter(
       (mapping) =>
         sourceIds.has(mapping.source_code_id) &&
+        (TAXONOMY_MAPPING_TYPES as readonly string[]).includes(mapping.mapping_type) &&
         this.isOperationalClassification(mapping.source_code, snapshot.at) &&
         this.isOperationalClassification(mapping.target_code, snapshot.at) &&
         this.isEffective(mapping.valid_from, mapping.valid_to, snapshot.at),

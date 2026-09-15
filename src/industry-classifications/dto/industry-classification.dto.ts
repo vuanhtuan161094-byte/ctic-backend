@@ -20,6 +20,7 @@ import {
     ApiProperty,
     ApiPropertyOptional,
 } from '@nestjs/swagger';
+import { TAXONOMY_MAPPING_TYPES } from '../taxonomy-runtime-policy.service';
 
 export class CreateIndustryClassificationDto {
     @ApiProperty({ enum: ['ISIC', 'NACE'], example: 'ISIC' })
@@ -92,15 +93,10 @@ export class CreateIndustryCodeMappingDto {
     target_code_id!: string;
 
     @ApiProperty({
-        enum: ['EXACT', 'PARTIAL', 'ONE_TO_MANY', 'MANY_TO_ONE'],
+        enum: [...TAXONOMY_MAPPING_TYPES],
         example: 'EXACT',
     })
-    @IsIn([
-        'EXACT',
-        'PARTIAL',
-        'ONE_TO_MANY',
-        'MANY_TO_ONE',
-    ])
+    @IsIn(TAXONOMY_MAPPING_TYPES)
     mapping_type!: string;
 
     @ApiPropertyOptional({ example: 'Ánh xạ ISIC 2220 sang NACE 22.29' })

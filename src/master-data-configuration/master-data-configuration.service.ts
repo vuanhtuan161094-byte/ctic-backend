@@ -30,7 +30,7 @@ import {
     numberingRuleLifecycleState,
     numberingSequenceNamespace,
 } from './numbering-runtime-policy';
-import { TaxonomyRuntimePolicyService } from '../industry-classifications/taxonomy-runtime-policy.service';
+import { TAXONOMY_OPERATIONAL_REVISIONS, TAXONOMY_MANAGEMENT_SYSTEMS, TAXONOMY_MAPPING_TYPES, TaxonomyRuntimePolicyService } from '../industry-classifications/taxonomy-runtime-policy.service';
 
 type CsvRow = Record<string, string>;
 type ValidatedRow = {
@@ -1180,25 +1180,37 @@ export class MasterDataConfigurationService {
     }
 
     private parseCsv(buffer: Buffer) {
-        const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+        let text: string;
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer).replace(/^\uFEFF/, ''); }
+        catch { throw new BadRequestException('CSV phải là UTF-8 hợp lệ'); }
         const rows: string[][] = [];
         let row: string[] = [];
         let cell = '';
         let quoted = false;
+        let closed = false;
         for (let index = 0; index < text.length; index += 1) {
             const char = text[index];
             if (quoted) {
                 if (char === '"' && text[index + 1] === '"') { cell += '"'; index += 1; }
-                else if (char === '"') quoted = false;
+                else if (char === '"') { quoted = false; closed = true; }
                 else cell += char;
-            } else if (char === '"') quoted = true;
-            else if (char === ',') { row.push(cell); cell = ''; }
-            else if (char === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-            else if (char !== '\r') cell += char;
+            } else if (char === '"') {
+                if (cell.length || closed) throw new BadRequestException('CSV có dấu ngoặc kép sai vị trí');
+                quoted = true;
+            }
+            else if (char === ',') { row.push(cell); cell = ''; closed = false; }
+            else if (char === '\n' || char === '\r') {
+                if (char === '\r' && text[index + 1] === '\n') index += 1;
+                row.push(cell); rows.push(row); row = []; cell = ''; closed = false;
+            }
+            else {
+                if (closed) throw new BadRequestException('CSV có ký tự sau dấu ngoặc kép đóng');
+                cell += char;
+            }
         }
         if (quoted) throw new BadRequestException('CSV có dấu ngoặc kép chưa đóng');
         if (cell.length || row.length) { row.push(cell); rows.push(row); }
-        return rows.filter((item) => item.some((value) => value.trim()));
+        return rows;
     }
 
     private required(row: CsvRow, field: string, errors: string[]) {
@@ -1218,19 +1230,19 @@ export class MasterDataConfigurationService {
         try { this.date(value, field, true); } catch (error) { errors.push(error instanceof Error ? error.message : `${field} không hợp lệ`); }
     }
 
-    private async referenceData() {
+    private async referenceData(client: Prisma.TransactionClient = this.prisma) {
         const [schemes, standards, iaf, classifications, industryMappings, naceIafMappings] = await Promise.all([
-            this.prisma.certification_schemes.findMany({ select: { id: true, code: true } }),
-            this.prisma.standard_editions.findMany({ select: { standard_code: true, edition: true } }),
-            this.prisma.iaf_scopes.findMany({ select: { id: true, iaf_code: true } }),
-            this.prisma.industry_classifications.findMany({ select: { id: true, classification_type: true, revision: true, code: true } }),
-            this.prisma.industry_code_mappings.findMany({ select: { source_code_id: true, target_code_id: true } }),
-            this.prisma.nace_iaf_mappings.findMany({ select: { nace_code_id: true, iaf_scope_id: true, management_system: true } }),
+            client.certification_schemes.findMany(),
+            client.standard_editions.findMany({ select: { standard_code: true, edition: true } }),
+            client.iaf_scopes.findMany(),
+            client.industry_classifications.findMany(),
+            client.industry_code_mappings.findMany(),
+            client.nace_iaf_mappings.findMany(),
         ]);
         return { schemes, standards, iaf, classifications, industryMappings, naceIafMappings };
     }
 
-    private async validateRows(entityType: string, rows: string[][]): Promise<ValidatedRow[]> {
+    private async validateRows(entityType: string, rows: string[][], client: Prisma.TransactionClient = this.prisma, ownMappingIds: string[] = []): Promise<ValidatedRow[]> {
         const expected = IMPORT_DEFINITIONS[entityType];
         if (!expected) throw new BadRequestException('Loại import không được hỗ trợ');
         if (rows.length < 2) throw new BadRequestException('CSV phải có header và ít nhất một dòng dữ liệu');
@@ -1238,13 +1250,18 @@ export class MasterDataConfigurationService {
         if (headers.length !== expected.length || headers.some((value, index) => value !== expected[index])) {
             throw new BadRequestException(`Header CSV phải đúng thứ tự: ${expected.join(',')}`);
         }
-        const refs = await this.referenceData();
+        const refs = await this.referenceData(client);
+        refs.industryMappings = refs.industryMappings.filter((item) => !ownMappingIds.includes(item.id));
+        refs.naceIafMappings = refs.naceIafMappings.filter((item) => !ownMappingIds.includes(item.id));
         const seen = new Set<string>();
         return rows.slice(1).map((values, index) => {
             const raw = Object.fromEntries(headers.map((header, column) => [header, values[column] ?? ''])) as CsvRow;
             const errors: string[] = [];
+            if (values.length !== headers.length) errors.push(`Dòng có ${values.length} cột; yêu cầu ${headers.length} cột`);
             const warnings: string[] = [];
             const normalized = Object.fromEntries(headers.map((header) => [header, this.safeCell(raw[header] ?? '', header, errors)])) as CsvRow;
+            const limits: Record<string, number> = { code: entityType === 'SCHEME' ? 100 : 30, name: 255, scheme_code: 100, standard_code: 100, standard_name: 255, edition: 50, iaf_code: 20, iaf_name: 500, title_en: 500, title_vi: 500, parent_code: 30, classification_type: 20, revision: 30, isic_revision: 30, nace_revision: 30, isic_code: 30, nace_code: 30, management_system: 30, mapping_type: 30 };
+            for (const [field, value] of Object.entries(normalized)) if (limits[field] && value.length > limits[field]) errors.push(`${field} vượt giới hạn ${limits[field]} ký tự`);
             let key = '';
             if (entityType === 'SCHEME') {
                 normalized.code = this.code(this.required(normalized, 'code', errors));
@@ -1268,7 +1285,13 @@ export class MasterDataConfigurationService {
                 normalized.revision = this.code(this.required(normalized, 'revision', errors), 30);
                 normalized.code = this.required(normalized, 'code', errors); this.required(normalized, 'title_en', errors);
                 if (!['ISIC', 'NACE'].includes(normalized.classification_type)) errors.push('classification_type chỉ nhận ISIC hoặc NACE');
-                const level = Number(normalized.level); if (!Number.isInteger(level) || level < 1 || level > 5) errors.push('level phải từ 1 đến 5');
+                const level = Number(normalized.level); if (!Number.isInteger(level) || level < 1 || level > 4) errors.push('level phải từ 1 đến 4');
+                const revision = TAXONOMY_OPERATIONAL_REVISIONS[normalized.classification_type as keyof typeof TAXONOMY_OPERATIONAL_REVISIONS];
+                if (normalized.revision !== revision) errors.push('revision không thuộc phiên bản vận hành');
+                if (level > 1) {
+                    const parent = refs.classifications.find((item) => item.classification_type === normalized.classification_type && item.revision === normalized.revision && item.code === normalized.parent_code);
+                    if (!parent || parent.level !== level - 1 || !parent.is_active) errors.push('parent_code phải tồn tại, đang hoạt động và đúng cấp cha; nạp cấp cha trước');
+                } else if (normalized.parent_code) errors.push('Mã cấp 1 không được có parent_code');
                 this.validDate(normalized.valid_from, 'valid_from', errors); this.validDate(normalized.valid_to, 'valid_to', errors);
                 key = `${normalized.classification_type}:${normalized.revision}:${normalized.code}`;
                 if (refs.classifications.some((item) => item.classification_type === normalized.classification_type && item.revision === normalized.revision && item.code === normalized.code)) errors.push('mã phân loại đã tồn tại');
@@ -1278,12 +1301,16 @@ export class MasterDataConfigurationService {
                 normalized.nace_revision = this.code(this.required(normalized, 'nace_revision', errors), 30);
                 normalized.nace_code = this.required(normalized, 'nace_code', errors);
                 normalized.mapping_type = this.code(this.required(normalized, 'mapping_type', errors), 30);
-                if (!['EXACT', 'PARTIAL', 'ONE_TO_MANY'].includes(normalized.mapping_type)) errors.push('mapping_type chỉ nhận EXACT, PARTIAL hoặc ONE_TO_MANY');
+                if (!(TAXONOMY_MAPPING_TYPES as readonly string[]).includes(normalized.mapping_type)) errors.push('mapping_type chỉ nhận EXACT, PARTIAL hoặc ONE_TO_MANY');
                 this.validDate(normalized.valid_from, 'valid_from', errors); this.validDate(normalized.valid_to, 'valid_to', errors);
                 const isic = refs.classifications.find((item) => item.classification_type === 'ISIC' && item.revision === normalized.isic_revision && item.code === normalized.isic_code);
                 const nace = refs.classifications.find((item) => item.classification_type === 'NACE' && item.revision === normalized.nace_revision && item.code === normalized.nace_code);
                 if (!isic) errors.push('ISIC revision/code không tồn tại');
                 if (!nace) errors.push('NACE revision/code không tồn tại');
+                if (normalized.isic_revision !== TAXONOMY_OPERATIONAL_REVISIONS.ISIC || normalized.nace_revision !== TAXONOMY_OPERATIONAL_REVISIONS.NACE) errors.push('revision không thuộc phiên bản vận hành');
+                const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+                if (isic && !this.taxonomyPolicy.isOperationalClassification(isic, today)) errors.push('ISIC không đang hiệu lực');
+                if (nace && !this.taxonomyPolicy.isOperationalClassification(nace, today)) errors.push('NACE không đang hiệu lực');
                 key = `${normalized.isic_revision}:${normalized.isic_code}:${normalized.nace_revision}:${normalized.nace_code}`;
                 if (isic && nace && refs.industryMappings.some((item) => item.source_code_id === isic.id && item.target_code_id === nace.id)) errors.push('ISIC–NACE mapping đã tồn tại');
             } else {
@@ -1291,15 +1318,33 @@ export class MasterDataConfigurationService {
                 normalized.nace_code = this.required(normalized, 'nace_code', errors);
                 normalized.iaf_code = this.code(this.required(normalized, 'iaf_code', errors), 20);
                 normalized.management_system = this.code(this.required(normalized, 'management_system', errors), 30);
+                if (!(TAXONOMY_MANAGEMENT_SYSTEMS as readonly string[]).includes(normalized.management_system)) errors.push('management_system chỉ nhận QMS, EMS hoặc OHSMS');
+                if (normalized.nace_revision !== TAXONOMY_OPERATIONAL_REVISIONS.NACE) errors.push('revision không thuộc phiên bản vận hành');
                 this.validDate(normalized.valid_from, 'valid_from', errors); this.validDate(normalized.valid_to, 'valid_to', errors);
                 const nace = refs.classifications.find((item) => item.classification_type === 'NACE' && item.revision === normalized.nace_revision && item.code === normalized.nace_code);
                 const iaf = refs.iaf.find((item) => item.iaf_code === normalized.iaf_code);
                 if (!nace) errors.push('NACE revision/code không tồn tại');
                 if (!iaf) errors.push('IAF code không tồn tại');
+                const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+                if (nace && !this.taxonomyPolicy.isOperationalClassification(nace, today)) errors.push('NACE không đang hiệu lực');
+                if (iaf && !iaf.is_active) errors.push('IAF không hoạt động');
                 key = `${normalized.nace_revision}:${normalized.nace_code}:${normalized.iaf_code}:${normalized.management_system}`;
                 if (nace && iaf && refs.naceIafMappings.some((item) => item.nace_code_id === nace.id && item.iaf_scope_id === iaf.id && item.management_system === normalized.management_system)) errors.push('NACE–IAF mapping đã tồn tại');
             }
-            let status: ValidatedRow['status'] = errors.length ? 'INVALID' : 'VALID';
+            for (const [from, to] of [['valid_from', 'valid_to'], ['effective_from', 'effective_to']]) {
+                if (normalized[from] && normalized[to] && normalized[from] > normalized[to]) errors.push(`${from} phải trước hoặc bằng ${to}`);
+            }
+            if (entityType.endsWith('_MAPPING')) warnings.push('Lưu bản nháp; cần xem xét và công bố trước khi runtime sử dụng');
+            const references = [
+                ...refs.classifications.filter((item) =>
+                    (item.classification_type === 'ISIC' && item.revision === normalized.isic_revision && item.code === normalized.isic_code) ||
+                    (item.classification_type === 'NACE' && item.revision === normalized.nace_revision && item.code === normalized.nace_code) ||
+                    (entityType === 'INDUSTRY_CLASSIFICATION' && item.classification_type === normalized.classification_type && item.revision === normalized.revision && item.code === normalized.parent_code)),
+                ...refs.iaf.filter((item) => entityType === 'NACE_IAF_MAPPING' && item.iaf_code === normalized.iaf_code),
+                ...refs.schemes.filter((item) => entityType === 'STANDARD_EDITION' && item.code === normalized.scheme_code),
+            ];
+            normalized.__reference_hash = createHash('sha256').update(JSON.stringify(references.sort((a, b) => a.id.localeCompare(b.id)))).digest('hex');
+            let status: ValidatedRow['status'] = errors.some((error) => error.includes('đã tồn tại')) ? 'DUPLICATE' : errors.length ? 'INVALID' : 'VALID';
             if (key && seen.has(key)) { errors.push('Trùng khóa trong cùng file'); status = 'DUPLICATE'; }
             seen.add(key);
             return { rowNumber: index + 2, raw, normalized: errors.length ? normalized : normalized, status, errors, warnings };
@@ -1310,7 +1355,7 @@ export class MasterDataConfigurationService {
         const entityType = this.code(entityTypeInput, 50);
         if (mode && mode !== 'CREATE_ONLY') throw new BadRequestException('Chỉ hỗ trợ CREATE_ONLY');
         if (!file || !file.originalname.toLowerCase().endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận file CSV UTF-8');
-        if (file.size > 2 * 1024 * 1024) throw new BadRequestException('File CSV vượt quá giới hạn 2 MB');
+        if (file.size > 2 * 1024 * 1024 || file.buffer.length > 2 * 1024 * 1024) throw new BadRequestException('File CSV vượt quá giới hạn 2 MB');
         const rows = this.parseCsv(file.buffer);
         if (rows.length > 5001) throw new BadRequestException('File CSV vượt quá 5.000 dòng dữ liệu');
         const validated = await this.validateRows(entityType, rows);
@@ -1340,7 +1385,26 @@ export class MasterDataConfigurationService {
     async getImportJob(id: string) {
         const job = await this.prisma.import_jobs.findUnique({ where: { id }, include: { rows: { orderBy: { row_number: 'asc' } } } });
         if (!job) throw new NotFoundException('Không tìm thấy import job');
-        return job;
+        let publication_state = job.status === 'COMMITTED' ? 'STORED' : job.status;
+        let can_publish = false;
+        const mapping = ['ISIC_NACE_MAPPING', 'NACE_IAF_MAPPING'].includes(job.entity_type);
+        if (mapping && job.status === 'COMMITTED') {
+            const ids = job.rows.map((row) => row.committed_entity_id).filter((value): value is string => Boolean(value));
+            const targets = await this.importMappingTargets(this.prisma, job.entity_type, ids);
+            const complete = targets.length === job.total_rows && ids.length === job.total_rows && targets.length > 0;
+            let current = complete;
+            for (const target of targets) {
+                try { this.taxonomyPolicy.assertPublishableMapping(target); } catch { current = false; }
+            }
+            can_publish = complete && current && targets.every((target) => {
+                const row = job.rows.find((item) => item.committed_entity_id === target.id);
+                return target.mapping_status === 'DRAFT' && Boolean(row?.normalized_data) && this.importMappingUnchanged(target, JSON.parse(row!.normalized_data!) as CsvRow);
+            });
+            publication_state = complete && targets.every((target) => target.mapping_status === 'APPROVED')
+                ? current ? 'OPERATIONAL' : 'PUBLISHED_NOT_CURRENT'
+                : can_publish ? 'READY_FOR_PUBLICATION' : 'DRAFTS_NEED_REVIEW';
+        }
+        return { ...job, publication_state, can_publish, can_commit: job.status === 'VALIDATED' && job.total_rows > 0 && !job.invalid_rows && !job.duplicate_rows };
     }
 
     async listImportJobs() {
@@ -1348,11 +1412,23 @@ export class MasterDataConfigurationService {
     }
 
     async commitImport(id: string, userId: string) {
-        const job = await this.getImportJob(id);
+        const result = await this.prisma.$transaction(async (tx) => {
+        const job = await this.lockImportJob(tx, id);
         if (job.status === 'COMMITTED') throw new ConflictException('Import job đã commit; không thể chạy lại');
         if (job.status !== 'VALIDATED') throw new ConflictException('Import job không ở trạng thái VALIDATED');
         if (job.invalid_rows || job.duplicate_rows) throw new ConflictException('Phải sửa toàn bộ dòng invalid/duplicate trước khi commit');
-        const result = await this.prisma.$transaction(async (tx) => {
+            if (!job.rows.length || job.rows.length !== job.total_rows || job.rows.some((row) => row.validation_status !== 'VALID' || !row.normalized_data)) throw new ConflictException('Import job không đủ dòng hợp lệ');
+            const columns = IMPORT_DEFINITIONS[job.entity_type];
+            if (!columns) throw new ConflictException('Loại import không hợp lệ');
+            const checked = await this.validateRows(job.entity_type, [columns, ...job.rows.map((row) => {
+                const data = JSON.parse(row.normalized_data!) as CsvRow;
+                return columns.map((column) => data[column] ?? '');
+            })], tx);
+            if (checked.some((row) => row.status !== 'VALID')) throw new ConflictException({ message: 'Dữ liệu thay đổi sau kiểm tra; cần tải lại CSV', rows: checked });
+            if (checked.some((row, index) => {
+                const previous = JSON.parse(job.rows[index].normalized_data!) as CsvRow;
+                return previous.__reference_hash && previous.__reference_hash !== row.normalized?.__reference_hash;
+            })) throw new ConflictException('Tham chiếu đã thay đổi sau preview; cần kiểm tra lại CSV');
             let committed = 0;
             for (const row of job.rows) {
                 if (row.validation_status !== 'VALID' || !row.normalized_data) continue;
@@ -1407,9 +1483,71 @@ export class MasterDataConfigurationService {
                 await tx.import_job_rows.update({ where: { id: row.id }, data: { committed_entity_id: entityId } });
                 committed += 1;
             }
-            return tx.import_jobs.update({ where: { id }, data: { status: 'COMMITTED', committed_rows: committed, committed_at: new Date() } });
+            const result = await tx.import_jobs.update({ where: { id }, data: { status: 'COMMITTED', committed_rows: committed, committed_at: new Date() } });
+            await tx.audit_logs.create({ data: { user_id: userId, action: 'IMPORT_COMMITTED', entity_type: 'import_job', entity_id: id, outcome: 'success', details_json: JSON.stringify({ committed_rows: committed }) } });
+            return result;
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-        await this.writeAudit(userId, 'IMPORT_COMMITTED', 'import_job', id);
         return result;
+    }
+
+    private async lockImportJob(tx: Prisma.TransactionClient, id: string) {
+        await tx.$queryRaw`SELECT id FROM dbo.import_jobs WITH (UPDLOCK, HOLDLOCK) WHERE id = CONVERT(uniqueidentifier, ${id})`;
+        const job = await tx.import_jobs.findUnique({ where: { id }, include: { rows: { orderBy: { row_number: 'asc' } } } });
+        if (!job) throw new NotFoundException('Không tìm thấy import job');
+        return job;
+    }
+
+    private async importMappingTargets(tx: Prisma.TransactionClient, entityType: string, ids: string[]) {
+        // Stay below SQL Server's parameter ceiling for 5,000-row jobs.
+        const batches: Array<Array<Parameters<TaxonomyRuntimePolicyService['assertPublishableMapping']>[0] & { mapping_status: string }>> = [];
+        for (let start = 0; start < ids.length; start += 500) {
+            const chunk = ids.slice(start, start + 500);
+            batches.push(entityType === 'ISIC_NACE_MAPPING'
+                ? await tx.industry_code_mappings.findMany({ where: { id: { in: chunk } }, include: { source_code: true, target_code: true } })
+                : await tx.nace_iaf_mappings.findMany({ where: { id: { in: chunk } }, include: { nace_code: true, iaf_scope: true } }));
+        }
+        return batches.flat();
+    }
+
+    private importMappingUnchanged(mapping: Parameters<TaxonomyRuntimePolicyService['assertPublishableMapping']>[0], original: CsvRow) {
+        const refs = 'source_code' in mapping ? [mapping.source_code, mapping.target_code] : [mapping.nace_code, mapping.iaf_scope];
+        const hash = createHash('sha256').update(JSON.stringify(refs.sort((a, b) => a.id.localeCompare(b.id)))).digest('hex');
+        if (original.__reference_hash && original.__reference_hash !== hash) return false;
+        const dateMatches = (value: Date | null, field: string) => (value?.toISOString().slice(0, 10) ?? '') === (original[field] ?? '');
+        const unchanged = 'source_code' in mapping
+            ? mapping.source_code.code === original.isic_code && mapping.source_code.revision === original.isic_revision && mapping.target_code.code === original.nace_code && mapping.target_code.revision === original.nace_revision && mapping.mapping_type === original.mapping_type
+            : mapping.nace_code.code === original.nace_code && mapping.nace_code.revision === original.nace_revision && mapping.iaf_scope.iaf_code === original.iaf_code && mapping.management_system === original.management_system;
+        return unchanged && dateMatches(mapping.valid_from, 'valid_from') && dateMatches(mapping.valid_to, 'valid_to');
+    }
+
+    async publishImport(id: string, userId: string) {
+        await this.prisma.$transaction(async (tx) => {
+            const job = await this.lockImportJob(tx, id);
+            if (job.status !== 'COMMITTED' || !['ISIC_NACE_MAPPING', 'NACE_IAF_MAPPING'].includes(job.entity_type) || !job.rows.length || job.committed_rows !== job.rows.length) throw new ConflictException('Chỉ lô mapping đã lưu đầy đủ mới được công bố');
+            const ids = job.rows.map((row) => row.committed_entity_id!);
+            if (ids.some((value) => !value) || new Set(ids).size !== ids.length) throw new ConflictException('Liên kết mapping của lô không hợp lệ');
+            const columns = IMPORT_DEFINITIONS[job.entity_type];
+            const originals = job.rows.map((row) => JSON.parse(row.normalized_data!) as CsvRow);
+            const checked = await this.validateRows(job.entity_type, [columns, ...originals.map((row) => columns.map((column) => row[column] ?? ''))], tx, ids);
+            if (checked.some((row, index) => row.status !== 'VALID' || (originals[index].__reference_hash && originals[index].__reference_hash !== row.normalized?.__reference_hash))) throw new ConflictException('Dữ liệu hoặc tham chiếu đã thay đổi; cần kiểm tra lại lô trước công bố');
+            const mappings = await this.importMappingTargets(tx, job.entity_type, ids);
+            if (mappings.length !== ids.length || mappings.some((mapping) => mapping.mapping_status !== 'DRAFT')) throw new ConflictException('Mapping đã thay đổi, đã công bố hoặc không còn tồn tại');
+            for (const mapping of mappings) {
+                this.taxonomyPolicy.assertPublishableMapping(mapping);
+                const row = job.rows.find((item) => item.committed_entity_id === mapping.id)!;
+                const original = JSON.parse(row.normalized_data!) as CsvRow;
+                if (!this.importMappingUnchanged(mapping, original)) throw new ConflictException(`Mapping dòng ${row.row_number} đã thay đổi sau lưu`);
+            }
+            const data = { mapping_status: 'APPROVED', approved_by: userId, approved_at: new Date() };
+            for (let start = 0; start < ids.length; start += 500) {
+                const chunk = ids.slice(start, start + 500);
+                const result = job.entity_type === 'ISIC_NACE_MAPPING'
+                    ? await tx.industry_code_mappings.updateMany({ where: { id: { in: chunk }, mapping_status: 'DRAFT' }, data })
+                    : await tx.nace_iaf_mappings.updateMany({ where: { id: { in: chunk }, mapping_status: 'DRAFT' }, data });
+                if (result.count !== chunk.length) throw new ConflictException('Mapping thay đổi trong khi công bố');
+            }
+            await tx.audit_logs.create({ data: { user_id: userId, action: 'IMPORT_PUBLISHED', entity_type: 'import_job', entity_id: id, outcome: 'success', details_json: JSON.stringify({ mapping_ids: ids, published_at: data.approved_at }) } });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        return this.getImportJob(id);
     }
 }

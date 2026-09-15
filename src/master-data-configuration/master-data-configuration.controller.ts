@@ -274,4 +274,11 @@ export class MasterDataConfigurationController {
     commitImport(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthRequest) {
         return this.service.commitImport(id, this.userId(request));
     }
+
+    @Post('imports/:id/publish')
+    @Roles('ADMIN')
+    @Permissions('classifications.manage')
+    publishImport(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthRequest) {
+        return this.service.publishImport(id, this.userId(request));
+    }
 }
