@@ -1,3 +1,4 @@
+import { organizationReminderDays } from '../common/organization-runtime-settings';
 import {
     BadRequestException,
     Injectable,
@@ -1592,12 +1593,7 @@ export class NotificationsService {
                     }),
             ]);
             const organizationLeadDays =
-                Math.max(
-                    0,
-                    organizationProfile
-                        ?.certificate_reminder_days ??
-                    90,
-                );
+                organizationReminderDays(organizationProfile?.certificate_reminder_days);
             const queryLeadDays =
                 Math.max(
                     organizationLeadDays,

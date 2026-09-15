@@ -1,3 +1,4 @@
+import { readOrganizationTimezone } from '../common/organization-runtime-settings';
 import {
     BadRequestException,
     ConflictException,
@@ -496,7 +497,9 @@ export class DocumentControlService {
                 `Loại hồ sơ ${normalizedEntityType} không thuộc Numbering Rules runtime`,
             );
         }
-        const effectiveAt = numberingBusinessDate();
+        const now = new Date();
+        const timezone = await readOrganizationTimezone(tx);
+        const effectiveAt = numberingBusinessDate(now, timezone);
         const configured = normalizedEntityType && 'numbering_series_configs' in tx
             ? await tx.numbering_series_configs.findFirst({
                 where: {
@@ -519,7 +522,7 @@ export class DocumentControlService {
         // column. Runtime sequence continuation is explicitly owned by the
         // normalized visible prefix plus business year.
         const seriesKey = requestedPrefix;
-        const year = yearInput ?? numberingBusinessYear();
+        const year = yearInput ?? numberingBusinessYear(now, timezone);
         const rows = await tx.$queryRaw<Array<{
             prefix: string;
             next_value: number;

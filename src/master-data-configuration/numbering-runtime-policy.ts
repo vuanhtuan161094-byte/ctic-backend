@@ -1,4 +1,5 @@
-export const NUMBERING_TIMEZONE = 'Asia/Ho_Chi_Minh';
+import { ORGANIZATION_TIMEZONE_FALLBACK } from '../common/organization-runtime-settings';
+export const NUMBERING_TIMEZONE = ORGANIZATION_TIMEZONE_FALLBACK;
 
 export const CONFIGURABLE_NUMBERING_ENTITY_TYPES = [
     'DOCUMENT',
@@ -96,9 +97,9 @@ export function numberingSequenceNamespace(prefix: string) {
     return prefix.trim().toUpperCase().slice(0, 50);
 }
 
-export function numberingBusinessDate(now = new Date()) {
+export function numberingBusinessDate(now = new Date(), timezone = NUMBERING_TIMEZONE) {
     const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: NUMBERING_TIMEZONE,
+        timeZone: timezone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -113,8 +114,8 @@ export function numberingBusinessDate(now = new Date()) {
     ));
 }
 
-export function numberingBusinessYear(now = new Date()) {
-    return numberingBusinessDate(now).getUTCFullYear();
+export function numberingBusinessYear(now = new Date(), timezone = NUMBERING_TIMEZONE) {
+    return numberingBusinessDate(now, timezone).getUTCFullYear();
 }
 
 export function numberingRuleLifecycleState(
@@ -133,13 +134,13 @@ export function numberingRuleLifecycleState(
     return 'CURRENT';
 }
 
-export function numberingCapabilities(now = new Date()) {
+export function numberingCapabilities(now = new Date(), timezone = NUMBERING_TIMEZONE) {
     return {
         contract_version: 'CFG-1A',
         sequence_authority: 'NORMALIZED_VISIBLE_PREFIX_PER_BUSINESS_YEAR',
         format_template: '{PREFIX}-{YYYY}-{SEQUENCE}',
-        timezone: NUMBERING_TIMEZONE,
-        preview_year: numberingBusinessYear(now),
+        timezone,
+        preview_year: numberingBusinessYear(now, timezone),
         configurable_entities: NUMBERING_CAPABILITIES.map((item) => ({ ...item })),
         non_configurable_entities: NON_CONFIGURABLE_NUMBERING_ENTITIES.map((item) => ({ ...item })),
     };

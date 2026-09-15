@@ -1,3 +1,4 @@
+import { organizationReminderDays } from '../common/organization-runtime-settings';
 import {
     Injectable,
 } from '@nestjs/common';
@@ -532,12 +533,7 @@ export class NotificationEngineService {
                 }),
         ]);
         const organizationLeadDays =
-            Math.max(
-                0,
-                organizationProfile
-                    ?.certificate_reminder_days ??
-                90,
-            );
+            organizationReminderDays(organizationProfile?.certificate_reminder_days);
         const queryLeadDays =
             Math.max(
                 organizationLeadDays,

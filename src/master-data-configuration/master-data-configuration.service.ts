@@ -6,6 +6,7 @@ import {
     Optional,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { ORGANIZATION_FIELD_MANIFEST, organizationReadiness, readOrganizationTimezone, validateOrganizationProfile } from '../common/organization-runtime-settings';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecurityAuditService } from '../security/security-audit.service';
@@ -161,7 +162,7 @@ export class MasterDataConfigurationService {
         status: string;
         effective_from: Date;
         effective_to: Date | null;
-    }>(row: TRow, at = numberingBusinessDate()) {
+    }>(row: TRow, at: Date) {
         const { series_key: persistedSeriesKey, ...publicRow } = row;
         const runtimeSeriesKey = numberingSequenceNamespace(row.prefix);
         return {
@@ -617,7 +618,7 @@ export class MasterDataConfigurationService {
 
     async configurationReadiness() {
         const now = new Date();
-        const numberingToday = numberingBusinessDate(now);
+        const numberingToday = numberingBusinessDate(now, await readOrganizationTimezone(this.prisma));
         const [
             schemes,
             profile,
@@ -677,6 +678,8 @@ export class MasterDataConfigurationService {
                     id: true,
                     legal_name: true,
                     display_name: true,
+                    short_name: true,
+                    default_language: true,
                     timezone: true,
                     locale: true,
                     certificate_reminder_days: true,
@@ -754,7 +757,7 @@ export class MasterDataConfigurationService {
         });
 
         const ready =
-            Boolean(profile) &&
+            organizationReadiness(profile).ready &&
             taxonomy.ready &&
             schemeRows.length > 0 &&
             schemeRows.every((item) => item.status === 'READY') &&
@@ -764,7 +767,8 @@ export class MasterDataConfigurationService {
             status: ready ? 'READY' : 'NEEDS_ATTENTION',
             generated_at: now.toISOString(),
             organization: {
-                ready: Boolean(profile),
+                ...organizationReadiness(profile),
+                field_manifest: ORGANIZATION_FIELD_MANIFEST,
                 profile,
             },
             schemes: {
@@ -830,20 +834,22 @@ export class MasterDataConfigurationService {
         };
     }
 
-    getOrganizationProfile() {
-        return this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' } });
+    async getOrganizationProfile() {
+        const profile = await this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' } });
+        return profile ? { ...profile, readiness: organizationReadiness(profile), field_manifest: ORGANIZATION_FIELD_MANIFEST } : null;
     }
 
     async saveOrganizationProfile(dto: OrganizationProfileDto, userId: string) {
         const data = {
             legal_name: dto.legal_name.trim(), display_name: dto.display_name.trim(), short_name: dto.short_name.trim(),
-            logo_reference: this.text(dto.logo_reference), address: this.text(dto.address), email: this.text(dto.email),
-            phone: this.text(dto.phone), website: this.text(dto.website), document_footer: this.text(dto.document_footer),
-            portal_title: dto.portal_title.trim(), timezone: dto.timezone.trim(), locale: dto.locale.trim(),
-            date_format: dto.date_format, default_language: dto.default_language.trim(),
+            logo_reference: dto.logo_reference === undefined ? undefined : this.text(dto.logo_reference), address: this.text(dto.address), email: this.text(dto.email),
+            phone: this.text(dto.phone), website: this.text(dto.website), document_footer: dto.document_footer === undefined ? undefined : this.text(dto.document_footer),
+            portal_title: dto.portal_title.trim(), timezone: dto.timezone.trim(), locale: dto.locale?.trim(),
+            date_format: dto.date_format, default_language: dto.default_language?.trim(),
             certificate_reminder_days: dto.certificate_reminder_days,
-            file_retention_days: dto.file_retention_days ?? null, updated_by: userId,
+            file_retention_days: dto.file_retention_days, updated_by: userId,
         };
+        validateOrganizationProfile({ ...data, locale: data.locale ?? 'vi-VN', default_language: data.default_language ?? 'vi', date_format: data.date_format ?? 'DD/MM/YYYY' });
         const row = await this.prisma.organization_profiles.upsert({
             where: { profile_key: 'PRIMARY' }, update: data, create: { profile_key: 'PRIMARY', ...data },
         });
@@ -851,12 +857,12 @@ export class MasterDataConfigurationService {
         return row;
     }
 
-    numberingCapabilities() {
-        return numberingCapabilities();
+    async numberingCapabilities() {
+        return numberingCapabilities(new Date(), await readOrganizationTimezone(this.prisma));
     }
 
     async listNumberingSeries() {
-        const at = numberingBusinessDate();
+        const at = numberingBusinessDate(new Date(), await readOrganizationTimezone(this.prisma));
         const rows = await this.prisma.numbering_series_configs.findMany({
             orderBy: [
                 { entity_type: 'asc' },
@@ -897,7 +903,7 @@ export class MasterDataConfigurationService {
             isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
         await this.writeAudit(userId, 'NUMBERING_CONFIG_CREATED', 'numbering_series_config', row.id, 201);
-        return this.publicNumberingRule(row);
+        return this.publicNumberingRule(row, numberingBusinessDate(new Date(), await readOrganizationTimezone(this.prisma)));
     }
 
     async replaceNumberingSeries(
@@ -915,7 +921,7 @@ export class MasterDataConfigurationService {
             'Ngày kết thúc quy tắc mới',
         );
         this.period(replacementFrom, replacementTo);
-        const today = numberingBusinessDate();
+        const today = numberingBusinessDate(new Date(), await readOrganizationTimezone(this.prisma));
         if (replacementFrom < today) {
             throw new BadRequestException(
                 'Không thể thay đổi lịch sử. Quy tắc mới phải bắt đầu từ hôm nay hoặc một ngày tương lai.',
@@ -1023,7 +1029,7 @@ export class MasterDataConfigurationService {
         userId: string,
     ) {
         const endAt = this.date(dto.effective_to, 'Ngày kết thúc', true)!;
-        const today = numberingBusinessDate();
+        const today = numberingBusinessDate(new Date(), await readOrganizationTimezone(this.prisma));
         if (endAt < today) {
             throw new BadRequestException('Không thể sửa ngày kết thúc vào quá khứ');
         }
@@ -1079,7 +1085,7 @@ export class MasterDataConfigurationService {
         dto: CancelScheduledNumberingSeriesDto,
         userId: string,
     ) {
-        const today = numberingBusinessDate();
+        const today = numberingBusinessDate(new Date(), await readOrganizationTimezone(this.prisma));
         const reason = this.numberingLifecycleReason(dto.reason);
         const result = await this.prisma.$transaction(async (tx) => {
             const target = await tx.numbering_series_configs.findUnique({ where: { id } });
@@ -1160,7 +1166,7 @@ export class MasterDataConfigurationService {
 
     async resolveNumbering(entityType: string, at = new Date()) {
         const normalizedEntityType = this.numberingEntity(entityType);
-        const effectiveAt = numberingBusinessDate(at);
+        const effectiveAt = numberingBusinessDate(at, await readOrganizationTimezone(this.prisma));
         return this.prisma.numbering_series_configs.findFirst({
             where: {
                 entity_type: normalizedEntityType,

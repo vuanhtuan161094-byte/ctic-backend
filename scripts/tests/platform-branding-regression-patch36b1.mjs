@@ -47,7 +47,11 @@ check(brandingFrontend.includes('VITE_BRAND_ORGANIZATION_NAME'), 'Frontend có c
 check(brandingFrontend.includes('VITE_DOCUMENT_CODE_PREFIX'), 'Frontend có cấu hình prefix số tài liệu');
 check(brandingFrontend.includes('VITE_BRAND_PRIMARY_COLOR'), 'Frontend có cấu hình màu thương hiệu');
 check(login.includes('PLATFORM_BRANDING.organizationName') && !/CTIC VIETNAM/.test(login), 'Màn hình đăng nhập dùng branding cấu hình');
-check(shell.includes('PLATFORM_BRANDING.shortName') && !/CTIC VIETNAM/.test(shell), 'Sidebar dùng branding cấu hình');
+const runtimeBranding = read(path.join(frontendRoot, 'app/lib/useOrganizationBranding.ts'));
+check(shell.includes('branding.shortName') && shell.includes('useOrganizationBranding()')
+  && runtimeBranding.includes("'/platform-branding'")
+  && runtimeBranding.includes('resolveOrganizationBranding(PLATFORM_BRANDING, query.data)')
+  && !/CTIC VIETNAM/.test(shell), 'Sidebar dùng branding cấu hình');
 check(/useEffect\(\(\) =>\s*\{\s*applyPlatformBrandingToDocument\(\)/.test(app)
   && /colorPrimary:\s*PLATFORM_BRANDING.primaryColor/.test(uiRuntime)
   && /document.title\s*=\s*PLATFORM_BRANDING.browserTitle/.test(brandingFrontend)

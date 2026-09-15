@@ -1,3 +1,4 @@
+import { readOrganizationTimezone } from '../common/organization-runtime-settings';
 import {
     BadRequestException,
     ConflictException,
@@ -383,8 +384,7 @@ export class CommercialManagementReportingService {
     }
 
     private async reportingContext(query: ReportingQueryDto) {
-        const profile = await this.prisma.organization_profiles.findUnique({ where: { profile_key: 'PRIMARY' }, select: { timezone: true } });
-        const timezone = profile?.timezone ?? 'Asia/Ho_Chi_Minh';
+        const timezone = await readOrganizationTimezone(this.prisma);
         const period = resolveReportingPeriod(query, timezone);
         let scheme: { id: string; code: string; name: string; standards: Array<{ standard_code: string; standard_name: string }> } | null = null;
         if (query.scheme_id) {

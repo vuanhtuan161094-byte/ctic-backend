@@ -75,9 +75,9 @@ export class OrganizationProfileDto {
     @IsOptional() @IsString() @MaxLength(1000) document_footer?: string;
     @IsString() @IsNotEmpty() @MaxLength(255) portal_title!: string;
     @IsString() @IsNotEmpty() @MaxLength(100) timezone!: string;
-    @IsString() @IsNotEmpty() @MaxLength(20) locale!: string;
-    @IsIn(['DD/MM/YYYY', 'YYYY-MM-DD', 'MM/DD/YYYY']) date_format!: string;
-    @IsString() @IsNotEmpty() @MaxLength(10) default_language!: string;
+    @IsOptional() @IsIn(['vi-VN']) @MaxLength(20) locale?: string;
+    @IsOptional() @IsIn(['DD/MM/YYYY', 'YYYY-MM-DD', 'MM/DD/YYYY']) date_format?: string;
+    @IsOptional() @IsIn(['vi']) @MaxLength(10) default_language?: string;
     @Type(() => Number) @IsInt() @Min(0) @Max(3650) certificate_reminder_days!: number;
     @IsOptional() @Type(() => Number) @IsInt() @Min(0) file_retention_days?: number;
 }
