@@ -41,11 +41,12 @@ Completed/locked before this checkpoint:
 - CFG-1D — Organization Runtime Wiring: PASS / LOCKED
 - UX-I0 — Dependency / compatibility audit: PASS / LOCKED
 - UX-I1 — Playwright + axe browser QA foundation: PASS / LOCKED
+- UX-I2 — CMP Design Language / Governed Tokens: PASS / LOCKED
 
 The current accepted code canonical checkpoints are:
 
 - Backend code canonical: `4714576475f6939d62093068e6321e4c61ec81eb`
-- Frontend code canonical after UX-I1 closure: `9b50401661844188e3ea8c796c5bd680038af38c`
+- Frontend production canonical after UX-I2 acceptance: `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`
 
 Documentation/verification commits after the frontend code canonical do not change production behavior:
 
@@ -120,11 +121,11 @@ Canonical UX-I1 document:
 
 - frontend `docs/ux/UX-I1_BROWSER_BASELINE.md`.
 
-The user explicitly approved continuing on 2026-09-16. UX-I2 may now begin. UX-I3, CFG-2, CFG-3 and Step18B have **not** started.
+This historical UX-I1 checkpoint authorized UX-I2. The later UX-I2 acceptance below supersedes its next-action instruction.
 
-### 3B. UX-I2 — CMP Design Language / Governed Tokens — READY FOR USER REVIEW
+### 3B. UX-I2 — CMP Design Language / Governed Tokens — PASS / LOCKED
 
-UX-I2 implementation is technically complete and verified, but is **not yet accepted/locked**. The accepted frontend canonical remains the UX-I1 code `9b50401661844188e3ea8c796c5bd680038af38c` until explicit user review promotes UX-I2.
+The Product Owner explicitly accepted UX-I2 on 2026-09-16 and authorized UX-I3 only. The accepted frontend production canonical is `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`. Entering frontend HEAD `5a92d0a2b5eb776ebb588be9feff287f9a179182` differs from it only in UX-I2 documentation and one browser-workflow comment; no unreviewed production change was found. Backend production canonical is unchanged.
 
 UX-I2 code candidate:
 
@@ -167,7 +168,7 @@ Canonical UX-I2 evidence document:
 
 - frontend `docs/ux/UX-I2_DESIGN_LANGUAGE.md`.
 
-**Hard stop:** UX-I3, CFG-2, CFG-3 and Step18B must not start until the user reviews and explicitly accepts the UX-I2 checkpoint.
+UX-I3 Storybook foundation is now authorized. UX-I4, CFG-2, CFG-3 and Step18B remain out of scope and unstarted.
 
 ## 4. Locked configuration behavior
 
@@ -679,28 +680,24 @@ For UX infrastructure dependency work:
 
 ## 11. Immediate next action
 
-**HOLD FOR USER REVIEW — UX-I2 checkpoint.**
+**Implement UX-I3 Storybook foundation, then STOP FOR USER REVIEW OF UX-I3.**
 
-Current accepted frontend canonical remains:
+Current accepted frontend production canonical:
 
-- `9b50401661844188e3ea8c796c5bd680038af38c` — UX-I1 PASS / LOCKED.
+- `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db` — UX-I2 PASS / LOCKED.
 
-Candidate awaiting review:
+Accepted UX-I2 evidence:
 
 - `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db` — UX-I2 governed design language;
 - standard verification `1ea01b0b2841cd4b6b1bef9f32d0e0235d2eb593`;
 - Frontend Quality `35020032804` PASS;
 - Browser Quality `35020032766` PASS.
 
-On explicit user acceptance only:
+The Product Owner has accepted UX-I2. UX-I3 must remain isolated development tooling and must pass its own technical gates before review. It must not be marked LOCKED without further acceptance.
 
-1. promote UX-I2 code candidate to the accepted frontend canonical;
-2. mark UX-I2 PASS / LOCKED in this file;
-3. then start UX-I3 Storybook foundation under its own checkpoint.
+Scope boundaries:
 
-Until then:
-
-- do not start UX-I3;
+- do not start UX-I4;
 - do not start CFG-2;
 - do not start CFG-3;
 - do not start Step18B;
