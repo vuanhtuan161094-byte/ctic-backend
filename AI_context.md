@@ -172,7 +172,7 @@ UX-I3 Storybook foundation is now authorized. UX-I4, CFG-2, CFG-3 and Step18B re
 
 ### 3C. UX-I3 — Storybook Foundation — BLOCKED (2026-09-16)
 
-The isolated local implementation uses exact dev-only `storybook`, `@storybook/react-vite` and `@storybook/addon-a11y` **10.6.0**, existing UiRuntime/theme/tokens, and 29 representative stories. There is **no implementation commit/candidate SHA**: the implementation remains uncommitted because the runtime gate failed.
+The isolated implementation uses exact dev-only `storybook`, `@storybook/react-vite` and `@storybook/addon-a11y` **10.6.0**, existing UiRuntime/theme/tokens, and 29 representative stories. On explicit user authorization, the exact blocked source/tooling state was committed for GitHub reproducibility and independent review as `cd04edb33f330021221444c13b99d77e855d448b` (`chore(ux-i3): checkpoint blocked Storybook runtime investigation`). **UX-I3 remains BLOCKED; this checkpoint is not an accepted production canonical.** No runtime fix or dependency-version change was attempted during publication; generated artifacts and unrelated untracked files are excluded.
 
 Storybook's initial static build and tooling typecheck passed; production/repository typechecks and zero-warning lint passed. The development server starts and serves its index, but the first Colors story fails to render on two executions with:
 
