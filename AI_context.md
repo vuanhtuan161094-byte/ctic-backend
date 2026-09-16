@@ -170,6 +170,21 @@ Canonical UX-I2 evidence document:
 
 UX-I3 Storybook foundation is now authorized. UX-I4, CFG-2, CFG-3 and Step18B remain out of scope and unstarted.
 
+### 3C. UX-I3 — Storybook Foundation — BLOCKED (2026-09-16)
+
+The isolated local implementation uses exact dev-only `storybook`, `@storybook/react-vite` and `@storybook/addon-a11y` **10.6.0**, existing UiRuntime/theme/tokens, and 29 representative stories. There is **no implementation commit/candidate SHA**: the implementation remains uncommitted because the runtime gate failed.
+
+Storybook's initial static build and tooling typecheck passed; production/repository typechecks and zero-warning lint passed. The development server starts and serves its index, but the first Colors story fails to render on two executions with:
+
+```text
+SyntaxError: The requested module '/node_modules/react/index.js?v=…'
+does not provide an export named 'default'
+```
+
+The bounded retry selected only `foundations-design-language--colors` on desktop and failed after 39.8 seconds (`[data-cmp-story]` visibility timeout). This is a current runtime/interoperability blocker, not a proven cross-platform incompatibility. No dependency-version workaround, production patch or accessibility suppression was attempted.
+
+Addon accessibility could not run; clean root install, full production tests, existing application Browser Quality and UX-I3 CI evidence are not complete. UX-I3 is **not COMPLETE / READY FOR USER REVIEW** and must not be locked. Accepted frontend production canonical remains UX-I2 `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`; backend production canonical remains unchanged. Full evidence and scope: frontend `docs/ux/UX-I3_STORYBOOK_FOUNDATION.md`.
+
 ## 4. Locked configuration behavior
 
 ### CFG-1A — Numbering
@@ -680,7 +695,7 @@ For UX infrastructure dependency work:
 
 ## 11. Immediate next action
 
-**Implement UX-I3 Storybook foundation, then STOP FOR USER REVIEW OF UX-I3.**
+**STOP — UX-I3 BLOCKED; await user direction on the reproducible Storybook React/Vite runtime failure.**
 
 Current accepted frontend production canonical:
 
