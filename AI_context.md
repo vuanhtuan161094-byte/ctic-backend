@@ -1,6 +1,6 @@
 # CMP — Current Checkpoint and Next Phase Plan
 
-Updated: 2026-09-16
+Updated: 2026-09-19
 
 This file is the current handoff/source-of-truth for continuing the CMP project in a new chat. Read this file before proposing or changing scope.
 
@@ -42,11 +42,16 @@ Completed/locked before this checkpoint:
 - UX-I0 — Dependency / compatibility audit: PASS / LOCKED
 - UX-I1 — Playwright + axe browser QA foundation: PASS / LOCKED
 - UX-I2 — CMP Design Language / Governed Tokens: PASS / LOCKED
+- UX-I3 — Storybook Foundation: PASS / LOCKED
+- UX-V1 — CURRENT UI + SURGICAL POLISH; current production UI is the canonical visual baseline
+- UX-V1 Fix 1 — Mobile ISO standard edition clipping: PASS / LOCKED
+- Fix 2: NOT STARTED; UX-I4: NOT STARTED
 
 The current accepted code canonical checkpoints are:
 
 - Backend code canonical: `4714576475f6939d62093068e6321e4c61ec81eb`
-- Frontend production canonical after UX-I2 acceptance: `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`
+- Frontend accepted checkpoint after UX-V1 Fix 1: `bb67e7a45fee088025c5428ae23225d185349e48` (implementation `80d33ae8511f7784db30ffb0d4ca0310b603f8bb`, browser guard `bb67e7a45fee088025c5428ae23225d185349e48`)
+- Previous UX-I3 canonical: `dac0bc3e6d50a36dee7fa3fa34dae6d3085c50b1`; previous UX-I2 canonical: `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`
 
 Documentation/verification commits after the frontend code canonical do not change production behavior:
 
@@ -168,9 +173,27 @@ Canonical UX-I2 evidence document:
 
 - frontend `docs/ux/UX-I2_DESIGN_LANGUAGE.md`.
 
-UX-I3 Storybook foundation is now authorized. UX-I4, CFG-2, CFG-3 and Step18B remain out of scope and unstarted.
+UX-I3 Storybook foundation is now PASS / LOCKED. UX-I4, CFG-2, CFG-3 and Step18B remain out of scope and unstarted.
 
-### 3C. UX-I3 — Storybook Foundation — BLOCKED (2026-09-16)
+### 3C. Current UX-I3 / UX-V1 checkpoint — 2026-09-19
+
+UX-I3 is **PASS / LOCKED**. Its accepted local verification and Product Owner decision are recorded in frontend `docs/ux/UX-I3_STORYBOOK_FOUNDATION.md`; the historical blocked investigation below is superseded, not a current blocker.
+
+UX-V1 is **CURRENT UI + SURGICAL POLISH**. The full Configuration redesign has been rejected; current production UI is the canonical visual baseline. Prior redesign mockups are not canonical targets. Every future fix must be small, evidence-driven, browser-verified on desktop and mobile, and preserve the existing business structure. No system-wide redesign is authorized.
+
+UX-V1 Fix 1, mobile ISO standard edition clipping, is **PASS / LOCKED**:
+
+- Implementation: `80d33ae8511f7784db30ffb0d4ca0310b603f8bb`.
+- Browser guard / accepted checkpoint: `bb67e7a45fee088025c5428ae23225d185349e48`.
+- Browser verification: desktop `1440x900` PASS, mobile `390x844` PASS, total **4/4 PASS**.
+- Mobile visual review: **PASS**; `2015`, `ISO 9001:2015`, `Đang áp dụng` and `Áp dụng từ 15/09/2015` are fully visible, with no overflow-button overlap.
+- These are accepted results supplied for this documentation checkpoint; no tests are rerun here.
+
+Fix 2: **NOT STARTED**. UX-I4: **NOT STARTED**. Do not start CFG-2, CFG-3 or Step18B. No backend production code or DB/migration changes. Canonical UX-V1 direction: frontend `docs/ux/UX-V1_CONFIGURATION_VISUAL_DIRECTION.md`.
+
+### Historical UX-I3 blocked investigation — 2026-09-16 (superseded)
+
+The following records the earlier blocked state only. Its status and next-action implications are superseded by the current accepted checkpoint above.
 
 The isolated implementation uses exact dev-only `storybook`, `@storybook/react-vite` and `@storybook/addon-a11y` **10.6.0**, existing UiRuntime/theme/tokens, and 29 representative stories. On explicit user authorization, the exact blocked source/tooling state was committed for GitHub reproducibility and independent review as `cd04edb33f330021221444c13b99d77e855d448b` (`chore(ux-i3): checkpoint blocked Storybook runtime investigation`). **UX-I3 remains BLOCKED; this checkpoint is not an accepted production canonical.** No runtime fix or dependency-version change was attempted during publication; generated artifacts and unrelated untracked files are excluded.
 
@@ -251,6 +274,8 @@ Enterprise wording rules:
 - Prefer product language such as `quy trình chứng nhận`, `vòng đời chứng nhận`, `hồ sơ chứng nhận`, or organization-configured terminology.
 
 ## 6. NEXT PHASE — UX Infrastructure before CFG-2
+
+The roadmap descriptions below are deferred planning context, not authorization to begin work. Current direction is CURRENT UI + SURGICAL POLISH, with Fix 1 PASS / LOCKED and Fix 2 / UX-I4 NOT STARTED. No prior redesign proposal overrides the current production visual baseline.
 
 Do **not** jump directly into a broad visual redesign. First create a small, controlled UX infrastructure layer so future redesign batches have browser evidence, a design language and reusable components.
 
@@ -695,11 +720,11 @@ For UX infrastructure dependency work:
 
 ## 11. Immediate next action
 
-**STOP — UX-I3 BLOCKED; await user direction on the reproducible Storybook React/Vite runtime failure.**
+**STOP — documentation checkpoint after UX-V1 Fix 1 PASS / LOCKED. Await separate authorization; do not start Fix 2 or UX-I4.**
 
 Current accepted frontend production canonical:
 
-- `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db` — UX-I2 PASS / LOCKED.
+- `bb67e7a45fee088025c5428ae23225d185349e48` — accepted UX-V1 Fix 1 checkpoint; current production UI is the canonical visual baseline.
 
 Accepted UX-I2 evidence:
 
@@ -708,10 +733,11 @@ Accepted UX-I2 evidence:
 - Frontend Quality `35020032804` PASS;
 - Browser Quality `35020032766` PASS.
 
-The Product Owner has accepted UX-I2. UX-I3 must remain isolated development tooling and must pass its own technical gates before review. It must not be marked LOCKED without further acceptance.
+The Product Owner has accepted UX-I3 and UX-V1 Fix 1 as PASS / LOCKED. UX-V1 follows CURRENT UI + SURGICAL POLISH. No backend production change is included in this checkpoint.
 
 Scope boundaries:
 
+- do not start Fix 2;
 - do not start UX-I4;
 - do not start CFG-2;
 - do not start CFG-3;
