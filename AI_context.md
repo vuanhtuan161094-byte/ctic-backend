@@ -2,11 +2,11 @@
 
 Updated: 2026-09-19
 
-This file is the current handoff/source-of-truth for continuing the CMP project in a new chat. Read this file before proposing or changing scope.
+This file is the current source-of-truth for continuing the CMP project. Read it before changing scope.
 
 ## 1. Product and repository scope
 
-CMP is a commercial-neutral Certification Management Platform for certification bodies. The product must remain white-label and must not hardcode CTIC branding or CTIC-only business wording.
+CMP is a commercial-neutral Certification Management Platform for certification bodies.
 
 Architecture:
 
@@ -15,245 +15,340 @@ Architecture:
 - Deployment model: one installation = one certification body, with its own database/storage/branding
 - DEV database: `CTIC_Certification`
 - Canonical database migration count: **32/32**
-- **No migration 33** in the current design
+- **No migration 33** unless explicitly approved
 
 Repositories:
 
 - Backend: `vuanhtuan161094-byte/ctic-backend`
 - Frontend: `vuanhtuan161094-byte/ctic-frontend`
-- Active feature branch in both repos: `feature/ux-fix-batch01`
+- Active branch in both repos: `feature/ux-fix-batch01`
 - `main` remains stable and must not be merged yet
 
-## 2. Locked roadmap state
+White-label rule:
 
-Completed/locked before this checkpoint:
+- no hardcoded CTIC branding;
+- no CTIC-only business wording;
+- organization branding stays runtime/configuration driven.
 
-- Step 17.1 — Certification Case UX V2: PASS / LOCKED
-- Step 17.2: PASS / LOCKED
-- Step 17.3 — Audit Workspace V2: PASS / LOCKED
-- Step 17.4 — CAP Workspace V2 / nested route migration: PASS / LOCKED
-- Step 17.5–17.7: CLOSED / LOCKED
-- Step 18A — Technical Stabilization: PASS / CLOSED / LOCKED
-- UX Trial round 1 / real-user walkthrough: completed enough to expose structural problems in Configuration / NACE / IAF / mapping / import flows
-- CFG-1A — Numbering Runtime Authority: PASS / LOCKED
-- CFG-1B — Taxonomy Runtime Authority: PASS / LOCKED
-- CFG-1C — Import Integrity & Operational Lifecycle: PASS / LOCKED
-- CFG-1D — Organization Runtime Wiring: PASS / LOCKED
-- UX-I0 — Dependency / compatibility audit: PASS / LOCKED
-- UX-I1 — Playwright + axe browser QA foundation: PASS / LOCKED
-- UX-I2 — CMP Design Language / Governed Tokens: PASS / LOCKED
-- UX-I3 — Storybook Foundation: PASS / LOCKED
-- UX-V1 — CURRENT UI + SURGICAL POLISH; current production UI is the canonical visual baseline
-- UX-V1 Fix 1 — Mobile ISO standard edition clipping: PASS / LOCKED
-- Fix 2: NOT STARTED; UX-I4: NOT STARTED
+## 2. Git discipline
 
-The current accepted code canonical checkpoints are:
+Do not:
 
-- Backend code canonical: `4714576475f6939d62093068e6321e4c61ec81eb`
-- Frontend accepted checkpoint after UX-V1 Fix 1: `bb67e7a45fee088025c5428ae23225d185349e48` (implementation `80d33ae8511f7784db30ffb0d4ca0310b603f8bb`, browser guard `bb67e7a45fee088025c5428ae23225d185349e48`)
-- Previous UX-I3 canonical: `dac0bc3e6d50a36dee7fa3fa34dae6d3085c50b1`; previous UX-I2 canonical: `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`
+- force-push;
+- rebase shared history;
+- amend published checkpoints;
+- use `git clean` on user worktrees;
+- use `git add .` when unrelated user artifacts exist;
+- delete untracked reports/logs/UAT evidence/backups.
 
-Documentation/verification commits after the frontend code canonical do not change production behavior:
+Distinguish:
 
-- UX-I1 locked standard verification candidate: `b9d1c60e42f9dc012def67f5ca1577ffb2f24834`
-- UX-I1 baseline documentation commit: `153400a59a9f9401b68baba442f0f18b5b025593`
+- production code canonical;
+- documentation/checkpoint HEAD;
+- temporary verification commits.
 
-Backend code remains unchanged from `4714576475f6939d62093068e6321e4c61ec81eb`; backend branch commits after it are checkpoint/documentation only.
+## 3. Locked roadmap state
 
-## 3. Current verification state
+PASS / LOCKED or CLOSED / LOCKED:
 
-At CFG-1C/1D closure:
+- Step 17.1 — Certification Case UX V2
+- Step 17.2
+- Step 17.3 — Audit Workspace V2
+- Step 17.4 — CAP Workspace V2 / nested route migration
+- Step 17.5–17.7
+- Step 18A — Technical Stabilization
+- CFG-1A — Numbering Runtime Authority
+- CFG-1B — Taxonomy Runtime Authority
+- CFG-1C — Import Integrity & Operational Lifecycle
+- CFG-1D — Organization Runtime Wiring
+- UX-I0 — Dependency / compatibility audit
+- UX-I1 — Playwright + axe browser QA foundation
+- UX-I2 — CMP Design Language / Governed Tokens
+- UX-I3 — Storybook Foundation
+- UX-V1 Fix 1 — Mobile ISO standard edition clipping
+
+UX-V1 strategy: **CURRENT UI + SURGICAL POLISH**.
+
+Not started:
+
+- Fix 2
+
+- UX-I4 — canonical reusable components
+- UX-I5 — ProComponents pilot/re-audit
+- UX-I6 — visual baseline package
+- CFG-2 — Configuration UX redesign
+- CFG-3 — deferred unless explicitly approved
+- Step18B
+
+## 4. Current canonical checkpoints
+
+Backend production code canonical:
+
+`4714576475f6939d62093068e6321e4c61ec81eb`
+
+Frontend accepted checkpoint after UX-V1 Fix 1:
+
+`bb67e7a45fee088025c5428ae23225d185349e48`
+
+Fix 1 implementation: `80d33ae8511f7784db30ffb0d4ca0310b603f8bb`; browser regression guard: `bb67e7a45fee088025c5428ae23225d185349e48`.
+
+Previous frontend production canonical after UX-I3 acceptance:
+
+`dac0bc3e6d50a36dee7fa3fa34dae6d3085c50b1`
+
+Previous frontend UX-I2 canonical:
+
+`24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`
+
+Historical frontend documentation HEAD after UX-I3 lock + visual-direction setup:
+
+`33c2c4ec47141e0eb6bbc0b58ede841d022c7065`
+
+Backend commits after the backend code canonical are checkpoint/documentation only unless a later section explicitly states otherwise.
+
+## 5. Verification baseline
+
+Historical locked baseline before UX-I3:
 
 - Backend full Jest: **722/722 PASS**
 - Frontend full tests: **470/470 PASS**
 - Backend build: PASS
-- Frontend typecheck: PASS
-- Frontend lint `--max-warnings=0`: PASS
-- Frontend production build: PASS
-- SQL P09 numbering/master configuration: PASS
-- SQL P09 import + Application Review: PASS
+- Frontend build/typecheck/lint: PASS
+- SQL numbering/master configuration: PASS
+- SQL mapping import + Application Review: PASS
 - Physical DB contract: 94 models/tables, 32/32 migrations, expected indexes/FKs PASS
-- Canonical regression: **64/70**, with exactly the same six historical failure signatures; zero new failure signatures
+- canonical backend regression: **64/70** with exactly six known historical failure signatures and zero new signatures
 
-Do not spend CFG-2 effort fixing those six unrelated legacy regression assertions unless a new change genuinely causes one of them to change.
+Do not spend unrelated UX work fixing those six historical regression assertions unless a new change genuinely alters their signatures.
 
-### 3A. UX-I0 / UX-I1 checkpoint — PASS / LOCKED
+## 6. UX-I0 — Dependency compatibility — PASS / LOCKED
 
-UX-I0 dependency/compatibility audit: **PASS / LOCKED**.
+Approved/used:
 
-- `@playwright/test@1.63.0`: approved and used for UX-I1;
-- `@axe-core/playwright@4.13.0`: approved and used for UX-I1;
-- `antd-style@4.1.0`: compatible candidate, not automatically required; decide during UX-I2 only if it materially improves the governed theme layer;
-- Storybook `10.6.0` family: deferred to UX-I3;
-- stable `@ant-design/pro-components@2.8.10`: NO-GO with AntD 6;
-- ProComponents 3.x prerelease remains only a future UX-I5 pilot candidate and must be re-audited before use.
+- Playwright `1.63.0`
+- `@axe-core/playwright@4.13.0`
+- Storybook React/Vite `10.6.0` family for UX-I3
 
-Canonical audit document:
+Not required:
 
-- frontend `docs/ux/UX-I0_DEPENDENCY_COMPATIBILITY.md`.
+- `antd-style`; UX-I2 deliberately avoided it
 
-UX-I1 browser-QA foundation: **PASS / LOCKED**.
+ProComponents:
 
-- Playwright + axe remain isolated under frontend `e2e/` with a separate lockfile;
-- root production dependency graph is not expanded by browser tooling;
-- required browser projects run at `1440x900` and `390x844`;
-- gates cover console/page errors, failed requests/5xx, horizontal overflow, screenshots and blocking WCAG A/AA axe findings;
-- controlled DEV fixtures remain distinct from SQL-backed business UAT.
+- stable `@ant-design/pro-components@2.8.10` is NO-GO with AntD6
+- any ProComponents 3.x use requires a future explicit UX-I5 re-audit and pilot
 
-UX-I1 production closure code canonical:
+Canonical document:
 
-- frontend `9b50401661844188e3ea8c796c5bd680038af38c`.
+- frontend `docs/ux/UX-I0_DEPENDENCY_COMPATIBILITY.md`
 
-Standard locked verification candidate:
+## 7. UX-I1 — Browser QA — PASS / LOCKED
 
-- frontend `b9d1c60e42f9dc012def67f5ca1577ffb2f24834`;
-- Frontend Quality run `35018522587`: **PASS**;
-- Browser Quality run `35018522697`: **PASS**;
-- Browser artifact ID `10416588179`;
-- artifact digest `sha256:34073899dff69b19ee2a580ee0f5505ffca1d2b5c8f3dea73679bf3b7df92d30`.
+Browser QA remains isolated under frontend `e2e/`.
 
-The browser baseline exposed real production debt and the user explicitly approved closing it. Closure completed without weakening the gate:
+Required viewports:
 
-1. normal-text contrast on covered surfaces was raised to the active WCAG AA gate;
-2. Case Overview progress indicator received an accessible name;
-3. Ant Design 6 `Drawer.width` and `Space.direction` deprecations were migrated;
-4. Form instances used inside Modals were pre-rendered before imperative control calls;
-5. deprecated `InputNumber.addonAfter` usage was replaced by an AntD `Space.Compact` unit-control pattern.
+- desktop `1440×900`
+- mobile `390×844`
 
-No axe rule, selector or console warning was suppressed/allowlisted to obtain green CI. UX-I1 did not change database schema, backend authority, business workflow, route contracts or production dependency topology.
+Checks include:
 
-Canonical UX-I1 document:
+- console/page errors;
+- failed requests / HTTP 5xx;
+- horizontal overflow;
+- deterministic screenshots/evidence;
+- axe WCAG A/AA serious/critical findings;
+- dialogs/forms/accessibility labels on covered surfaces.
 
-- frontend `docs/ux/UX-I1_BROWSER_BASELINE.md`.
+UX-I1 production closure canonical:
 
-This historical UX-I1 checkpoint authorized UX-I2. The later UX-I2 acceptance below supersedes its next-action instruction.
+`9b50401661844188e3ea8c796c5bd680038af38c`
 
-### 3B. UX-I2 — CMP Design Language / Governed Tokens — PASS / LOCKED
+Locked verification evidence:
 
-The Product Owner explicitly accepted UX-I2 on 2026-09-16 and authorized UX-I3 only. The accepted frontend production canonical is `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`. Entering frontend HEAD `5a92d0a2b5eb776ebb588be9feff287f9a179182` differs from it only in UX-I2 documentation and one browser-workflow comment; no unreviewed production change was found. Backend production canonical is unchanged.
+- Frontend Quality `35018522587`: PASS
+- Browser Quality `35018522697`: PASS
+- artifact `10416588179`
+- digest `sha256:34073899dff69b19ee2a580ee0f5505ffca1d2b5c8f3dea73679bf3b7df92d30`
 
-UX-I2 code candidate:
+No axe rule or console warning was suppressed to achieve closure.
 
-- frontend `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`.
+Canonical document:
 
-Standard verification candidate:
+- frontend `docs/ux/UX-I1_BROWSER_BASELINE.md`
 
-- frontend `1ea01b0b2841cd4b6b1bef9f32d0e0235d2eb593`;
-- Frontend Quality run `35020032804`: **PASS**;
-- Browser Quality run `35020032766`: **PASS**;
-- browser artifact ID `10417486176`;
-- artifact digest `sha256:988160936ebf99f349900e655b73f686ace7a3bec11eba45bba353823a1e1b50`.
+## 8. UX-I2 — Design Language / Governed Tokens — PASS / LOCKED
 
-Fail-closed implementation workflow `35019596013` also passed production typecheck, repository TypeScript, lint, build/full tests and the locked Playwright/axe gate before the UX-I2 production patch was committed.
+Accepted code canonical at that phase:
 
-UX-I2 design decisions:
+`24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`
 
-1. Ant Design 6 remains the sole UI foundation.
-2. `antd-style` was re-evaluated and deliberately **not installed**; current `ConfigProvider` + governed CSS/TypeScript tokens satisfy the requirement without production dependency churn.
-3. `app/components/design-system/theme.ts` is the typed Ant Design theme bridge and foundation/breakpoint reference.
-4. `app/components/design-system/tokens.css` is the governed CSS contract for brand, neutral, semantic status, typography, spacing, hierarchy, opt-in density, radius, elevation and breakpoint references.
-5. `app/components/design-system/runtime-overrides.css` replaces the temporary UX-I1 accessibility-closure stylesheet; required overrides now resolve through governed tokens.
-6. `UiRuntime.tsx` consumes `createCmpAntdTheme(...)` instead of inline theme literals.
-7. Existing `--ctic-*` aliases remain temporary compatibility aliases for legacy screens; new shared UI must consume `--cmp-*`.
-8. Density/control-height references are defined but are **not applied globally**, specifically to avoid visual drift or unintended Button/Input resizing.
-9. Representative app-shell/design-system consumers were migrated using equivalent existing values; this phase is governance/normalization, not a broad UI redesign.
+Core decisions:
 
-UX-I2 scope safety:
+- Ant Design 6 remains the sole UI foundation.
+- `app/components/design-system/theme.ts` is the typed AntD theme bridge.
+- `app/components/design-system/tokens.css` is the governed token contract.
+- `runtime-overrides.css` contains governed runtime overrides.
+- `UiRuntime.tsx` consumes `createCmpAntdTheme(...)`.
+- new shared UI uses `--cmp-*` tokens; legacy `--ctic-*` aliases remain compatibility-only.
+- density/control-height references are opt-in, not globally applied.
 
-- no package dependency change;
-- no database/schema/backend authority change;
-- no business workflow or route-contract change;
-- no Storybook;
-- no ProComponents;
-- no second UI framework;
-- no CTIC-specific branding hardcoding;
-- no weakening of UX-I1 browser/axe/runtime gates.
+Evidence:
 
-Canonical UX-I2 evidence document:
+- Frontend Quality `35020032804`: PASS
+- Browser Quality `35020032766`: PASS
+- artifact `10417486176`
+- digest `sha256:988160936ebf99f349900e655b73f686ace7a3bec11eba45bba353823a1e1b50`
 
-- frontend `docs/ux/UX-I2_DESIGN_LANGUAGE.md`.
+Canonical document:
 
-UX-I3 Storybook foundation is now PASS / LOCKED. UX-I4, CFG-2, CFG-3 and Step18B remain out of scope and unstarted.
+- frontend `docs/ux/UX-I2_DESIGN_LANGUAGE.md`
 
-### 3C. Current UX-I3 / UX-V1 checkpoint — 2026-09-19
+## 9. UX-I3 — Storybook Foundation — PASS / LOCKED
 
-UX-I3 is **PASS / LOCKED**. Its accepted local verification and Product Owner decision are recorded in frontend `docs/ux/UX-I3_STORYBOOK_FOUNDATION.md`; the historical blocked investigation below is superseded, not a current blocker.
+Product Owner accepted UX-I3 on 2026-09-17 using deterministic local gates because GitHub Actions are unavailable for this project due account billing/spending-limit restrictions and will not be funded.
 
-UX-V1 is **CURRENT UI + SURGICAL POLISH**. The full Configuration redesign has been rejected; current production UI is the canonical visual baseline. Prior redesign mockups are not canonical targets. Every future fix must be small, evidence-driven, browser-verified on desktop and mobile, and preserve the existing business structure. No system-wide redesign is authorized.
+Accepted frontend production canonical at UX-I3 closure:
 
-UX-V1 Fix 1, mobile ISO standard edition clipping, is **PASS / LOCKED**:
+`dac0bc3e6d50a36dee7fa3fa34dae6d3085c50b1`
+
+Pinned Storybook dev tooling:
+
+- `storybook@10.6.0`
+- `@storybook/react-vite@10.6.0`
+- `@storybook/addon-a11y@10.6.0`
+
+Host stack remains:
+
+- React / React DOM `19.2.6`
+- Ant Design `6.5.3`
+- Vite `8.3.0`
+- `@vitejs/plugin-react@6.0.2`
+
+Final architecture:
+
+- isolated `.storybook/vite.config.ts` supplies React/Vite integration without loading installation-specific env values;
+- `.storybook/main.ts` points Storybook builder to that config;
+- `.storybook/preview.tsx` reuses existing UiRuntime/theme/tokens;
+- 29 stories cover foundations and representative shared components;
+- 58 desktop/mobile Storybook cases are browser tested;
+- Storybook does not create a second component or theme system.
+
+Runtime blocker closure:
+
+- original raw React default-export error was caused by missing compatible React/Vite integration in Storybook runtime;
+- isolated Vite config fixed it;
+- no manual React `optimizeDeps.include`, alias, shim, vendor patch or version downgrade was required.
+
+Accessibility closure:
+
+- inactive status foreground changed from `#737b87` to `var(--cmp-neutral-700)` = `#5f6b7a`;
+- measured contrast on inactive background `#f0f1f2`: **4.79:1**;
+- no axe suppression;
+- only production visual impact is slightly darker inactive text.
+
+Browser determinism closure:
+
+- local multi-worker execution caused dev-server/module-transform contention;
+- four bounded one-worker diagnostics passed 10/10;
+- normal browser harness is now deterministic with `workers: 1`;
+- assertion timeouts, axe rules, coverage and viewports were not weakened.
+
+Final clean local gates for `dac0bc3...`:
+
+- `npm ci`: PASS
+- `npm run typecheck`: PASS
+- `npm run typecheck:all`: PASS
+- `npm run typecheck:storybook`: PASS
+- lint zero warnings: PASS
+- production build + frontend tests: **470/470 PASS**
+- `npm run build-storybook`: PASS
+- Storybook browser catalog: **58/58 PASS**
+- Storybook addon a11y: PASS
+- Browser Quality: **10/10 PASS**
+- covered production axe/runtime/network/overflow checks: PASS
+- dependency drift: none
+
+GitHub Actions note:
+
+- Frontend Quality run `35170575862` and Browser Quality run `35170575850` failed before execution with zero steps/no runner due account billing/spending-limit restriction.
+- These are infrastructure-unavailable results, not product failures.
+- Per Product Owner decision, GitHub Actions are no longer a mandatory gate for this project and should not be repeatedly retriggered merely for unavailable cloud evidence.
+- Mandatory frontend verification going forward is clean deterministic local verification; cloud CI is supplementary when available without spending.
+
+Canonical document:
+
+- frontend `docs/ux/UX-I3_STORYBOOK_FOUNDATION.md`
+
+## 10. UX-V1 — CURRENT UI + SURGICAL POLISH
+
+The full Configuration-screen redesign has been rejected. The **current production UI is the canonical visual baseline**. Prior redesign mockups and the earlier split-workspace proposal are not canonical targets. No system-wide redesign or automatic transition to UX-I4 / CFG-2 is authorized.
+
+Every future polish must be small, explicitly scoped, evidence-driven and browser-verified on desktop and mobile. Require before/after or clear browser evidence. Preserve existing business structure, authority, capabilities, workflows, semantic status/readiness and white-label branding; do not expand a fix opportunistically.
+
+### Fix 1 — Mobile ISO standard edition clipping — PASS / LOCKED
 
 - Implementation: `80d33ae8511f7784db30ffb0d4ca0310b603f8bb`.
 - Browser guard / accepted checkpoint: `bb67e7a45fee088025c5428ae23225d185349e48`.
-- Browser verification: desktop `1440x900` PASS, mobile `390x844` PASS, total **4/4 PASS**.
-- Mobile visual review: **PASS**; `2015`, `ISO 9001:2015`, `Đang áp dụng` and `Áp dụng từ 15/09/2015` are fully visible, with no overflow-button overlap.
-- These are accepted results supplied for this documentation checkpoint; no tests are rerun here.
+- Desktop `1440x900`: **PASS**.
+- Mobile `390x844`: **PASS**.
+- Browser gate: **4/4 PASS**.
+- Mobile visual review: **PASS**.
+- Confirmed fully visible: `2015`, `ISO 9001:2015`, badge `Đang áp dụng`, and `Áp dụng từ 15/09/2015`; the overflow (`...`) button does not overlap content.
 
-Fix 2: **NOT STARTED**. UX-I4: **NOT STARTED**. Do not start CFG-2, CFG-3 or Step18B. No backend production code or DB/migration changes. Canonical UX-V1 direction: frontend `docs/ux/UX-V1_CONFIGURATION_VISUAL_DIRECTION.md`.
+These are the accepted results supplied for the documentation checkpoint, not newly executed tests.
 
-### Historical UX-I3 blocked investigation — 2026-09-16 (superseded)
+UX-I3 remains **PASS / LOCKED**. Fix 2: **NOT STARTED**. UX-I4: **NOT STARTED**. CFG-2, CFG-3 and Step18B remain unstarted. No backend production code or DB/migration changes are included.
 
-The following records the earlier blocked state only. Its status and next-action implications are superseded by the current accepted checkpoint above.
+Canonical direction document:
 
-The isolated implementation uses exact dev-only `storybook`, `@storybook/react-vite` and `@storybook/addon-a11y` **10.6.0**, existing UiRuntime/theme/tokens, and 29 representative stories. On explicit user authorization, the exact blocked source/tooling state was committed for GitHub reproducibility and independent review as `cd04edb33f330021221444c13b99d77e855d448b` (`chore(ux-i3): checkpoint blocked Storybook runtime investigation`). **UX-I3 remains BLOCKED; this checkpoint is not an accepted production canonical.** No runtime fix or dependency-version change was attempted during publication; generated artifacts and unrelated untracked files are excluded.
+- frontend `docs/ux/UX-V1_CONFIGURATION_VISUAL_DIRECTION.md`
 
-Storybook's initial static build and tooling typecheck passed; production/repository typechecks and zero-warning lint passed. The development server starts and serves its index, but the first Colors story fails to render on two executions with:
-
-```text
-SyntaxError: The requested module '/node_modules/react/index.js?v=…'
-does not provide an export named 'default'
-```
-
-The bounded retry selected only `foundations-design-language--colors` on desktop and failed after 39.8 seconds (`[data-cmp-story]` visibility timeout). This is a current runtime/interoperability blocker, not a proven cross-platform incompatibility. No dependency-version workaround, production patch or accessibility suppression was attempted.
-
-Addon accessibility could not run; clean root install, full production tests, existing application Browser Quality and UX-I3 CI evidence are not complete. UX-I3 is **not COMPLETE / READY FOR USER REVIEW** and must not be locked. Accepted frontend production canonical remains UX-I2 `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db`; backend production canonical remains unchanged. Full evidence and scope: frontend `docs/ux/UX-I3_STORYBOOK_FOUNDATION.md`.
-
-## 4. Locked configuration behavior
+## 11. Locked configuration behavior
 
 ### CFG-1A — Numbering
 
-- Backend owns runtime numbering authority.
-- Configurable runtime types remain controlled by backend capability metadata.
-- Application/certificate authorities remain separate where already designed.
-- No client-provided runtime sequence namespace.
-- Existing identifiers must never be rewritten.
-- Organization timezone now governs future numbering business-year resolution, with safe fallback.
+- backend owns runtime numbering authority;
+- configurable runtime types are governed by backend capability metadata;
+- application/certificate authorities remain separate where designed;
+- no client-provided runtime sequence namespace;
+- existing identifiers are never rewritten;
+- organization timezone governs future numbering business-year resolution with safe fallback.
 
 ### CFG-1B — Taxonomy
 
-- Backend taxonomy runtime policy is the single authority for ISIC/NACE/IAF resolution/readiness.
-- Frontend must not reimplement NACE→IAF derivation.
-- Operational revisions remain centrally governed.
-- Runtime mapping statuses and readiness must remain policy-driven.
+- backend taxonomy runtime policy is authoritative for ISIC/NACE/IAF resolution/readiness;
+- frontend must not reimplement NACE→IAF derivation;
+- operational revisions remain centrally governed.
 
 ### CFG-1C — Import lifecycle
 
-Canonical mapping import lifecycle:
+Canonical mapping lifecycle:
 
 `CSV → validate → row review → commit DRAFT mappings → review → publish import job → operational`
 
 Rules:
 
-- Draft mappings are not operational.
-- Publish is atomic.
-- One invalid row must prevent the whole publication batch from becoming operational.
-- Preview/commit/publish share backend validation policy.
-- Reference drift must be revalidated at commit/publish.
-- Row-level evidence must remain visible in UI.
-- Do not emulate publication by row-by-row public HTTP calls.
+- draft mappings are not operational;
+- publish is atomic;
+- any invalid row blocks the publication batch;
+- preview/commit/publish share backend validation policy;
+- reference drift is revalidated at commit/publish;
+- row-level evidence stays visible;
+- do not emulate publication with row-by-row public HTTP calls.
 
 ### CFG-1D — Organization runtime
 
-- Organization readiness is field-level, not `Boolean(profile)`.
-- `timezone` is an applied runtime setting for governed future numbering and supported reporting behavior.
-- Safe customer-facing branding projection may expose only allowed display fields.
-- `logo_reference`, `document_footer`, locale/date-format/language compatibility metadata and retention metadata are not to be presented as fully implemented runtime features.
-- No arbitrary filesystem logo path is a public/browser asset URL.
-- No retention engine or broad i18n engine exists yet.
+- readiness is field-level, not `Boolean(profile)`;
+- timezone is an applied runtime setting for governed behavior;
+- customer-facing branding exposes only safe display fields;
+- `logo_reference`, `document_footer`, locale/date-format/language compatibility metadata and retention metadata must not be presented as fully implemented runtime engines;
+- no arbitrary filesystem logo path is a public browser asset URL;
+- no retention engine or broad i18n engine exists yet.
 
-## 5. Current route and UX constraints
+## 12. Canonical routes and product wording
 
-Canonical internal routes include:
+Internal routes include:
 
 - `/certifications/:caseId`
 - `/certifications/:caseId/audits/:auditId`
@@ -262,484 +357,21 @@ Canonical internal routes include:
 - `/certifications/:caseId/decision`
 - `/certifications/:caseId/certificates/:certificateId`
 
-Customer-safe CAP surface:
+Customer-safe CAP:
 
 - `/portal/corrective-actions/:findingId`
 
-Enterprise wording rules:
+Enterprise wording:
 
-- Avoid consumer/chatbot language.
-- Avoid unnecessary repeated “của tôi”.
-- Do not expose internal form codes such as `P.09` as product terminology.
-- Prefer product language such as `quy trình chứng nhận`, `vòng đời chứng nhận`, `hồ sơ chứng nhận`, or organization-configured terminology.
+- avoid consumer/chatbot wording;
+- avoid unnecessary repeated “của tôi”;
+- do not expose internal form codes such as `P.09` as product terminology;
+- prefer `quy trình chứng nhận`, `vòng đời chứng nhận`, `hồ sơ chứng nhận` or organization-configured terminology.
 
-## 6. NEXT PHASE — UX Infrastructure before CFG-2
+## 13. Immediate next action
 
-The roadmap descriptions below are deferred planning context, not authorization to begin work. Current direction is CURRENT UI + SURGICAL POLISH, with Fix 1 PASS / LOCKED and Fix 2 / UX-I4 NOT STARTED. No prior redesign proposal overrides the current production visual baseline.
+Current action:
 
-Do **not** jump directly into a broad visual redesign. First create a small, controlled UX infrastructure layer so future redesign batches have browser evidence, a design language and reusable components.
+**STOP — UX-V1 Fix 1 PASS / LOCKED; await separate authorization.**
 
-### UX-I0 — Compatibility and dependency audit
-
-Goal: verify exact compatible versions before installing anything.
-
-Current frontend stack to preserve:
-
-- React 19.2.x
-- Ant Design 6.5.x
-- Vite 8.3.x
-- Node 22.12+ / 24.x
-
-Evaluate, but do not blindly install `latest`:
-
-- Playwright
-- `@axe-core/playwright`
-- `antd-style`
-- Storybook React + Vite integration
-- Ant Design ProComponents
-
-Required output:
-
-- compatibility matrix
-- exact versions to pin
-- bundle/dev-only classification
-- known React19/AntD6/Vite8/Node24 risks
-- go/no-go decision for each dependency
-
-Rules:
-
-- Do not clone external framework repositories into CMP source.
-- Penpot/MCP is external design workflow infrastructure, not a production CMP dependency.
-- ProComponents is a pilot candidate, not a mandatory migration.
-
-Exit gate:
-
-- dependency audit written and accepted
-- no production screen rewritten
-- no schema change
-
-### UX-I1 — Playwright + axe browser QA foundation
-
-Goal: create a real browser-level regression harness before redesign.
-
-Add browser QA scripts such as:
-
-- `test:browser`
-- `test:browser:configuration`
-- `test:browser:headed`
-
-Recommended structure:
-
-```text
-e2e/
-  configuration-navigation.spec.ts
-  registry.spec.ts
-  case-overview.spec.ts
-  audit-workspace.spec.ts
-  cap-workspace.spec.ts
-  helpers/
-    auth.ts
-    fixtures.ts
-    accessibility.ts
-```
-
-Initial mandatory viewport matrix:
-
-- 1440×900 desktop
-- 390×844 mobile
-
-Later optional expansion:
-
-- 1280×800 compact laptop
-- 768×1024 tablet
-
-Browser checks must cover:
-
-- page loads without unhandled console errors
-- no horizontal overflow at canonical viewports
-- critical navigation works
-- dialogs/drawers remain usable
-- forms have accessible labels/names where applicable
-- important pages pass agreed axe rules or produce explicitly reviewed exceptions
-- screenshot baselines are deterministic
-
-Important classification:
-
-- Controlled fixture/showcase browser QA is not SQL-backed business UAT.
-- Do not claim “full E2E” merely because Playwright passes against controlled fixtures.
-
-Exit gate:
-
-- browser harness runs locally and in a deterministic command
-- 1440 + 390 baseline produced for selected existing screens
-- axe gate active
-- frontend build/typecheck/lint/full tests remain PASS
-
-### UX-I2 — CMP design language / tokens
-
-Goal: keep Ant Design as foundation but make CMP visually consistent and product-specific.
-
-Create governed tokens for:
-
-- brand / neutral palette abstraction
-- semantic status colors
-- typography scale
-- spacing scale
-- radius
-- shadows/elevation
-- table density
-- form density
-- page/card hierarchy
-- responsive breakpoints where needed
-
-Rules:
-
-- no CTIC hardcoding
-- no second competing UI framework
-- avoid one-off per-screen CSS unless justified
-- existing Ant Design theme behavior must remain compatible
-
-Exit gate:
-
-- central token/theme layer exists
-- selected existing components consume it
-- visual behavior remains stable at 1440 + 390
-
-### UX-I3 — Storybook foundation
-
-Goal: allow isolated review and development of reusable CMP components.
-
-Storybook should be development-only and must not leak into production runtime.
-
-Initial catalog:
-
-```text
-Foundations
-  Colors
-  Typography
-  Spacing
-  Status semantics
-
-Components
-  PageHeader
-  SectionHeader
-  StatusTag
-  ReadinessBadge
-  FilterBar
-  ResponsiveToolbar
-  EmptyState
-  DataTableFrame
-  FormSection
-  DetailSection
-  ActionBar
-  EvidencePanel
-  ActivityTimeline
-  StatCard
-  InlineNotice
-```
-
-Do not attempt to catalog the entire application.
-
-Exit gate:
-
-- Storybook boots cleanly
-- representative stories render
-- a11y check works where practical
-- production build is unaffected
-
-### UX-I4 — Canonical component pass
-
-Goal: build roughly 10–15 reusable enterprise components/patterns, not a giant design system.
-
-Priority patterns:
-
-- page heading + breadcrumbs + actions
-- search/filter toolbar
-- registry table shell
-- dense detail cards
-- status/readiness semantics
-- form sections
-- evidence/history panel
-- empty/error/loading states
-- responsive action toolbar
-
-Each canonical component must have:
-
-- intended usage
-- anti-pattern notes
-- responsive behavior
-- Storybook story
-- browser screenshot where visually meaningful
-
-Exit gate:
-
-- 10–15 components are stable enough to reuse in CFG-2
-- no broad production rewrite yet
-
-### UX-I5 — ProComponents pilot only
-
-Goal: test whether ProComponents reduces complexity without fighting current CMP architecture.
-
-Pilot options:
-
-- one isolated Storybook pattern, or
-- one low-risk configuration/reference-data table after compatibility is proven
-
-Evaluate:
-
-- React 19 / AntD 6 compatibility
-- TypeScript ergonomics
-- table/form behavior
-- styling integration with CMP tokens
-- bundle impact
-- accessibility
-- whether it materially reduces custom code
-
-Decision:
-
-- PASS → allow selected use in future screens
-- FAIL / too costly → reject without migrating the application
-
-Do not rewrite all existing AntD tables/forms.
-
-### UX-I6 — Visual baseline package
-
-Capture current and redesigned baselines for the most important surfaces:
-
-1. Dashboard/App Shell
-2. Registry
-3. Certification Case Overview
-4. Audit Workspace
-5. Finding/CAP Workspace
-6. Configuration
-7. Industry Classification / IAF reference data
-
-Mandatory widths initially:
-
-- 1440 desktop
-- 390 mobile
-
-The baseline must detect:
-
-- overflow
-- toolbar collapse
-- modal/drawer clipping
-- density drift
-- accidental spacing/typography changes
-- responsive regressions
-
-### UX-I7 — Penpot/MCP workflow spike
-
-This is an external design workflow experiment, not an app dependency and not a blocker for CFG-2.
-
-Target workflow:
-
-`CMP requirement → design concept/prototype → approved pattern → Storybook component → production implementation → Playwright visual QA`
-
-If Penpot/MCP adds friction or cannot reliably preserve enterprise structure, skip it and continue with source-driven UX specs + Storybook + Playwright.
-
-## 7. CFG-2 — Configuration / Reference Data UX redesign
-
-Start only after UX-I0 through at least UX-I4 are stable. UX-I5/I7 may remain optional if they fail their pilot.
-
-CFG-2 is UX/IA/performance closure for the configuration area. It must not silently become CFG-3 schema governance.
-
-### CFG-2A — Navigation and information architecture
-
-Target top-level organization:
-
-```text
-Cấu hình chứng nhận
-  Chương trình & tiêu chuẩn
-  Phạm vi năng lực
-  Quy tắc đánh số
-  Tổ chức & nhận diện
-
-Dữ liệu tham chiếu
-  Phân loại ngành & IAF
-```
-
-Inside `Phân loại ngành & IAF`, prefer one coherent workspace with clearly separated operational tabs/sections such as:
-
-- Tổng quan
-- Danh mục
-- Quy đổi
-- Nguồn & phiên bản
-- Chất lượng dữ liệu
-- Nhập dữ liệu
-
-Do not expose developer loaders, `.cmd`, repository patch commands or internal maintenance instructions in product UI.
-
-Exit gate:
-
-- navigation is understandable without backend vocabulary
-- no duplicate/conflicting paths to the same concept
-- deep links/back navigation remain stable
-
-### CFG-2B — Programs & Standards UX
-
-Preserve locked lifecycle rules:
-
-- Program status: `Đang sử dụng` / `Ngừng sử dụng`
-- Readiness is separate from lifecycle status
-- Standard family has no independent fake lifecycle
-- Edition lifecycle supports `Chưa áp dụng`, `Đang áp dụng`, `Ngừng áp dụng`, plus derived future-effective state
-- used historical editions cannot be hard-deleted
-- stopped editions need a real restore path
-
-UX goal:
-
-- clear hierarchy `Program → Standard → Edition`
-- no status overload
-- actions appear only where meaningful
-- history is visible without crowding the primary workflow
-
-### CFG-2C — Classification / NACE / IAF workspace
-
-Backend taxonomy authority from CFG-1B remains untouched.
-
-UX goals:
-
-- user understands what dataset is active
-- current revision/system is visible
-- mapping quality/readiness is visible
-- direct vs derived resolution is understandable without exposing implementation noise
-- unresolved/multiple/outside-table cases have clear next actions
-- frontend never reconstructs mapping authority locally
-
-### CFG-2D — Import Center UX
-
-Preserve CFG-1C lifecycle exactly.
-
-The UI must clearly differentiate:
-
-- validated input
-- drafts stored
-- ready for publication
-- operational/published
-- failed publication
-
-Keep:
-
-- row-level evidence
-- errors/warnings/duplicates/valid filters
-- error CSV
-- filename/source hash where available
-- reopen job
-- server-owned action capability
-
-Never present committed drafts as operational.
-
-### CFG-2E — Organization / Numbering UX
-
-Organization screen:
-
-- active runtime settings shown as active
-- compatibility-only fields hidden or clearly marked as not applied
-- raw logo path editor remains absent
-- no false retention/i18n claims
-- readiness reasons are actionable
-
-Numbering screen:
-
-- backend capability metadata drives available types/actions
-- user can understand active rule, future-effective rule, scheduled end/cancel and runtime namespace without exposing internal implementation jargon
-- existing issued numbers remain immutable
-
-### CFG-2F — Query/loading/error/performance closure
-
-Address remaining structural UX debt such as:
-
-- eager data fetching when a tab/section is not active
-- one failing query blanking an unrelated section
-- repeated refetches caused by coupled invalidation
-- loading states that cause layout shift
-- oversized table rendering where server paging/lazy loading already exists or can be used without schema change
-
-Do not perform speculative backend architecture rewrites merely for perceived UI speed.
-
-### CFG-2G — Responsive and visual closure
-
-For every changed configuration/reference-data screen:
-
-- 1440 desktop browser review
-- 390 mobile browser review
-- keyboard/basic accessibility review
-- screenshot baseline update only after explicit visual acceptance
-- no horizontal page overflow
-- no inaccessible hidden primary actions
-
-## 8. UX Trial Round 2
-
-After CFG-2 closure, the real user should use the web application again without being coached through implementation details.
-
-Trial focus:
-
-- Can the user find where to configure programs/standards?
-- Can the user distinguish lifecycle vs readiness?
-- Can the user understand NACE/IAF mapping and data quality?
-- Can the user import, inspect drafts and publish data without confusing stored vs operational state?
-- Can the user understand numbering rules and organization settings?
-- Does mobile/compact layout remain usable?
-
-Capture findings as UX issues, not immediate ad-hoc code edits. Batch them and close them under explicit checkpoints.
-
-## 9. What comes after CFG-2
-
-Do not skip the locked release sequence.
-
-Expected sequence:
-
-`UX Infrastructure → CFG-2 → UX Trial Round 2 → targeted UX fixes → Step 18B Legacy Closure → Full SQL-backed Manual UAT / business E2E → Release Hardening → RC → V1.0`
-
-CFG-3 remains deferred unless explicitly approved after CFG-2. Potential CFG-3 scope includes governed dataset release/package/version governance and any schema-backed organization asset model. CFG-3 must not start automatically.
-
-## 10. Git and safety rules
-
-Mandatory:
-
-- no force push
-- no rebase
-- no amend
-- no `git add .`
-- no `git clean`
-- preserve untracked reports/logs/UAT evidence/backups
-- remain on `feature/ux-fix-batch01`
-- do not merge `main`
-- no migration 33 unless an explicit future schema decision is approved
-- never modify/drop/recreate DEV database for a test convenience
-- isolated P09 test DB operations must remain guarded and explicit
-
-For UX infrastructure dependency work:
-
-- pin exact versions after compatibility review
-- keep Storybook/Playwright tooling out of production runtime where possible
-- do not replace Ant Design with shadcn/Radix/Refine
-- do not introduce a second design foundation
-- do not globally add Tailwind-based patterns merely for appearance
-
-## 11. Immediate next action
-
-**STOP — documentation checkpoint after UX-V1 Fix 1 PASS / LOCKED. Await separate authorization; do not start Fix 2 or UX-I4.**
-
-Current accepted frontend production canonical:
-
-- `bb67e7a45fee088025c5428ae23225d185349e48` — accepted UX-V1 Fix 1 checkpoint; current production UI is the canonical visual baseline.
-
-Accepted UX-I2 evidence:
-
-- `24039ac5f7dd0c3aa67e73bbc72c0e12c87de6db` — UX-I2 governed design language;
-- standard verification `1ea01b0b2841cd4b6b1bef9f32d0e0235d2eb593`;
-- Frontend Quality `35020032804` PASS;
-- Browser Quality `35020032766` PASS.
-
-The Product Owner has accepted UX-I3 and UX-V1 Fix 1 as PASS / LOCKED. UX-V1 follows CURRENT UI + SURGICAL POLISH. No backend production change is included in this checkpoint.
-
-Scope boundaries:
-
-- do not start Fix 2;
-- do not start UX-I4;
-- do not start CFG-2;
-- do not start CFG-3;
-- do not start Step18B;
-- do not expand UX-I2 into broad production-screen redesign.
+UX-V1 follows CURRENT UI + SURGICAL POLISH. Do not start Fix 2, UX-I4, CFG-2, CFG-3 or Step18B. The rejected redesign proposal is not an implementation target.
