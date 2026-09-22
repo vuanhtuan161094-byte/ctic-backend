@@ -487,6 +487,32 @@ export class TaxonomyRuntimePolicyService {
     );
   }
 
+
+  async resolveBatch(
+    items: Array<{
+      classification_type: string;
+      revision: string;
+      code: string;
+      management_system: string;
+    }>,
+    at = new Date(),
+  ) {
+    if (!items.length) return [];
+
+    // Loading the taxonomy snapshot is the expensive part. Resolve every
+    // requested ISIC/system pair against the same in-memory snapshot.
+    const snapshot = await this.loadSnapshot(at);
+    return items.map((item) =>
+      this.resolveFromSnapshot(
+        item.classification_type,
+        item.revision,
+        item.code,
+        item.management_system,
+        snapshot,
+      ),
+    );
+  }
+
   private coverageFromSnapshot(
     managementSystem: ManagementSystem,
     snapshot: TaxonomySnapshot,
