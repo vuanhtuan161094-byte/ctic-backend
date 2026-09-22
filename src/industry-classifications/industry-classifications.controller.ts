@@ -37,6 +37,7 @@ import {
     CreateIndustryClassificationDto,
     CreateIndustryCodeMappingDto,
     CreateNaceIafMappingDto,
+    ResolveIndustryBatchDto,
 } from './dto/industry-classification.dto';
 
 import { IndustryClassificationsService } from './industry-classifications.service';
@@ -335,6 +336,22 @@ export class IndustryClassificationsController {
     @Permissions('classifications.read')
     getTaxonomyReadiness(): Promise<unknown> {
         return this.service.getTaxonomyReadiness();
+    }
+
+    @Post('resolve-batch')
+    @ApiOperation({ summary: 'Xác định NACE và IAF cho nhiều mã/hệ thống trong một lần đọc taxonomy' })
+    @ApiOkResponse({ description: 'Danh sách kết quả phân giải theo đúng thứ tự yêu cầu' })
+    @Roles(
+        'ADMIN',
+        'COORDINATOR',
+        'TECHNICAL_REVIEWER',
+    )
+    @Permissions('classifications.read')
+    resolveBatch(
+        @Body()
+        dto: ResolveIndustryBatchDto,
+    ): Promise<unknown> {
+        return this.service.resolveBatch(dto);
     }
 
     @Get('resolve')
