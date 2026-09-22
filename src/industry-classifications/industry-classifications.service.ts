@@ -13,6 +13,7 @@ import {
     CreateIndustryClassificationDto,
     CreateIndustryCodeMappingDto,
     CreateNaceIafMappingDto,
+    ResolveIndustryBatchDto,
 } from './dto/industry-classification.dto';
 import {
     TAXONOMY_OPERATIONAL_REVISIONS,
@@ -897,5 +898,11 @@ export class IndustryClassificationsService {
             code,
             managementSystem,
         );
+    }
+
+
+    async resolveBatch(dto: ResolveIndustryBatchDto) {
+        const items = await this.taxonomyPolicy.resolveBatch(dto.items);
+        return { items };
     }
 }
