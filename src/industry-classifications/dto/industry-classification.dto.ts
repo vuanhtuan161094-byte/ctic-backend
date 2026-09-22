@@ -1,4 +1,7 @@
 import {
+    ArrayMaxSize,
+    ArrayMinSize,
+    IsArray,
     IsBoolean,
     IsDateString,
     IsIn,
@@ -8,6 +11,7 @@ import {
     IsString,
     IsUUID,
     Max,
+    ValidateNested,
     MaxLength,
     Min,
 } from 'class-validator';
@@ -181,4 +185,37 @@ export class CreateNaceIafMappingDto {
     @IsOptional()
     @IsDateString()
     valid_to?: string;
+}
+
+
+export class ResolveIndustryBatchItemDto {
+    @ApiProperty({ enum: ['ISIC', 'NACE'], example: 'ISIC' })
+    @IsIn(['ISIC', 'NACE'])
+    classification_type!: string;
+
+    @ApiProperty({ example: 'ISIC_REV_4' })
+    @IsString()
+    @IsNotEmpty()
+    @MaxLength(30)
+    revision!: string;
+
+    @ApiProperty({ example: '2220' })
+    @IsString()
+    @IsNotEmpty()
+    @MaxLength(30)
+    code!: string;
+
+    @ApiProperty({ enum: ['QMS', 'EMS', 'OHSMS'], example: 'QMS' })
+    @IsIn(['QMS', 'EMS', 'OHSMS'])
+    management_system!: string;
+}
+
+export class ResolveIndustryBatchDto {
+    @ApiProperty({ type: [ResolveIndustryBatchItemDto], minItems: 1, maxItems: 100 })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(100)
+    @ValidateNested({ each: true })
+    @Type(() => ResolveIndustryBatchItemDto)
+    items!: ResolveIndustryBatchItemDto[];
 }
