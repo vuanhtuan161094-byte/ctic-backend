@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
@@ -16,9 +17,91 @@ import { RenewExpertCompetencyDto } from './dto/renew-expert-competency.dto';
 import { SuspendExpertCompetencyDto } from './dto/suspend-expert-competency.dto';
 import { UpdateExpertCompetencyDto } from './dto/update-expert-competency.dto';
 import { VoidExpertCompetencyEvidenceDto } from './dto/void-expert-competency-evidence.dto';
+import { CreateOwnCompetencyDto } from './dto/competency-submission.dto';
 
 @Injectable()
 export class ExpertCompetenciesService {
+    private async ownExpert(userId: string) {
+        const expert = await this.prisma.experts.findFirst({ where: { user_id: userId }, select: { id: true } });
+        if (!expert) throw new ForbiddenException('Tài khoản chưa liên kết hồ sơ chuyên gia');
+        return expert;
+    }
+
+    private async assertOwned(id: string, userId: string) {
+        const expert = await this.ownExpert(userId);
+        const row = await this.getCoreOrThrow(id);
+        if (row.expert_id !== expert.id) throw new ForbiddenException('Chỉ được thao tác năng lực của chính mình');
+        return row;
+    }
+
+    async findOwn(userId: string) {
+        const expert = await this.ownExpert(userId);
+        return this.prisma.expert_competencies.findMany({
+            where: { expert_id: expert.id },
+            include: { evidence_records: true, action_records: { where: { action_type: 'RETURN' }, orderBy: { created_at: 'desc' }, take: 1 } },
+            orderBy: [{ standard_code: 'asc' }, { created_at: 'desc' }],
+        });
+    }
+
+    async createOwn(dto: CreateOwnCompetencyDto, userId: string) {
+        const expert = await this.ownExpert(userId);
+        return this.create({ ...dto, expert_id: expert.id }, userId);
+    }
+
+    async updateOwn(id: string, dto: UpdateExpertCompetencyDto, userId: string) {
+        await this.assertOwned(id, userId);
+        return this.update(id, dto, userId, true);
+    }
+
+    async addOwnEvidence(id: string, dto: CreateExpertCompetencyEvidenceDto, userId: string) {
+        await this.assertOwned(id, userId);
+        return this.addEvidence(id, dto, userId, true);
+    }
+
+    async submitOwn(id: string, userId: string) {
+        await this.assertOwned(id, userId);
+        return this.transitionSubmission(id, userId, 'SUBMIT', undefined, true);
+    }
+
+    async submit(id: string, userId: string) {
+        return this.transitionSubmission(id, userId, 'SUBMIT');
+    }
+
+    async returnSubmission(id: string, userId: string, reason: string) {
+        if (!reason?.trim()) throw new BadRequestException('Phải nhập lý do yêu cầu bổ sung');
+        return this.transitionSubmission(id, userId, 'RETURN', reason.trim());
+    }
+
+    private async transitionSubmission(id: string, userId: string, action: 'SUBMIT' | 'RETURN' | 'APPROVE', reason?: string, selfService = false) {
+        if (!userId) throw new ForbiddenException('Thiếu tài khoản thực hiện thao tác');
+        return this.prisma.$transaction(async (tx) => {
+            const row = await tx.expert_competencies.findUnique({ where: { id } });
+            if (!row) throw new NotFoundException('Không tìm thấy phạm vi năng lực chuyên gia');
+            if (selfService) {
+                const owner = await tx.experts.findFirst({ where: { id: row.expert_id, user_id: userId } });
+                if (!owner) throw new ForbiddenException('Hồ sơ chuyên gia không thuộc tài khoản hiện tại');
+            }
+            const allowed = action === 'SUBMIT' ? ['DRAFT', 'RETURNED'] : ['PENDING_APPROVAL'];
+            if (!allowed.includes(row.approval_status)) throw new BadRequestException(`Không thể ${action} năng lực ở trạng thái ${row.approval_status}`);
+            if (action === 'APPROVE') {
+                const submit = await tx.expert_competency_actions.findFirst({ where: { competency_id: id, action_type: 'SUBMIT' }, orderBy: [{ created_at: 'desc' }, { id: 'desc' }] });
+                if (!submit?.actor_id) throw new BadRequestException('Không tìm thấy người gửi phê duyệt');
+                if (submit.actor_id === userId) throw new BadRequestException('Người gửi không được tự phê duyệt năng lực của lần gửi này');
+                await this.assertApprovalEvidence(row, tx);
+            }
+            const status = action === 'SUBMIT' ? 'PENDING_APPROVAL' : action === 'RETURN' ? 'RETURNED' : 'APPROVED';
+            const updated = await tx.expert_competencies.update({
+                where: { id, approval_status: row.approval_status, updated_at: row.updated_at },
+                data: { approval_status: status, ...(action === 'APPROVE' ? { approved_by: userId, approved_at: new Date(), suspended_at: null, suspension_reason: null } : {}) },
+            });
+            await tx.expert_competency_actions.create({ data: {
+                competency_id: id, action_type: action, from_status: row.approval_status, to_status: status,
+                actor_id: userId, reason: reason ?? (action === 'SUBMIT' ? 'Gửi phê duyệt năng lực' : 'Phê duyệt năng lực chuyên gia'),
+                snapshot_json: this.competencySnapshot(updated),
+            } });
+            return updated;
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }
     private readonly compactInclude = {
         experts: true,
         approved_by_user: {
@@ -331,8 +414,8 @@ export class ExpertCompetenciesService {
         ).length;
 
         let validityStatus = 'ACTIVE';
-        if (competency.approval_status === 'DRAFT') {
-            validityStatus = 'DRAFT';
+        if (['DRAFT', 'PENDING_APPROVAL', 'RETURNED'].includes(competency.approval_status)) {
+            validityStatus = competency.approval_status;
         } else if (competency.approval_status === 'SUSPENDED') {
             validityStatus = 'SUSPENDED';
         } else if (competency.effective_date > today) {
@@ -388,10 +471,11 @@ export class ExpertCompetenciesService {
             id: string;
             evidence_summary: string | null;
         },
+        client: Prisma.TransactionClient = this.prisma,
     ) {
         if (competency.evidence_summary?.trim()) return;
 
-        const activeEvidence = await this.prisma.expert_competency_evidences.count({
+        const activeEvidence = await client.expert_competency_evidences.count({
             where: {
                 competency_id: competency.id,
                 status: 'ACTIVE',
@@ -595,12 +679,13 @@ export class ExpertCompetenciesService {
         id: string,
         dto: UpdateExpertCompetencyDto,
         actorId: string,
+        selfService = false,
     ) {
         const competency = await this.getCoreOrThrow(id);
 
-        if (competency.approval_status !== 'DRAFT') {
+        if (!['DRAFT', 'RETURNED'].includes(competency.approval_status)) {
             throw new BadRequestException(
-                'Chỉ được sửa năng lực ở trạng thái DRAFT',
+                'Chỉ được sửa năng lực ở trạng thái DRAFT hoặc RETURNED',
             );
         }
 
@@ -621,7 +706,8 @@ export class ExpertCompetenciesService {
 
         return this.prisma.$transaction(async (tx) => {
             const updated = await tx.expert_competencies.update({
-                where: { id },
+                where: { id, approval_status: competency.approval_status, updated_at: competency.updated_at,
+                    ...(selfService ? { experts: { user_id: actorId } } : {}) },
                 data: {
                     ...(dto.management_system !== undefined ? {
                         management_system: this.normalize(dto.management_system),
@@ -674,9 +760,9 @@ export class ExpertCompetenciesService {
             await tx.expert_competency_actions.create({
                 data: {
                     competency_id: id,
-                    action_type: 'UPDATE_DRAFT',
-                    from_status: 'DRAFT',
-                    to_status: 'DRAFT',
+                    action_type: 'UPDATE',
+                    from_status: competency.approval_status,
+                    to_status: competency.approval_status,
                     reason: 'Cập nhật hồ sơ năng lực dự thảo',
                     snapshot_json: this.competencySnapshot(updated),
                     actor_id: actorId,
@@ -690,53 +776,10 @@ export class ExpertCompetenciesService {
         });
     }
 
-    async approve(
-        id: string,
-        userId: string,
-    ) {
+    async approve(id: string, userId: string) {
         const competency = await this.getCoreOrThrow(id);
         await this.getExpertOrThrow(competency.expert_id);
-
-        if (competency.approval_status === 'APPROVED') {
-            return competency;
-        }
-        if (competency.approval_status === 'SUSPENDED') {
-            throw new BadRequestException(
-                'Năng lực đang bị đình chỉ; phải dùng quy trình khôi phục',
-            );
-        }
-
-        await this.assertApprovalEvidence(competency);
-
-        return this.prisma.$transaction(async (tx) => {
-            const updated = await tx.expert_competencies.update({
-                where: { id },
-                data: {
-                    approval_status: 'APPROVED',
-                    approved_by: userId,
-                    approved_at: new Date(),
-                    suspended_at: null,
-                    suspension_reason: null,
-                },
-            });
-
-            await tx.expert_competency_actions.create({
-                data: {
-                    competency_id: id,
-                    action_type: 'APPROVE',
-                    from_status: competency.approval_status,
-                    to_status: 'APPROVED',
-                    reason: 'Phê duyệt năng lực chuyên gia',
-                    snapshot_json: this.competencySnapshot(updated),
-                    actor_id: userId,
-                },
-            });
-
-            return tx.expert_competencies.findUniqueOrThrow({
-                where: { id },
-                include: this.compactInclude,
-            });
-        });
+        return this.transitionSubmission(id, userId, 'APPROVE');
     }
 
     async suspend(
@@ -952,6 +995,7 @@ export class ExpertCompetenciesService {
         competencyId: string,
         dto: CreateExpertCompetencyEvidenceDto,
         userId: string,
+        selfService = false,
     ) {
         const competency = await this.getCoreOrThrow(competencyId);
         const evidenceDate = dto.evidence_date
@@ -971,6 +1015,14 @@ export class ExpertCompetenciesService {
         }
 
         return this.prisma.$transaction(async (tx) => {
+            if (selfService) {
+                const current = await tx.expert_competencies.findUnique({ where: { id: competencyId } });
+                if (!current || !['DRAFT', 'RETURNED'].includes(current.approval_status)) {
+                    throw new BadRequestException('Chỉ được bổ sung bằng chứng tự khai khi DRAFT hoặc RETURNED');
+                }
+                const owner = await tx.experts.findFirst({ where: { id: current.expert_id, user_id: userId } });
+                if (!owner) throw new ForbiddenException('Hồ sơ chuyên gia không thuộc tài khoản hiện tại');
+            }
             const evidence = await tx.expert_competency_evidences.create({
                 data: {
                     competency_id: competencyId,
@@ -1020,7 +1072,7 @@ export class ExpertCompetenciesService {
             });
 
             return evidence;
-        });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     }
 
     async voidEvidence(
@@ -1085,7 +1137,7 @@ export class ExpertCompetenciesService {
         userId: string,
     ) {
         const competency = await this.getCoreOrThrow(competencyId);
-        if (competency.approval_status === 'DRAFT') {
+        if (['DRAFT', 'PENDING_APPROVAL', 'RETURNED'].includes(competency.approval_status)) {
             throw new BadRequestException(
                 'Chỉ ghi nhận tái đánh giá sau khi năng lực đã được phê duyệt',
             );

@@ -38,6 +38,7 @@ import { SuspendExpertCompetencyDto } from './dto/suspend-expert-competency.dto'
 import { UpdateExpertCompetencyDto } from './dto/update-expert-competency.dto';
 import { VoidExpertCompetencyEvidenceDto } from './dto/void-expert-competency-evidence.dto';
 import { ExpertCompetenciesService } from './expert-competencies.service';
+import { CreateOwnCompetencyDto, ReturnCompetencyDto } from './dto/competency-submission.dto';
 
 type AuthenticatedRequest = Request & {
     user: {
@@ -60,6 +61,46 @@ export class ExpertCompetenciesController {
     constructor(
         private readonly service: ExpertCompetenciesService,
     ) { }
+
+    // Self routes use authenticated experts.user_id ownership, not global permissions.
+    @Get('me')
+    findOwn(@Req() request: AuthenticatedRequest) {
+        return this.service.findOwn(request.user.userId);
+    }
+
+    @Post('me')
+    createOwn(@Body() dto: CreateOwnCompetencyDto, @Req() request: AuthenticatedRequest) {
+        return this.service.createOwn(dto, request.user.userId);
+    }
+
+    @Patch('me/:id')
+    updateOwn(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateExpertCompetencyDto, @Req() request: AuthenticatedRequest) {
+        return this.service.updateOwn(id, dto, request.user.userId);
+    }
+
+    @Post('me/:id/evidence')
+    addOwnEvidence(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateExpertCompetencyEvidenceDto, @Req() request: AuthenticatedRequest) {
+        return this.service.addOwnEvidence(id, dto, request.user.userId);
+    }
+
+    @Post('me/:id/submit')
+    submitOwn(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthenticatedRequest) {
+        return this.service.submitOwn(id, request.user.userId);
+    }
+
+    @Post(':id/submit')
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    submit(@Param('id', ParseUUIDPipe) id: string, @Req() request: AuthenticatedRequest) {
+        return this.service.submit(id, request.user.userId);
+    }
+
+    @Post(':id/return')
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    returnSubmission(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReturnCompetencyDto, @Req() request: AuthenticatedRequest) {
+        return this.service.returnSubmission(id, request.user.userId, dto.reason);
+    }
 
     @Post()
     @ApiOperation({ summary: 'Tạo hồ sơ năng lực chuyên gia' })

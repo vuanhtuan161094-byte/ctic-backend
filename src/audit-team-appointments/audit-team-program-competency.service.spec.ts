@@ -64,6 +64,11 @@ describe('AuditTeamProgramCompetencyService', () => {
             expert_id: 'expert-1',
             status: 'qualified',
         }));
+        expect(prisma.expert_competencies.findMany).toHaveBeenCalledWith({
+            where: { expert_id: { in: ['expert-1'] }, approval_status: 'APPROVED',
+                effective_date: { lte: new Date('2026-09-10T00:00:00.000Z') },
+                OR: [{ expiry_date: null }, { expiry_date: { gte: new Date('2026-09-10T00:00:00.000Z') } }] },
+        });
     });
 
     it('preserves the issued project-team prerequisite when inheritance is required', async () => {

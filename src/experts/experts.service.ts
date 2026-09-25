@@ -604,6 +604,12 @@ export class ExpertsService {
                         { iaf_code: 'asc' },
                     ],
                     include: {
+                        action_records: {
+                            where: { action_type: { in: ['SUBMIT', 'RETURN'] } },
+                            orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+                            take: 1,
+                            select: { id: true, action_type: true, actor_id: true, reason: true, created_at: true },
+                        },
                         approved_by_user: {
                             select: {
                                 id: true,
@@ -698,7 +704,7 @@ export class ExpertsService {
             summary: {
                 approved_competencies: approvedCompetencies.length,
                 pending_competencies: expert.competencies.filter(
-                    (item) => item.approval_status === 'DRAFT',
+                    (item) => item.approval_status === 'PENDING_APPROVAL',
                 ).length,
                 audit_count: expert.audit_team_members.length,
                 work_experience_count: expert.work_experiences.length,
