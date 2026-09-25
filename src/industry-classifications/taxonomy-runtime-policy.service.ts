@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { parseTaxonomyRows, taxonomyLookupQuery, type TaxonomyLookupInput } from './taxonomy-lookup.query';
 
 export const TAXONOMY_OPERATIONAL_REVISIONS = {
   ISIC: 'ISIC_REV_4',
@@ -477,14 +478,11 @@ export class TaxonomyRuntimePolicyService {
     managementSystem: string,
     at = new Date(),
   ) {
-    const snapshot = await this.loadSnapshot(at);
-    return this.resolveFromSnapshot(
-      classificationType,
-      revision,
-      code,
-      managementSystem,
-      snapshot,
-    );
+    const [result] = await this.resolveBatch([{
+      classification_type: classificationType, revision, code,
+      management_system: managementSystem,
+    }], at);
+    return result;
   }
 
 
@@ -499,9 +497,30 @@ export class TaxonomyRuntimePolicyService {
   ) {
     if (!items.length) return [];
 
-    // Loading the taxonomy snapshot is the expensive part. Resolve every
-    // requested ISIC/system pair against the same in-memory snapshot.
-    const snapshot = await this.loadSnapshot(at);
+    const requested: TaxonomyLookupInput[] = items.map((item) => {
+      const type = item.classification_type.trim().toUpperCase();
+      if (type !== 'ISIC' && type !== 'NACE') {
+        throw new BadRequestException('Chỉ hỗ trợ tra cứu từ ISIC hoặc NACE');
+      }
+      const revision = item.revision.trim().toUpperCase();
+      if (revision !== TAXONOMY_OPERATIONAL_REVISIONS[type]) {
+        throw new BadRequestException(`Phiên bản vận hành cho ${type} phải là ${TAXONOMY_OPERATIONAL_REVISIONS[type]}`);
+      }
+      return { classification_type: type, revision, code: item.code.trim(),
+        management_system: this.normalizeManagementSystem(item.management_system) };
+    });
+    const rows = await this.prisma.$queryRaw<Array<{
+      classifications: string; industryMappings: string; naceIafMappings: string;
+    }>>(taxonomyLookupQuery(requested, this.businessDate(at)));
+    const row = rows[0];
+    if (!row) throw new NotFoundException('Không tìm thấy mã ngành');
+    const snapshot: TaxonomySnapshot = {
+      at: this.businessDate(at),
+      classifications: parseTaxonomyRows<ClassificationRow>(row.classifications),
+      industryMappings: parseTaxonomyRows<IndustryMappingRow>(row.industryMappings),
+      naceIafMappings: parseTaxonomyRows<NaceIafMappingRow>(row.naceIafMappings),
+      iafScopes: [],
+    };
     return items.map((item) =>
       this.resolveFromSnapshot(
         item.classification_type,

@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { parseTaxonomyRows } from './taxonomy-lookup.query';
 import {
   TAXONOMY_OPERATIONAL_REVISIONS,
   TaxonomyRuntimePolicyService,
@@ -76,6 +77,11 @@ const policy = (
   iafScopes: unknown[] = [],
 ) =>
   new TaxonomyRuntimePolicyService({
+    $queryRaw: jest.fn().mockResolvedValue([{
+      classifications: JSON.stringify(classifications),
+      industryMappings: JSON.stringify(industryMappings),
+      naceIafMappings: JSON.stringify(naceIafMappings),
+    }]),
     industry_classifications: {
       findMany: jest.fn().mockResolvedValue(classifications),
     },
@@ -89,6 +95,38 @@ const policy = (
   } as any);
 
 describe('TaxonomyRuntimePolicyService canonical resolution', () => {
+  it('preserves Prisma UUID/date/null semantics for SQL JSON', () => {
+    expect(parseTaxonomyRows(null)).toEqual([]);
+    expect(parseTaxonomyRows('null')).toEqual([]);
+    expect(parseTaxonomyRows('[{"id":"963F1221-07F4-496F-AEC8-3ED659B3CB5B","updated_at":"2026-08-26T01:42:38.953","valid_to":null}]')).toEqual([
+      { id: '963f1221-07f4-496f-aec8-3ed659b3cb5b', updated_at: new Date('2026-08-26T01:42:38.953Z'), valid_to: null },
+    ]);
+  });
+  it('resolves 2 ISIC x 3 systems with one parameterized DB call and unchanged mapping IDs', async () => {
+    const isics = [code('i1', 'ISIC', '2220'), code('i2', 'ISIC', '3330')];
+    const nace = code('n', 'NACE', '22.29');
+    const scope = iaf('s', '14');
+    const instance = policy([...isics, nace], isics.map((i) => industryMap(`in-${i.id}`, i, nace)),
+      ['QMS', 'EMS', 'OHSMS'].map((s) => iafMap(`ni-${s}`, nace, scope, s)), [scope]);
+    const requests = isics.flatMap((i) => ['QMS', 'EMS', 'OHSMS'].map((s) => ({
+      classification_type: 'ISIC', revision: 'ISIC_REV_4', code: i.code, management_system: s,
+    })));
+    const results = await instance.resolveBatch(requests, at);
+    expect(results).toHaveLength(6);
+    const prisma = (instance as any).prisma;
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    for (const table of ['industry_classifications', 'industry_code_mappings', 'nace_iaf_mappings', 'iaf_scopes']) {
+      expect(prisma[table].findMany).not.toHaveBeenCalled();
+    }
+    results.forEach((r, index) => {
+      expect(r.iaf_summary.iaf_codes).toEqual(['14']);
+      expect(r.nace_candidates[0]).toMatchObject({ mapping_id: `in-${isics[Math.floor(index / 3)].id}` });
+      expect(r.nace_candidates[0].iaf_candidates[0].mapping_id).toBe(`ni-${requests[index].management_system}`);
+    });
+    const query = prisma.$queryRaw.mock.calls[0][0];
+    expect(query.values).toContain(JSON.stringify(requests));
+    expect(query.sql).not.toContain('2220');
+  });
   it('resolves exact ISIC to NACE to IAF', async () => {
     const isic = code('isic', 'ISIC', '2220');
     const nace = code('nace', 'NACE', '22.29');
