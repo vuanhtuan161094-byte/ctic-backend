@@ -1,8 +1,41 @@
 # CMP — Current Checkpoint and Next Phase Plan
 
-Updated: 2026-09-19
+Updated: 2026-09-26
 
 This file is the current source-of-truth for continuing the CMP project. Read it before changing scope.
+
+## Current checkpoint — taxonomy and governed competency workflow
+
+This checkpoint supersedes the historical Git/verification baselines below for the authorized Phase A/B work. It is not a main-branch merge or production rollout approval.
+
+- Backend implementation checkpoint: `e121d5ecaf39762e4d74c1e62f3ba9b663c20755` (DB compatibility fix); preceding Phase A/B HEAD: `96af569511cd899d5a4e31519f2d1d07ca9651f2`.
+- Frontend unchanged HEAD: `0e3ca7adbdbb54c91fdf5d8d75fca525a796860b`.
+- Phase A: canonical one-query taxonomy lookup and unified ISIC -> NACE -> IAF workspace. Taxonomy live sanity and one-query service probe PASS. Retained earlier measurements: 6 logical results, browser ~380.9 ms and service ~247.0 ms (single samples, not a benchmark rerun).
+- Phase B: expert/admin competency entry; DRAFT -> PENDING_APPROVAL; RETURNED -> edit/resubmit; independent APPROVE -> APPROVED. Self ownership is enforced through `experts.user_id`; the latest submitter cannot self-approve. Evidence prerequisites remain enforced. Recommendation/assignment retain APPROVED-only competency authority.
+- DB compatibility fix: `20260925150000_competency_workflow_audit_actions`; local `CTIC_Certification`, 33/33 applied; database contract PASS (94 models/tables, native types/nullability and critical indexes).
+- `CK_expert_competency_action_type` preserves the 10 legacy values BASELINE, CREATE, UPDATE_DRAFT, APPROVE, SUSPEND, REACTIVATE, RENEW, REVIEW_RECORDED, EVIDENCE_ADDED, EVIDENCE_VOIDED and adds UPDATE, SUBMIT, RETURN (13 total). No other schema or production-code changes in this fix.
+- Exact migration disk/index SHA-256 matches `_prisma_migrations.checksum`: `0c6085b58b243413d75d806f1c706840fb7a196194f6c2613a4b54f15e177234`. The already-applied migration is byte-locked. Pre/post-migration data fingerprints matched; subsequent UAT transitions and audit records are retained.
+- Whitespace gate: EXPECTED EXCEPTION — one pre-existing trailing-whitespace issue in already-applied migration; no other diff-check issues. Exact Git diagnostic: `migration.sql:43: new blank line at EOF.` Explicit user authorization accepts this exception; do not edit the applied migration to remove it.
+
+Live UAT results (real local SQL/runtime, not mocked):
+
+- UAT-02 PASS: submit to PENDING_APPROVAL with SUBMIT actor audit.
+- UAT-03 PASS: latest submitter self-approval rejected, no APPROVE audit/state change.
+- UAT-04 PASS: independent admin RETURN requires reason; RETURNED and reason/audit verified.
+- UAT-05 PASS: edit RETURNED and resubmit; latest submit actor verified.
+- UAT-06 PASS: independent admin APPROVE with evidence prerequisite and approval metadata/audit.
+- UAT-07 PASS: self create/edit/evidence/submit, foreign-owner list/read/edit/evidence/submit isolation; expert approve/return/suspend/renew return 403 and denied writes leave foreign records unchanged.
+- UAT-08 BLOCKED BY TEST DATA / PRECONDITION: no valid local audit plan/project; constructing one requires an unrelated application approval/contract/project workflow. This is a live recommendation coverage gap, not evidence of a production recommendation defect. Automated recommendation/status-filtering regression PASS. Do not bypass business workflow or call recommendation live UAT PASS.
+- UAT-09 PASS: APPROVED -> SUSPENDED -> APPROVED with a real local UAT review prerequisite and actor audit.
+
+Verification:
+
+- Backend targeted: 40/40 PASS (4 suites), rerun 2026-09-26.
+- Backend full: 762/762 PASS (89 suites), rerun 2026-09-26 after the test-file whitespace cleanup.
+- Frontend: previous task's verified 475/475 PASS retained; no new frontend test run or source change in this checkpoint.
+- Local UAT records/audit and unrelated untracked artifacts preserved. Credentials and DB/runtime artifacts are not committed.
+
+TECHNICAL IMPLEMENTATION: PASS. LIVE COMPETENCY WORKFLOW: PASS; UAT-08 recommendation live coverage remains pending. READY FOR MERGE: NO — pending UAT-08 live verification. No main merge, new feature, or further schema work is authorized by this checkpoint.
 
 ## 1. Product and repository scope
 
@@ -14,8 +47,8 @@ Architecture:
 - Frontend: React 19 + Vite 8 + Ant Design 6 + TanStack Query
 - Deployment model: one installation = one certification body, with its own database/storage/branding
 - DEV database: `CTIC_Certification`
-- Canonical database migration count: **32/32**
-- **No migration 33** unless explicitly approved
+- Canonical database migration count: **33/33** (migration 33 explicitly authorized and applied)
+- **No migration 34** unless explicitly approved
 
 Repositories:
 
@@ -80,7 +113,7 @@ Not started:
 - CFG-3 — deferred unless explicitly approved
 - Step18B
 
-## 4. Current canonical checkpoints
+## 4. Historical checkpoints before the current Phase A/B checkpoint
 
 Backend production code canonical:
 
@@ -104,7 +137,7 @@ Historical frontend documentation HEAD after UX-I3 lock + visual-direction setup
 
 `33c2c4ec47141e0eb6bbc0b58ede841d022c7065`
 
-Backend commits after the backend code canonical are checkpoint/documentation only unless a later section explicitly states otherwise.
+The Phase A/B implementation and DB compatibility fix in the current checkpoint above supersede this historical baseline; they are not documentation-only changes.
 
 ## 5. Verification baseline
 
@@ -372,6 +405,6 @@ Enterprise wording:
 
 Current action:
 
-**STOP — UX-V1 Fix 1 PASS / LOCKED; await separate authorization.**
+**STOP — competency DB compatibility checkpoint complete; UAT-08 live recommendation verification remains pending. READY FOR MERGE: NO. Await separate authorization.**
 
 UX-V1 follows CURRENT UI + SURGICAL POLISH. Do not start Fix 2, UX-I4, CFG-2, CFG-3 or Step18B. The rejected redesign proposal is not an implementation target.
