@@ -635,11 +635,53 @@ export class DocumentFilesService {
         return true;
     }
 
-    async upload(
+    private async assertOwnCompetencyEvidence(evidenceId: string, userId: string, write = false, db: PrismaService | Prisma.TransactionClient = this.prisma) {
+        if (!userId) throw new ForbiddenException('Thiếu tài khoản');
+        const evidence = await db.expert_competency_evidences.findFirst({
+            where: { id: evidenceId, competency: { experts: { user_id: userId } } },
+            include: { competency: true },
+        });
+        if (!evidence) throw new ForbiddenException('Không có quyền truy cập bằng chứng');
+        if (write && (evidence.status !== 'ACTIVE' || !['DRAFT', 'RETURNED'].includes(evidence.competency.approval_status))) {
+            throw new ForbiddenException('Chỉ tải bằng chứng cho năng lực DRAFT hoặc RETURNED');
+        }
+        return evidence;
+    }
+
+    async uploadOwnCompetencyEvidence(evidenceId: string, file: Express.Multer.File, userId: string) {
+        await this.assertOwnCompetencyEvidence(evidenceId, userId, true);
+        return this.uploadCore({ entity_type: 'expert_competency_evidence', entity_id: evidenceId,
+            document_type: 'competency_evidence', file_kind: 'attachment' }, file, userId, undefined, userId);
+    }
+
+    async ownCompetencyEvidenceFiles(evidenceId: string, userId: string) {
+        await this.assertOwnCompetencyEvidence(evidenceId, userId);
+        return this.prisma.documentFile.findMany({ where: { entity_type: 'expert_competency_evidence', entity_id: evidenceId }, orderBy: { version_no: 'desc' } });
+    }
+
+    async ownCompetencyFile(id: string, userId: string) {
+        const file = await this.prisma.documentFile.findUnique({ where: { id } });
+        if (!file || file.entity_type !== 'expert_competency_evidence') throw new ForbiddenException('Không có quyền truy cập tệp');
+        await this.assertOwnCompetencyEvidence(file.entity_id, userId);
+        return file;
+    }
+
+    async downloadOwnCompetencyFile(id: string, userId: string) {
+        await this.ownCompetencyFile(id, userId);
+        // Ownership is checked above; do not grant a generic document permission.
+        return this.getDownload(id);
+    }
+
+    async upload(dto: UploadDocumentFileDto, file: Express.Multer.File, uploadedBy?: string, actor?: ResourceActor) {
+        return this.uploadCore(dto, file, uploadedBy, actor);
+    }
+
+    private async uploadCore(
         dto: UploadDocumentFileDto,
         file: Express.Multer.File,
         uploadedBy?: string,
         actor?: ResourceActor,
+        ownUserId?: string,
     ) {
         if (!file) {
             throw new BadRequestException(
@@ -669,7 +711,7 @@ export class DocumentFilesService {
             'expert_monitoring_record',
         ];
         if (
-            expertGovernanceAdminOnlyEntities.includes(normalizedEntityType) &&
+            !ownUserId && expertGovernanceAdminOnlyEntities.includes(normalizedEntityType) &&
             !(actor?.roles ?? []).some(
                 (role) => role.trim().toUpperCase() === 'ADMIN',
             )
@@ -708,6 +750,7 @@ export class DocumentFilesService {
             const documentFile =
                 await this.prisma.$transaction(
                     async (tx) => {
+                        if (ownUserId) await this.assertOwnCompetencyEvidence(dto.entity_id, ownUserId, true, tx);
                         const latestVersion =
                             await tx.documentFile.aggregate(
                                 {
@@ -762,6 +805,7 @@ export class DocumentFilesService {
                             },
                         );
                     },
+                    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
                 );
 
             return this.withDownloadUrl(

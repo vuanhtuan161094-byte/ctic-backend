@@ -203,6 +203,31 @@ export class DocumentFilesController {
         );
     }
 
+    // Narrow authenticated self-service routes: no global document permission.
+    @Post('self/competency-evidence/:evidenceId/files')
+    @UseInterceptors(FileInterceptor('file', createSecureUploadOptions()), new TempUploadCleanupInterceptor())
+    uploadOwnCompetencyEvidence(@Param('evidenceId', ParseUUIDPipe) evidenceId: string, @UploadedFile() file: Express.Multer.File, @Req() request: SecurityRequest) {
+        return this.documentFilesService.uploadOwnCompetencyEvidence(evidenceId, file, getActorUserId(request) ?? '');
+    }
+
+    @Get('self/competency-evidence/:evidenceId/files')
+    ownCompetencyEvidenceFiles(@Param('evidenceId', ParseUUIDPipe) evidenceId: string, @Req() request: SecurityRequest) {
+        return this.documentFilesService.ownCompetencyEvidenceFiles(evidenceId, getActorUserId(request) ?? '');
+    }
+
+    @Get('self/competency-files/:id/download')
+    async downloadOwnCompetencyFile(@Param('id', ParseUUIDPipe) id: string, @Req() request: SecurityRequest, @Res() response: Response) {
+        const result = await this.documentFilesService.downloadOwnCompetencyFile(id, getActorUserId(request) ?? '');
+        response.type(result.documentFile.mime_type);
+        response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(result.documentFile.original_name)}`);
+        return response.sendFile(result.absolutePath);
+    }
+
+    @Get('self/competency-files/:id')
+    ownCompetencyFile(@Param('id', ParseUUIDPipe) id: string, @Req() request: SecurityRequest) {
+        return this.documentFilesService.ownCompetencyFile(id, getActorUserId(request) ?? '');
+    }
+
     @Post('customer/corrective-actions/:actionId/evidence')
     @Roles('CUSTOMER')
     @ApiOperation({

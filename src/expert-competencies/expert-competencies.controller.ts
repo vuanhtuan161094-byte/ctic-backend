@@ -39,6 +39,7 @@ import { UpdateExpertCompetencyDto } from './dto/update-expert-competency.dto';
 import { VoidExpertCompetencyEvidenceDto } from './dto/void-expert-competency-evidence.dto';
 import { ExpertCompetenciesService } from './expert-competencies.service';
 import { CreateOwnCompetencyDto, ReturnCompetencyDto } from './dto/competency-submission.dto';
+import { BatchCompetencyDto, OwnBatchCompetencyDto } from './dto/batch-competency.dto';
 
 type AuthenticatedRequest = Request & {
     user: {
@@ -63,6 +64,17 @@ export class ExpertCompetenciesController {
     ) { }
 
     // Self routes use authenticated experts.user_id ownership, not global permissions.
+    @Get('me/iaf-scopes')
+    ownIafCatalog(@Req() request: AuthenticatedRequest) { return this.service.ownIafCatalog(request.user.userId); }
+
+    @Post('me/batch')
+    createOwnBatch(@Body() dto: OwnBatchCompetencyDto, @Req() request: AuthenticatedRequest) { return this.service.createOwnBatch(dto, request.user.userId); }
+
+    @Post('batch')
+    @Roles('ADMIN')
+    @Permissions('competencies.manage')
+    createBatch(@Body() dto: BatchCompetencyDto, @Req() request: AuthenticatedRequest) { return this.service.createBatch(dto, request.user.userId); }
+
     @Get('me')
     findOwn(@Req() request: AuthenticatedRequest) {
         return this.service.findOwn(request.user.userId);

@@ -46,7 +46,7 @@ type CoverageScope = {
 const normalize = (value?: string | null) => value?.trim().toUpperCase() ?? '';
 
 const acceptedRoles = (teamRole: string): string[] => ({
-    TEAM_LEADER: ['LEAD_AUDITOR', 'AUDITOR'],
+    TEAM_LEADER: ['LEAD_AUDITOR'],
     AUDITOR: ['AUDITOR', 'LEAD_AUDITOR'],
     TECHNICAL_EXPERT: ['TECHNICAL_EXPERT'],
     WITNESS_EVALUATOR: ['WITNESS_EVALUATOR', 'LEAD_AUDITOR', 'AUDITOR'],

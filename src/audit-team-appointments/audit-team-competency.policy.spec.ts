@@ -16,7 +16,7 @@ describe('audit team competency policy', () => {
     });
 
     it('keeps the frozen team-role to competency-role mapping', () => {
-        expect(acceptedCompetencyRoles('TEAM_LEADER')).toEqual(['LEAD_AUDITOR', 'AUDITOR']);
+        expect(acceptedCompetencyRoles('TEAM_LEADER')).toEqual(['LEAD_AUDITOR']);
         expect(acceptedCompetencyRoles('auditor')).toEqual(['AUDITOR', 'LEAD_AUDITOR']);
         expect(acceptedCompetencyRoles('TECHNICAL_EXPERT')).toEqual(['TECHNICAL_EXPERT']);
         expect(acceptedCompetencyRoles('WITNESS_EVALUATOR')).toEqual([

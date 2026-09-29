@@ -3,6 +3,8 @@ import { ExpertCompetenciesService } from './expert-competencies.service';
 import { ExpertCompetenciesController } from './expert-competencies.controller';
 import { ROLES_KEY } from '../auth/roles.decorator';
 import { PERMISSIONS_KEY } from '../auth/permissions.decorator';
+import { RolesGuard } from '../auth/roles.guard';
+import { Reflector } from '@nestjs/core';
 
 const draft = () => ({
   id: 'c1', expert_id: 'e1', management_system: 'QMS', standard_code: 'ISO 9001:2015',
@@ -16,7 +18,7 @@ function harness(status = 'DRAFT') {
   const prisma: any = {
     experts: {
       findFirst: jest.fn(async ({ where }) => where.user_id === 'owner' && (!where.id || where.id === 'e1') ? { id: 'e1', status: 'active' } : null),
-      findUnique: jest.fn().mockResolvedValue({ id: 'e1', status: 'active' }),
+      findUnique: jest.fn().mockResolvedValue({ id: 'e1', user_id: 'owner', status: 'active' }),
     },
     expert_competencies: {
       findUnique: jest.fn(async () => ({ ...row })),
@@ -45,6 +47,19 @@ function harness(status = 'DRAFT') {
 const input = { management_system: 'QMS', standard_code: 'ISO 9001:2015', competency_role: 'AUDITOR', scope_level: 'IAF', iaf_code: '14', effective_date: '2020-01-01' };
 
 describe('competency submission authority', () => {
+  it('expert cannot call the admin approval endpoint even with manage permission', () => {
+    const guard = new RolesGuard(new Reflector());
+    const context: any = { getHandler: () => ExpertCompetenciesController.prototype.approve,
+      getClass: () => ExpertCompetenciesController, switchToHttp: () => ({ getRequest: () => ({
+        user: { userId: 'owner', roles: ['AUDITOR'], permissions: ['competencies.manage'] },
+      }) }) };
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+  });
+  it('does not resolve an arbitrary expert when identity is missing', async () => {
+    const h = harness();
+    await expect(h.service.findOwn(undefined as any)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(h.prisma.experts.findFirst).not.toHaveBeenCalled();
+  });
   it('self list is restricted to the resolved expert', async () => {
     const h = harness(); await h.service.findOwn('owner');
     expect(h.prisma.expert_competencies.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { expert_id: 'e1' } }));
@@ -96,18 +111,25 @@ describe('competency submission authority', () => {
     await expect(h.service.approve('c1', 'admin')).rejects.toBeInstanceOf(BadRequestException);
     await expect(h.service.returnSubmission('c1', 'admin', 'reason')).rejects.toBeInstanceOf(BadRequestException);
   });
-  it('latest submitter cannot approve, including admin submissions', async () => {
-    const h = harness(); await h.service.submit('c1', 'admin');
-    await expect(h.service.approve('c1', 'admin')).rejects.toThrow('Người gửi không được tự phê duyệt');
-    expect(h.row().approval_status).toBe('PENDING_APPROVAL');
+  it('admin can create, submit and approve another expert', async () => {
+    const h = harness(); await h.service.create({ ...input, expert_id: 'e1', evidence_summary: 'Evidence' }, 'admin');
+    await h.service.submit('c1', 'admin'); await h.service.approve('c1', 'admin');
+    expect(h.row().approval_status).toBe('APPROVED');
+    expect(h.actions.map(a => a.action_type)).toEqual(['CREATE', 'SUBMIT', 'APPROVE']);
   });
   it('uses the latest submission after return/resubmit', async () => {
     const h = harness(); await h.service.submit('c1', 'admin1');
     await h.service.returnSubmission('c1', 'admin2', 'More evidence');
     await h.service.submit('c1', 'admin2');
-    await expect(h.service.approve('c1', 'admin2')).rejects.toThrow('Người gửi');
-    await h.service.approve('c1', 'admin1');
+    await h.service.approve('c1', 'admin2');
     expect(h.row().approval_status).toBe('APPROVED');
+  });
+  it.each(['owner', 'subject-admin'])('subject %s cannot approve even when another actor submitted', async (subject) => {
+    const h = harness(); h.prisma.experts.findUnique.mockResolvedValue({ id: 'e1', user_id: subject, status: 'active' });
+    await h.service.submit('c1', 'other-admin');
+    await expect(h.service.approve('c1', subject)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(h.row().approval_status).toBe('PENDING_APPROVAL');
+    expect(h.actions.some(a => a.action_type === 'APPROVE')).toBe(false);
   });
   it('fails closed without SUBMIT action or approval evidence', async () => {
     const h = harness('PENDING_APPROVAL');

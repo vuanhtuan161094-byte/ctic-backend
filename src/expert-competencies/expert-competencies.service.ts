@@ -18,10 +18,13 @@ import { SuspendExpertCompetencyDto } from './dto/suspend-expert-competency.dto'
 import { UpdateExpertCompetencyDto } from './dto/update-expert-competency.dto';
 import { VoidExpertCompetencyEvidenceDto } from './dto/void-expert-competency-evidence.dto';
 import { CreateOwnCompetencyDto } from './dto/competency-submission.dto';
+import { BatchCompetencyDto, OwnBatchCompetencyDto } from './dto/batch-competency.dto';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class ExpertCompetenciesService {
     private async ownExpert(userId: string) {
+        if (!userId) throw new ForbiddenException('Thiếu tài khoản');
         const expert = await this.prisma.experts.findFirst({ where: { user_id: userId }, select: { id: true } });
         if (!expert) throw new ForbiddenException('Tài khoản chưa liên kết hồ sơ chuyên gia');
         return expert;
@@ -41,6 +44,52 @@ export class ExpertCompetenciesService {
             include: { evidence_records: true, action_records: { where: { action_type: 'RETURN' }, orderBy: { created_at: 'desc' }, take: 1 } },
             orderBy: [{ standard_code: 'asc' }, { created_at: 'desc' }],
         });
+    }
+
+    async ownIafCatalog(userId: string) {
+        await this.ownExpert(userId);
+        return this.prisma.iaf_scopes.findMany({ where: { is_active: true }, select: { iaf_code: true, iaf_name: true }, orderBy: { iaf_code: 'asc' } });
+    }
+
+    async createOwnBatch(dto: OwnBatchCompetencyDto, userId: string) {
+        const expert = await this.ownExpert(userId);
+        return this.createBatch({ ...dto, expert_id: expert.id }, userId, true);
+    }
+
+    async createBatch(dto: BatchCompetencyDto, actorId: string, selfService = false) {
+        if (!actorId) throw new ForbiddenException('Thiếu tài khoản');
+        const codes = dto.iaf_codes.map((code) => code.trim());
+        if (!codes.length || new Set(codes).size !== codes.length) throw new BadRequestException('Chọn IAF không trùng lặp');
+        const effective = this.parseDate(dto.effective_date, 'Ngày hiệu lực');
+        const expiry = dto.expiry_date ? this.parseDate(dto.expiry_date, 'Ngày hết hiệu lực') : null;
+        this.validateDates(effective, expiry);
+        try {
+            return await this.prisma.$transaction(async (tx) => {
+                const expert = await tx.experts.findUnique({ where: { id: dto.expert_id } });
+                if (!expert || expert.status?.toLowerCase() !== 'active') throw new BadRequestException('Chuyên gia không hoạt động');
+                if (selfService && expert.user_id !== actorId) throw new ForbiddenException('Không đúng chủ hồ sơ');
+                const catalog = await tx.iaf_scopes.findMany({ where: { iaf_code: { in: codes }, is_active: true }, select: { iaf_code: true } });
+                if (catalog.length !== codes.length) throw new BadRequestException('Mã IAF không tồn tại hoặc ngừng hoạt động');
+                const scope = { expert_id: dto.expert_id, management_system: this.normalize(dto.management_system),
+                    standard_code: this.normalize(dto.standard_code), competency_role: this.normalize(dto.competency_role), nace_code: null };
+                const existing = await tx.expert_competencies.findMany({ where: { ...scope, iaf_code: { in: codes } }, select: { iaf_code: true } });
+                if (existing.length) throw new ConflictException(`Phạm vi đã tồn tại: IAF ${existing.map((row) => row.iaf_code).join(', ')}`);
+                const data = codes.map((iaf_code) => ({ ...scope, id: randomUUID(), iaf_code, scope_level: 'IAF',
+                    competency_level: dto.competency_level ?? 'QUALIFIED', approval_status: 'DRAFT', effective_date: effective, expiry_date: expiry,
+                    approval_basis: this.nullableText(dto.approval_basis), evidence_summary: this.nullableText(dto.evidence_summary),
+                    restriction: this.nullableText(dto.restriction), scope_description: this.nullableText(dto.scope_description), notes: this.nullableText(dto.notes) }));
+                await tx.expert_competencies.createMany({ data });
+                const rows = await tx.expert_competencies.findMany({ where: { id: { in: data.map((row) => row.id) } } });
+                await tx.expert_competency_actions.createMany({ data: rows.map((row) => ({ competency_id: row.id, action_type: 'CREATE',
+                    to_status: 'DRAFT', actor_id: actorId, reason: 'Tạo dự thảo nhiều phạm vi IAF', snapshot_json: this.competencySnapshot(row) })) });
+                return rows;
+            }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2034'].includes(error.code)) {
+                throw new ConflictException('Phạm vi trùng hoặc có thay đổi đồng thời; tải lại và kiểm tra trước khi thử lại');
+            }
+            throw error;
+        }
     }
 
     async createOwn(dto: CreateOwnCompetencyDto, userId: string) {
@@ -86,7 +135,9 @@ export class ExpertCompetenciesService {
             if (action === 'APPROVE') {
                 const submit = await tx.expert_competency_actions.findFirst({ where: { competency_id: id, action_type: 'SUBMIT' }, orderBy: [{ created_at: 'desc' }, { id: 'desc' }] });
                 if (!submit?.actor_id) throw new BadRequestException('Không tìm thấy người gửi phê duyệt');
-                if (submit.actor_id === userId) throw new BadRequestException('Người gửi không được tự phê duyệt năng lực của lần gửi này');
+                const subject = await tx.experts.findUnique({ where: { id: row.expert_id }, select: { user_id: true } });
+                if (!subject) throw new NotFoundException('Không tìm thấy chuyên gia');
+                if (subject.user_id === userId) throw new ForbiddenException('Không được phê duyệt năng lực của chính mình');
                 await this.assertApprovalEvidence(row, tx);
             }
             const status = action === 'SUBMIT' ? 'PENDING_APPROVAL' : action === 'RETURN' ? 'RETURNED' : 'APPROVED';

@@ -35,6 +35,21 @@ function createPrismaMock() {
 }
 
 describe('AuditTeamProgramCompetencyService', () => {
+    it.each([
+        ['LEAD_AUDITOR', 'AUDITOR', 'qualified'],
+        ['AUDITOR', 'TEAM_LEADER', 'not_qualified'],
+    ])('assignment maps competency %s to %s as %s', async (competencyRole, teamRole, status) => {
+        const prisma = createPrismaMock();
+        prisma.expert_competencies.findMany.mockResolvedValue([{ id: 'c1', expert_id: 'expert-1',
+            competency_role: competencyRole, management_system: 'QMS', standard_code: 'ISO 9001:2015' },
+            { id: 'c2', expert_id: 'leader', competency_role: 'LEAD_AUDITOR', management_system: 'QMS', standard_code: 'ISO 9001:2015' }]);
+        const service = new AuditTeamProgramCompetencyService(prisma as unknown as PrismaService);
+        const work = service.evaluatePlanProgramAllocation('project-1', new Date('2026-09-10'),
+            [{ expert_id: 'expert-1', team_role: teamRole, scopes: [{ project_scope_id: 'scope-1' }] },
+             { expert_id: 'leader', team_role: 'TEAM_LEADER', scopes: [{ project_scope_id: 'scope-1' }] }]);
+        if (status === 'not_qualified') await expect(work).rejects.toBeInstanceOf(BadRequestException);
+        else expect((await work).members[0].status).toBe(status);
+    });
     it('validates program coverage and lead-auditor capability without changing business rules', async () => {
         const prisma = createPrismaMock();
         const service = new AuditTeamProgramCompetencyService(
