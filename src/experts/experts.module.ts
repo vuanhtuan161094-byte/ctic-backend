@@ -2,6 +2,7 @@ import {
   Module,
 } from '@nestjs/common';
 
+import { ExpertAccountBoundaryService } from './expert-account-boundary.service';
 import { ExpertsController } from './experts.controller';
 import { ExpertsService } from './experts.service';
 
@@ -11,7 +12,10 @@ import { ExpertsService } from './experts.service';
   ],
 
   providers: [
-    ExpertsService,
+    {
+      provide: ExpertsService,
+      useClass: ExpertAccountBoundaryService,
+    },
   ],
 
   exports: [
