@@ -513,7 +513,11 @@ try {
     Stop-StaleCmpListenerOrFail -Port 3000 -RepoPaths @($BackendPath, $FrontendPath)
     Stop-StaleCmpListenerOrFail -Port 5173 -RepoPaths @($BackendPath, $FrontendPath)
 
-    $backendCommand = 'call npm.cmd run db:recover:local && call npm.cmd run start:dev'
+    # CMP UI preview starts the backend once. Nest's normal watch build uses
+    # deleteOutDir=true and can race with stale Windows compiler processes,
+    # failing with ENOTEMPTY during recursive dist removal. The CMP-only
+    # configuration recompiles without clearing dist or changing normal builds.
+    $backendCommand = 'call npm.cmd run db:recover:local && call npm.cmd run start:cmp'
     $backendProcess = Start-CmpProcess -Label 'backend' -WorkingDirectory $BackendPath -Command $backendCommand -StdoutPath $BackendStdout -StderrPath $BackendStderr
     Save-State -BackendProcess $backendProcess -FrontendProcess $null
 

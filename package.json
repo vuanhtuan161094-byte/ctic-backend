@@ -10,6 +10,8 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
+    "prestart:cmp": "npm run prestart:dev",
+    "start:cmp": "nest start --config nest-cli.cmp-launcher.json --path tsconfig.cmp-launcher.json",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node scripts/copy-report-assets.cjs && node dist/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
