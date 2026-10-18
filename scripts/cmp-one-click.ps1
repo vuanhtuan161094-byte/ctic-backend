@@ -325,7 +325,7 @@ function Invoke-HttpProbe {
     # Loopback probes must not stall on a system proxy/PAC configuration.
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.UseProxy = $false
-    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client = [System.Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
     $response = $null
 
