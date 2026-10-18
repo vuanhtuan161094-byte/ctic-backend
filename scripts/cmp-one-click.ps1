@@ -119,7 +119,7 @@ function Sync-Repository {
     $counts = Invoke-GitCapture -Path $Path -GitArgs @('rev-list', '--left-right', '--count', "HEAD...origin/$Branch")
     $parts = $counts -split '\s+'
     if ($parts.Count -lt 2) {
-        throw "Could not determine ahead/behind state for $Label: $counts"
+        throw "Could not determine ahead/behind state for ${Label}: $counts"
     }
 
     $ahead = [int]$parts[0]
