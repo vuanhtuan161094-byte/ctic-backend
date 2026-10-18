@@ -13,12 +13,30 @@ if ([string]::IsNullOrWhiteSpace($BackendPath)) {
     throw 'Backend directory is missing (CMP_BACKEND_PATH).'
 }
 
-$BackendPath = [System.IO.Path]::GetFullPath($BackendPath)
-$FrontendPath = [System.IO.Path]::GetFullPath((Join-Path $BackendPath '..\frontend'))
+if ($BackendPath.Contains('"')) {
+    throw 'CMP_BACKEND_PATH contains a literal quotation mark. Run the original CMP_ONE_CLICK.cmd directly.'
+}
+try {
+    $BackendPath = [System.IO.Path]::GetFullPath($BackendPath)
+    $FrontendPath = [System.IO.Path]::GetFullPath((Join-Path $BackendPath '..\frontend'))
+}
+catch {
+    throw ("Invalid launcher directory from CMP_BACKEND_PATH: {0}" -f $_.Exception.Message)
+}
 
+# Scope PID state to this installation. Do not stop processes from another CMP checkout.
+$normalizedRoot = $BackendPath.TrimEnd('\').ToUpperInvariant()
+$hashProvider = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $hashBytes = $hashProvider.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalizedRoot))
+}
+finally {
+    $hashProvider.Dispose()
+}
+$stateId = -join ($hashBytes | Select-Object -First 8 | ForEach-Object { $_.ToString('x2') })
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $LogDir = Join-Path $env:TEMP ("CMP-{0}-{1}" -f $stamp, $PID)
-$StateFile = Join-Path $env:TEMP 'CMP-launcher-state.json'
+$StateFile = Join-Path $env:TEMP ("CMP-launcher-{0}.json" -f $stateId)
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $BackendStdout = Join-Path $LogDir 'backend.stdout.log'
@@ -156,8 +174,12 @@ function Stop-RememberedProcess {
         $actualStart = $process.StartTime.ToUniversalTime()
         $expectedStart = ([datetime]::Parse([string]$Entry.startTimeUtc)).ToUniversalTime()
 
-        if ([math]::Abs(($actualStart - $expectedStart).TotalSeconds) -gt 2) {
+        if ([math]::Abs(($actualStart - $expectedStart).TotalSeconds) -gt 0.25) {
             Write-Host "[WARN] Saved $Label PID $($Entry.pid) was reused by another process; not killing it."
+            return
+        }
+        if ($process.ProcessName -ine [System.IO.Path]::GetFileNameWithoutExtension($env:ComSpec)) {
+            Write-Host "[WARN] Saved $Label PID $($Entry.pid) is not cmd.exe; not killing it."
             return
         }
 
@@ -196,14 +218,17 @@ function Stop-PreviousCmpProcesses {
 function Get-ListenerPids {
     param([int]$Port)
 
+    # Query ALL listeners first: an empty filter is legitimate, but an unavailable
+    # networking API is not. Fail closed rather than treating API errors as a free port.
     try {
         return @(
-            Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
+            Get-NetTCPConnection -State Listen -ErrorAction Stop |
+                Where-Object { $_.LocalPort -eq $Port } |
                 Select-Object -ExpandProperty OwningProcess -Unique
         )
     }
     catch {
-        return @()
+        throw ("Cannot inspect TCP listener ownership for port {0}: {1}" -f $Port, $_.Exception.Message)
     }
 }
 
@@ -217,10 +242,15 @@ function Stop-StaleCmpListenerOrFail {
     foreach ($listenerPid in $listenerPids) {
         $win32 = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
         $commandLine = if ($null -ne $win32) { [string]$win32.CommandLine } else { '' }
+        $processName = if ($null -ne $win32) { [string]$win32.Name } else { '' }
 
         $belongsToCmp = $false
         foreach ($repoPath in $RepoPaths) {
-            if (-not [string]::IsNullOrWhiteSpace($commandLine) -and $commandLine.IndexOf($repoPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            # A matching directory substring alone must not authorize killing arbitrary processes.
+            $repoPrefix = $repoPath.TrimEnd('\') + '\'
+            if ($processName -ieq 'node.exe' -and
+                -not [string]::IsNullOrWhiteSpace($commandLine) -and
+                $commandLine.IndexOf($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 $belongsToCmp = $true
                 break
             }
@@ -248,7 +278,10 @@ function Save-State {
         [System.Diagnostics.Process]$FrontendProcess
     )
 
-    $state = [ordered]@{}
+    $state = [ordered]@{
+        backendPath = $BackendPath
+        frontendPath = $FrontendPath
+    }
 
     if ($null -ne $BackendProcess) {
         $state.backend = [ordered]@{
@@ -289,7 +322,10 @@ function Invoke-HttpProbe {
         [int]$TimeoutSeconds = 5
     )
 
-    $client = New-Object System.Net.Http.HttpClient
+    # Loopback probes must not stall on a system proxy/PAC configuration.
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseProxy = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
     $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
     $response = $null
 
@@ -297,7 +333,7 @@ function Invoke-HttpProbe {
         $response = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         $status = [int]$response.StatusCode
         return [pscustomobject]@{
-            ok = ($status -ge 200 -and $status -lt 500)
+            ok = ($status -ge 200 -and $status -lt 300)
             status = $status
             error = $null
         }
@@ -376,52 +412,35 @@ function Confirm-FrontendStability {
         [System.Diagnostics.Process]$Process
     )
 
+    # One successful response is not proof that the Vite browser UI stays usable.
+    # Retry transient timeouts, but never convert an open TCP socket into HTTP PASS.
     $successes = 1
-    $attempts = 5
-
-    for ($attempt = 2; $attempt -le $attempts; $attempt++) {
+    $lastFailure = 'none'
+    for ($attempt = 2; $attempt -le 9 -and $successes -lt 3; $attempt++) {
         Start-Sleep -Seconds 2
-
         if ($Process.HasExited) {
             throw "Frontend process exited after initial readiness (exit code $($Process.ExitCode))."
         }
 
-        $probe = Invoke-HttpProbe -Url 'http://127.0.0.1:5173/' -TimeoutSeconds 5
+        $timeout = if ($attempt -le 5) { 5 } else { 10 }
+        $probe = Invoke-HttpProbe -Url 'http://127.0.0.1:5173/' -TimeoutSeconds $timeout
         if ($probe.ok) {
             $successes++
             continue
         }
 
         if (-not (Test-TcpPort -Port 5173)) {
-            throw "Frontend stopped listening on port 5173 after initial HTTP readiness."
+            throw 'Frontend stopped listening on port 5173 after initial HTTP readiness.'
         }
 
-        $reason = if ([string]::IsNullOrWhiteSpace([string]$probe.error)) { 'HTTP probe failed' } else { [string]$probe.error }
-        Write-Host "[WARN] Frontend probe $attempt/$attempts failed while process is alive and port 5173 is open: $reason"
+        $lastFailure = if ($null -ne $probe.error) { [string]$probe.error } else { "HTTP status $($probe.status)" }
+        Write-Host "[WARN] Frontend HTTP probe $attempt/9: $lastFailure"
     }
 
     if ($successes -lt 3) {
-        $finalProbe = Invoke-HttpProbe -Url 'http://127.0.0.1:5173/' -TimeoutSeconds 10
-        if ($finalProbe.ok) {
-            $successes++
-        }
+        throw "Frontend returned fewer than 3 successful HTTP responses; last failure: $lastFailure. Port listening alone is insufficient."
     }
-
-    if ($successes -ge 3) {
-        Write-Host "[OK] Frontend stability check: $successes successful HTTP probes."
-        return
-    }
-
-    if ($Process.HasExited) {
-        throw "Frontend process exited during stability check (exit code $($Process.ExitCode))."
-    }
-
-    if (-not (Test-TcpPort -Port 5173)) {
-        throw "Frontend port 5173 closed during stability check."
-    }
-
-    Write-Host '[WARN] Frontend already returned HTTP successfully, but later probes timed out transiently.'
-    Write-Host '[WARN] Process is still alive and port 5173 is still open; continuing instead of false-failing.'
+    Write-Host "[OK] Frontend stability check: $successes successful HTTP probes."
 }
 
 function Show-LogTail {
