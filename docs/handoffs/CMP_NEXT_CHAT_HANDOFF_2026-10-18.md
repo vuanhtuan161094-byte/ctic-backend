@@ -5,6 +5,21 @@
 
 > Đây là tài liệu bàn giao thực thi. Đọc tài liệu này và HEAD thực tế của GitHub **trước khi sửa**, không coi các đoạn chat trước là mã nguồn authority.
 
+## 0B. Windows backend compile ENOTEMPTY (2026-10-18, after Git adapter repair)
+
+New evidence received from user Windows run (time after 15:00 local):
+- CMD and Git launcher advanced to Prisma/SQL; Prisma Client generated with v7.8.0 and SQL preflight **3/3 PASS**.
+- NestJS `npm run start:dev` failed with `ENOTEMPTY: directory not empty, rmdir 'E:\0. Lập trình\CMP\backend\dist\audit-plans\dto'`.
+- Checked actual `nest-cli.json`: `compilerOptions.deleteOutDir=true`; Nest CLI documentation states the compiler removes the entire TS output directory before compilation when this is enabled.
+- The log proves a directory removal failed; concurrent compiler/watcher, anti-virus lock, or filesystem race remains a plausible cause, **not independently proven**. Terminal character mojibake does not prove a path mismatch. Do not migrate Prisma or alter SQL/data.
+- **Source fix pushed on backend feature branch**: `42b2b07056276d770cb3156459ce8c7f984fb45b`.
+  - New `nest-cli.cmp-launcher.json` replicates original asset rules with `deleteOutDir: false`.
+  - New `tsconfig.cmp-launcher.json` extends regular build tsconfig and sets `incremental: false` to re-emit on every CMP preview startup without using stale cache after prior failed dist removal.
+  - Package scripts add `prestart:cmp` (reuses `prestart:dev` Prisma and SQL preflight) and `start:cmp` (`nest start --config ... --path ...`, **no watch**).
+  - Launcher still runs `db:recover:local`, then now uses `npm run start:cmp`. Regular `nest-cli.json`, `start:dev`, normal builds and frontend are unchanged. No `dist` removal or manual cleanup.
+- Static configuration/command checks PASS; Windows end-to-end still **PENDING**. Update backend once with safe `git -C "E:\0. Lập trình\CMP\backend" pull --ff-only origin feature/ux-fix-batch01`, then double-click `E:\0. Lập trình\CMP\backend\CMP_ONE_CLICK.cmd`. The launcher fetches the frontend itself.
+- If backend still fails, inspect fresh backend.stdout/stderr; verify orphaned Nest watcher ownership before any process termination. Do not delete `dist`, untracked files or database to force recovery.
+
 ## 0A. Windows real-run failure #3 and source repair (2026-10-18 14:55 local)
 
 **Evidence received from user's Windows machine:** CMD -> temporary CMD -> PowerShell succeeded, accurate displayed paths:
