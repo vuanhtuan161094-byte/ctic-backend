@@ -198,6 +198,11 @@ function Stop-PreviousCmpProcesses {
 
     try {
         $state = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+        if ($state.PSObject.Properties.Name -notcontains 'backendPath' -or
+            [string]$state.backendPath -ine $BackendPath) {
+            Write-Host '[WARN] Previous CMP state belongs to a different or unknown installation; not killing its processes.'
+            return
+        }
         if ($state.PSObject.Properties.Name -contains 'backend') {
             Stop-RememberedProcess -Entry $state.backend -Label 'backend'
         }
@@ -297,7 +302,7 @@ function Save-State {
         }
     }
 
-    $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StateFile -Encoding Ascii
+    $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StateFile -Encoding UTF8
 }
 
 function Start-CmpProcess {
