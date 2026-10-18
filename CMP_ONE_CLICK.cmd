@@ -12,16 +12,22 @@ if /I not "%~1"=="--temp-run" (
     pause
     exit /b 1
   )
-  call "!CMP_TMP_CMD!" --temp-run "%~dp0" "!CMP_TMP_PS1!"
+  set "CMP_BACKEND_PATH=%~dp0"
+  call "!CMP_TMP_CMD!" --temp-run "!CMP_TMP_PS1!"
   set "CMP_RC=!ERRORLEVEL!"
   del /Q "!CMP_TMP_CMD!" "!CMP_TMP_PS1!" >nul 2>&1
   exit /b !CMP_RC!
 )
 
-set "CMP_BACKEND=%~2"
-set "CMP_PS1=%~3"
+set "CMP_PS1=%~2"
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CMP_PS1%" -BackendPath "%CMP_BACKEND%"
+if not defined CMP_BACKEND_PATH (
+  echo [FAIL] Backend directory not supplied by launcher.
+  pause
+  exit /b 1
+)
+
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CMP_PS1%"
 set "CMP_RC=%ERRORLEVEL%"
 
 if not "%CMP_RC%"=="0" (

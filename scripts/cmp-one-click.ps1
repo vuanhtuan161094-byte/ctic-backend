@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$BackendPath,
+    [string]$BackendPath = $env:CMP_BACKEND_PATH,
     [string]$Branch = 'feature/ux-fix-batch01'
 )
 
@@ -9,6 +8,10 @@ $ErrorActionPreference = 'Stop'
 
 $BackendRepo = 'vuanhtuan161094-byte/ctic-backend'
 $FrontendRepo = 'vuanhtuan161094-byte/ctic-frontend'
+
+if ([string]::IsNullOrWhiteSpace($BackendPath)) {
+    throw 'Backend directory is missing (CMP_BACKEND_PATH).'
+}
 
 $BackendPath = [System.IO.Path]::GetFullPath($BackendPath)
 $FrontendPath = [System.IO.Path]::GetFullPath((Join-Path $BackendPath '..\frontend'))
