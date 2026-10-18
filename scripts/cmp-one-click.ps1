@@ -77,10 +77,24 @@ function Invoke-GitCapture {
         [string[]]$GitArgs
     )
 
-    $output = & git -C $Path @GitArgs 2>&1
-    $exitCode = $LASTEXITCODE
-    $textValue = (($output | Out-String).Trim())
+    # Windows PowerShell 5.1 uses legacy native-command argv quoting.
+    # Passing a Unicode directory ending in a backslash via "git -C $Path"
+    # can escape the closing quote and combine the path with later arguments.
+    # Use PowerShell's Unicode-aware location API instead; Git gets only flags.
+    Push-Location -LiteralPath $Path -ErrorAction Stop
+    try {
+        # In Windows PowerShell 5.1, stderr redirected via 2>&1 can become
+        # NativeCommandError under EAP Stop even when Git exits successfully.
+        # Treat Git's process exit code as the authoritative success indicator.
+        $ErrorActionPreference = 'Continue'
+        $output = & git.exe @GitArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
 
+    $textValue = (($output | Out-String).Trim())
     if ($exitCode -ne 0) {
         throw ("git {0} failed in {1}{2}{3}" -f ($GitArgs -join ' '), $Path, [Environment]::NewLine, $textValue)
     }
@@ -94,9 +108,16 @@ function Invoke-GitVisible {
         [string[]]$GitArgs
     )
 
-    & git -C $Path @GitArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw ("git {0} failed in {1}" -f ($GitArgs -join ' '), $Path)
+    Push-Location -LiteralPath $Path -ErrorAction Stop
+    try {
+        & git.exe @GitArgs
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    if ($exitCode -ne 0) {
+        throw ("git {0} failed in {1} (exit code {2})" -f ($GitArgs -join ' '), $Path, $exitCode)
     }
 }
 
