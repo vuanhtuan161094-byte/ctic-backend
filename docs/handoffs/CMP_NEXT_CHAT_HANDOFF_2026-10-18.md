@@ -14,7 +14,7 @@
 - TCP owner discovery now fails closed on API errors; stale listener termination requires an identifiable `node.exe` command line within this CMP checkout.
 - Loopback HTTP probes bypass system proxy, accept only 2xx, and require repeated successful frontend probes instead of treating a listening TCP port as proof of UI readiness.
 - Static review confirmed the prior `${Label}:` parser fix and required branches/commands still exist. **No Windows PowerShell 5.1 parser execution, no CMD->PowerShell path smoke, no browser/runtime or double-run evidence was available in this GitHub connector execution.** Therefore launcher Windows status stays **PENDING / NOT VERIFIED PASS**.
-- Owner machine needs one-time launcher update: `git -C "E:\\0. Lập trình\\CMP\\backend" pull --ff-only origin feature/ux-fix-batch01` (never reset/clean). Then double-click `CMP_ONE_CLICK.cmd`. The launcher fetches the frontend branch after checks. If blocked by local WIP, preserve it and diagnose instead of forcing the pull.
+- Owner machine needs one-time launcher update: `git -C "E:\0. Lập trình\CMP\backend" pull --ff-only origin feature/ux-fix-batch01` (never reset/clean). Then double-click `CMP_ONE_CLICK.cmd`. The launcher fetches the frontend branch after checks. If blocked by local WIP, preserve it and diagnose instead of forcing the pull.
 - Safety fallback for UI preview remains two terminals running `npm run start:dev` in backend and `npm run dev` in frontend after SQL readiness and safe branch sync; see section 7.
 
 ## 1. Tổng quan dự án và repository
