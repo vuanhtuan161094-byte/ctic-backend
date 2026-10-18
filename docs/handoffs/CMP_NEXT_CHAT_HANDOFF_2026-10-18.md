@@ -5,6 +5,21 @@
 
 > Đây là tài liệu bàn giao thực thi. Đọc tài liệu này và HEAD thực tế của GitHub **trước khi sửa**, không coi các đoạn chat trước là mã nguồn authority.
 
+## 0A. Windows real-run failure #3 and source repair (2026-10-18 14:55 local)
+
+**Evidence received from user's Windows machine:** CMD -> temporary CMD -> PowerShell succeeded, accurate displayed paths:
+`E:\0. Lập trình\CMP\backend\` and `E:\0. Lập trình\CMP\frontend`. First Git inspection failed:
+
+```text
+fatal: cannot change to 'E:\0. Lß║¡p tr├¼nh\CMP\backend" rev-parse --abbrev-ref HEAD': Invalid argument
+```
+
+**Identified code-level failure:** `Invoke-GitCapture` and `Invoke-GitVisible` invoked native Git as `& git -C $Path @GitArgs`. The backend path ends with `\`; in Windows PowerShell 5.1 legacy native argv quoting this backslash can escape the closing quotation mark and consume subsequent arguments as path. The Unicode mojibake is additionally visible in Git's diagnostic output. The log proves that PowerShell got the correct displayed environment path but passed a corrupted native argument to Git; the exact native quoting mechanism has not been independently traced with a debugger.
+
+**Repair pushed:** backend feature commit `bfd595ae7e557d712437eed03a2f2acf14dfd2d3`. Both Git adapter functions now use `Push-Location -LiteralPath $Path`, native `git.exe @GitArgs`, and `Pop-Location` in `finally`. Git no longer receives a Unicode/trailing-backslash directory via native argv. Captured Git stderr under Windows PowerShell 5.1 uses the exit code rather than automatic NativeCommandError for final status. No WIP reset, database, or business changes.
+
+**Verification:** static source checks passed for both Git adapters, cleanup, safe FF merge, and previously fixed syntax. Windows runtime **still PENDING** until user retries this new build. Do not claim PASS based on GitHub push. One-time update `git -C "E:\0. Lập trình\CMP\backend" pull --ff-only origin feature/ux-fix-batch01` from a regular Windows terminal, then double-click the backend `CMP_ONE_CLICK.cmd`. This shell command runs outside Windows PowerShell's problematic `& git -C $Path` call, with a path lacking the terminal backslash.
+
 ## 0. 2026-10-18 follow-up — launcher hardening committed, Windows smoke PENDING
 
 - Feature backend source checkpoint before this docs commit: `edf59ab230c7dd6d33a5497683f97d368438e82e`. Source commit series: `fdeb793c`, `ddc58465`, `edf59ab2`.
