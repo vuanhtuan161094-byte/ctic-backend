@@ -1,5 +1,9 @@
 # CMP — Current Checkpoint and Next Phase Plan
 
+**Active handoff updated 2026-10-18:** read [docs/handoffs/CMP_NEXT_CHAT_HANDOFF_2026-10-18.md](docs/handoffs/CMP_NEXT_CHAT_HANDOFF_2026-10-18.md) FIRST. This handoff overrides the historical immediate-next-action note below: Windows one-click launcher has two reported errors and **has not passed Windows runtime smoke**. Backend source HEAD before this documentation commit: 6e81afb5d9a0a7a45c96dea824924b51992e0a81; frontend source HEAD: 2b26d6d277bd8d15a6074034ad63ec83410c466e. Priority: open the latest frontend in a real browser, then user visual review. No main merge, schema/data changes or unverified PASS claims.
+
+---
+
 Updated: 2026-09-26
 
 This file is the current source-of-truth for continuing the CMP project. Read it before changing scope.
