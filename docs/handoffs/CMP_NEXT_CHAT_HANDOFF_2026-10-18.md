@@ -5,6 +5,18 @@
 
 > Đây là tài liệu bàn giao thực thi. Đọc tài liệu này và HEAD thực tế của GitHub **trước khi sửa**, không coi các đoạn chat trước là mã nguồn authority.
 
+## 0. 2026-10-18 follow-up — launcher hardening committed, Windows smoke PENDING
+
+- Feature backend source checkpoint before this docs commit: `edf59ab230c7dd6d33a5497683f97d368438e82e`. Source commit series: `fdeb793c`, `ddc58465`, `edf59ab2`.
+- Frontend remains `2b26d6d277bd8d15a6074034ad63ec83410c466e` at latest read; confirm live HEAD before any new work.
+- Replaced nested CMD blocks/delayed expansion with temporary-directory staging and environment-based Unicode backend path; kept fast-forward-only synchronization and local WIP protections.
+- Scoped PID state per normalized backend checkout path and saved Unicode-safe JSON. Previous global state is intentionally not trusted for termination.
+- TCP owner discovery now fails closed on API errors; stale listener termination requires an identifiable `node.exe` command line within this CMP checkout.
+- Loopback HTTP probes bypass system proxy, accept only 2xx, and require repeated successful frontend probes instead of treating a listening TCP port as proof of UI readiness.
+- Static review confirmed the prior `${Label}:` parser fix and required branches/commands still exist. **No Windows PowerShell 5.1 parser execution, no CMD->PowerShell path smoke, no browser/runtime or double-run evidence was available in this GitHub connector execution.** Therefore launcher Windows status stays **PENDING / NOT VERIFIED PASS**.
+- Owner machine needs one-time launcher update: `git -C "E:\\0. Lập trình\\CMP\\backend" pull --ff-only origin feature/ux-fix-batch01` (never reset/clean). Then double-click `CMP_ONE_CLICK.cmd`. The launcher fetches the frontend branch after checks. If blocked by local WIP, preserve it and diagnose instead of forcing the pull.
+- Safety fallback for UI preview remains two terminals running `npm run start:dev` in backend and `npm run dev` in frontend after SQL readiness and safe branch sync; see section 7.
+
 ## 1. Tổng quan dự án và repository
 
 - Sản phẩm: **CMP — Certification Management Platform**, hệ thống quản lý chứng nhận.
