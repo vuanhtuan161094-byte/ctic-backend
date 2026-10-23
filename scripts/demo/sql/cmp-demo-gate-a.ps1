@@ -140,13 +140,49 @@ function Get-IsElevated {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-Write-Log "START mode=$(if ($Apply) { 'apply-requested' } else { 'inspect-only' }) log_path=$logPath"
+function New-GateConnectionString {
+    # Windows PowerShell adapts this IDictionary: use SQL keywords, not CLR property names.
+    $builder = [System.Data.SqlClient.SqlConnectionStringBuilder]::new()
+    $builder['Data Source'] = 'lpc:.\SQLEXPRESS'
+    $builder['Initial Catalog'] = 'master'
+    $builder['Integrated Security'] = $true
+    $builder['Encrypt'] = $false
+    $builder['TrustServerCertificate'] = $true
+    $builder['Connect Timeout'] = 10
+    $builder['Application Name'] = 'CMP-Demo-Gate-A'
+    return $builder.get_ConnectionString()
+}
+
+function Write-GateFailure {
+    param([Parameter(Mandatory = $true)][System.Management.Automation.ErrorRecord]$Failure)
+    $exception = $Failure.Exception.GetBaseException()
+    # Never print exception messages, source lines or SQL text: they can contain credentials.
+    Write-Log "ERROR phase=$script:GatePhase error_type=$($exception.GetType().FullName) script_line=$($Failure.InvocationInfo.ScriptLineNumber) sql_write_attempted=$script:SqlWriteAttempted"
+    if ($exception -is [System.Data.SqlClient.SqlException]) {
+        foreach ($sqlError in $exception.Errors) {
+            Write-Log "SQL_ERROR number=$($sqlError.Number) state=$($sqlError.State) class=$($sqlError.Class) line=$($sqlError.LineNumber)"
+        }
+    }
+    if ($script:SqlWriteAttempted) {
+        Write-Log 'RESULT PENDING_PARTIAL_STATE inspect database, logins and backups; do not rerun or delete.'
+    }
+    else {
+        Write-Log 'RESULT FAILED_BEFORE_SQL_WRITE this process did not submit the bootstrap; existing SQL state still requires inspection.'
+    }
+}
+
+$connection = $null
+$script:GatePhase = 'startup'
+$script:SqlWriteAttempted = $false
+try {
+Write-Log "START mode=$(if ($Apply) { 'apply-requested' } else { 'inspect-only' }) pid=$PID windows_identity=$([Security.Principal.WindowsIdentity]::GetCurrent().Name) elevated=$(Get-IsElevated) log_path=$logPath"
 
 if ($Apply -and (Get-IsElevated) -and -not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
     throw 'BLOCKED: Start RUN_CMP_DEMO_GATE_A.cmd from the signed-in regular Windows session; direct elevated launch would create credentials under the Administrator profile.'
 }
 
 if ($Apply -and -not (Get-IsElevated)) {
+    $script:GatePhase = 'credential-preparation'
     $script:DemoCredentials = Ensure-DemoCredentials
     if ($ElevatedChild) { throw 'The elevated process does not have an Administrator token; no SQL command was sent.' }
     $powershell = Join-Path $PSHOME 'powershell.exe'
@@ -154,9 +190,10 @@ if ($Apply -and -not (Get-IsElevated)) {
     $quotedCredentials = '"' + $CredentialPath + '"'
     $argumentList = '-NoProfile -ExecutionPolicy Bypass -File ' + $quotedScript + ' -Apply -ElevatedChild -CredentialPath ' + $quotedCredentials
     Write-Log 'UAC_REQUEST opening Windows elevation prompt; credentials are not read or automated.'
+    $script:GatePhase = 'uac'
     try {
         $child = Start-Process -FilePath $powershell -ArgumentList $argumentList -Verb RunAs -PassThru -Wait
-        Write-Log "ELEVATED_PROCESS_EXIT code=$($child.ExitCode)"
+        Write-Log "ELEVATED_PROCESS_EXIT code=$($child.ExitCode) pid=$($child.Id) child_sql_state=inspect-child-log"
         exit $child.ExitCode
     }
     catch {
@@ -165,22 +202,18 @@ if ($Apply -and -not (Get-IsElevated)) {
     }
 }
 
-$connection = $null
-try {
+    $script:GatePhase = 'bootstrap-file-check'
     if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
         throw 'The reviewed SQL bootstrap file is missing.'
     }
 
-    $connectionString = [System.Data.SqlClient.SqlConnectionStringBuilder]::new()
-    $connectionString.DataSource = 'lpc:.\SQLEXPRESS'
-    $connectionString.InitialCatalog = 'master'
-    $connectionString.IntegratedSecurity = $true
-    $connectionString.Encrypt = $false
-    $connectionString.TrustServerCertificate = $true
-    $connectionString.ConnectTimeout = 10
-    $connectionString.ApplicationName = 'CMP-Demo-Gate-A'
-    $connection = [System.Data.SqlClient.SqlConnection]::new($connectionString.ConnectionString)
+    $script:GatePhase = 'connection-build'
+    $connection = [System.Data.SqlClient.SqlConnection]::new((New-GateConnectionString))
+    $script:GatePhase = 'connection-open'
+    Write-Log 'SQL_CONNECT_BEGIN transport=shared-memory database=master authentication=windows'
     $connection.Open()
+    Write-Log 'SQL_CONNECT_OK'
+    $script:GatePhase = 'identity-read'
     $identityQuery = @"
 SELECT
   SYSTEM_USER AS login_name,
@@ -209,6 +242,7 @@ SELECT
 
     Write-Log ('IDENTITY ' + (@{ login = $login; original_login = $originalLogin; machine = $machine; instance = $instance; current_database = $currentDatabase; is_sysadmin = $isSysadmin; demo_database_id = $demoDatabaseId; default_backup_path = $backupPath } | ConvertTo-Json -Compress))
 
+    $script:GatePhase = 'identity-validation'
     if ($machine -ine $expectedMachine -or $instance -ine $expectedInstance -or $currentDatabase -ine 'master') {
         throw 'BLOCKED: SQL machine, instance or current database does not match the approved target.'
     }
@@ -217,6 +251,7 @@ SELECT
     }
 
     if ($null -ne $demoDatabaseId) {
+        $script:GatePhase = 'existing-sandbox-inspection'
         Write-Log 'SANDBOX_EXISTS inspect-only; CREATE DATABASE script will not be run.'
         $inspection = @"
 SELECT d.name,d.state_desc,d.user_access_desc,d.is_read_only,d.create_date,
@@ -256,6 +291,7 @@ ORDER BY b.backup_finish_date DESC
         Write-Log 'RESULT PREFLIGHT_PASS_TARGET_CONFIRMED database is absent; inspect-only mode made no writes.'
         exit 0
     }
+    $script:GatePhase = 'pre-write-state-check'
     if ([string]::IsNullOrWhiteSpace($backupPath)) {
         throw 'BLOCKED: SQL Server does not report an instance default backup path.'
     }
@@ -263,6 +299,7 @@ ORDER BY b.backup_finish_date DESC
     $loginCheck = Invoke-ScalarQuery -Connection $connection -Query "SELECT CASE WHEN SUSER_ID(N'$expectedAppLogin') IS NULL AND SUSER_ID(N'$expectedMigratorLogin') IS NULL THEN 1 ELSE 0 END"
     if ([int]$loginCheck -ne 1) { throw 'BLOCKED: A reserved DEMO SQL login already exists; inspect before retrying.' }
 
+    $script:GatePhase = 'bootstrap-validation'
     $sql = [IO.File]::ReadAllText($bootstrapPath)
     foreach ($required in @('CTIC-LP-054', 'SQLEXPRESS', 'CTIC_CMP_DEMO_2026', 'BOOTSTRAP_PASS_BACKUP_VERIFIED', 'RESTORE VERIFYONLY')) {
         if (-not $sql.Contains($required)) { throw "BLOCKED: Reviewed SQL bootstrap is missing required guard: $required" }
@@ -276,12 +313,16 @@ ORDER BY b.backup_finish_date DESC
         throw 'BLOCKED: SQL bootstrap may create only the two reserved least-privilege DEMO logins.'
     }
 
-    Write-Log 'APPLY_BEGIN reviewed guarded SQL will create only the absent sandbox and verify its backup.'
+    $script:GatePhase = 'credential-read'
     $script:DemoCredentials = Ensure-DemoCredentials
+    $script:GatePhase = 'bootstrap-execution'
+    Write-Log 'APPLY_BEGIN submitting guarded bootstrap; a failure from this point requires SQL state inspection.'
+    $script:SqlWriteAttempted = $true
     Invoke-ReaderQuery -Connection $connection -Query $sql -Parameters @{
         demoAppPassword = $script:DemoCredentials.appPassword
         demoMigratorPassword = $script:DemoCredentials.migratorPassword
     }
+    $script:GatePhase = 'post-bootstrap-verification'
     $backupInspection = @"
 SELECT TOP (1) b.backup_finish_date,b.type,b.is_copy_only,b.has_backup_checksums,mf.physical_device_name
 FROM msdb.dbo.backupset AS b
@@ -301,8 +342,8 @@ ORDER BY b.backup_finish_date DESC
     Write-Log "RESULT BOOTSTRAP_PASS_BACKUP_VERIFIED database=CTIC_CMP_DEMO_2026 backup_path=$script:VerifiedBackupPath"
 }
 catch {
-    Write-Log ('ERROR ' + $_.Exception.GetBaseException().Message)
-    throw
+    Write-GateFailure -Failure $_
+    exit 1
 }
 finally {
     if ($connection) { $connection.Dispose() }
