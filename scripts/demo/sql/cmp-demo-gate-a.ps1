@@ -100,8 +100,8 @@ function Ensure-DemoCredentials {
         $stored = Get-Content -LiteralPath $CredentialPath -Raw | ConvertFrom-Json
     }
     $ownerSid = if ($stored.ownerSid -match '^S-1-[0-9-]+$') { [string]$stored.ownerSid } else { $currentSid }
-    & icacls.exe $directory '/inheritance:r' '/grant:r' "*$($ownerSid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the external DEMO SQL credential folder ACL.' }
+    . (Join-Path $PSScriptRoot 'cmp-demo-credential-acl.ps1')
+    Set-CmpDemoCredentialAcl -DirectoryPath $directory -CredentialFilePath $CredentialPath -OwnerSid $ownerSid
     if (-not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
         $secrets = [ordered]@{
             schema = 'cmp-demo-sql-credentials/v1'
@@ -114,11 +114,16 @@ function Ensure-DemoCredentials {
         }
         $temporary = $CredentialPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
         [IO.File]::WriteAllText($temporary, ($secrets | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporary -Destination $CredentialPath -Force
+        try {
+            [IO.File]::Move($temporary, $CredentialPath)
+        }
+        catch {
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+            throw
+        }
         $stored = $secrets
     }
-    & icacls.exe $CredentialPath '/inheritance:r' '/grant:r' "*$($ownerSid):(F)" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the external DEMO SQL credential file ACL.' }
+    Set-CmpDemoCredentialAcl -DirectoryPath $directory -CredentialFilePath $CredentialPath -OwnerSid $ownerSid
     if ($stored.schema -ne 'cmp-demo-sql-credentials/v1' -or
         $stored.appLogin -ne $expectedAppLogin -or
         $stored.migratorLogin -ne $expectedMigratorLogin -or
@@ -136,6 +141,10 @@ function Get-IsElevated {
 }
 
 Write-Log "START mode=$(if ($Apply) { 'apply-requested' } else { 'inspect-only' }) log_path=$logPath"
+
+if ($Apply -and (Get-IsElevated) -and -not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
+    throw 'BLOCKED: Start RUN_CMP_DEMO_GATE_A.cmd from the signed-in regular Windows session; direct elevated launch would create credentials under the Administrator profile.'
+}
 
 if ($Apply -and -not (Get-IsElevated)) {
     $script:DemoCredentials = Ensure-DemoCredentials
@@ -258,8 +267,13 @@ ORDER BY b.backup_finish_date DESC
     foreach ($required in @('CTIC-LP-054', 'SQLEXPRESS', 'CTIC_CMP_DEMO_2026', 'BOOTSTRAP_PASS_BACKUP_VERIFIED', 'RESTORE VERIFYONLY')) {
         if (-not $sql.Contains($required)) { throw "BLOCKED: Reviewed SQL bootstrap is missing required guard: $required" }
     }
-    if ($sql -match '(?im)\b(?:DROP|TRUNCATE)\s+(?:DATABASE|TABLE)\b|\b(?:ALTER\s+SERVER\s+ROLE|CREATE\s+LOGIN|ALTER\s+LOGIN)\b') {
+    if ($sql -match '(?im)\b(?:DROP|TRUNCATE)\s+(?:DATABASE|TABLE)\b|\b(?:ALTER\s+SERVER\s+ROLE|ALTER\s+LOGIN)\b') {
         throw 'BLOCKED: SQL bootstrap contains an out-of-scope server or destructive database operation.'
+    }
+    $loginCreates = [regex]::Matches($sql, '(?im)\bCREATE\s+LOGIN\s+\[([^\]]+)\]') | ForEach-Object { $_.Groups[1].Value }
+    if (@($loginCreates | Where-Object { $_ -notin @($expectedAppLogin, $expectedMigratorLogin) }).Count -gt 0 -or
+        @($loginCreates | Sort-Object -Unique).Count -ne 2) {
+        throw 'BLOCKED: SQL bootstrap may create only the two reserved least-privilege DEMO logins.'
     }
 
     Write-Log 'APPLY_BEGIN reviewed guarded SQL will create only the absent sandbox and verify its backup.'
