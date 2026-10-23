@@ -156,4 +156,155 @@ if ($Apply -and -not (Get-IsElevated)) {
     Write-Log 'UAC_REQUEST opening Windows elevation prompt; credentials are not read or automated.'
     try {
         $child = Start-Process -FilePath $powershell -ArgumentList $argumentList -Verb RunAs -PassThru -Wait
-        Write-Log "EvëÍí¢G§²ÚîÆ­yÒ‚v6×ÖFVÖòÖ6ÂÒr²¶wV–EÓ£¤æWtwV–B‚’åFõ7G&–ær‚târ’¢GFW7Df–ÆRÒ¦ö–âÕF‚GFW7E&ö÷Bv7&VFVçF–Ç2çFW7Bæ§6öâp §G'’°¢æWrÔ—FVÒÔ—FVÕG—RF—&V7F÷'’ÕF‚GFW7E&ö÷BÂ÷WBÔçVÆÀ¢´”òäf–ÆUÓ£¥w&—FTÆÅFW‡B‚GFW7Df–ÆRÂw²'FW7B#¢&6ÂÖÖ&¶W"'ÒrÂµFW‡BåUDc„Væ6öF–æuÓ£¦æWr‚FfÇ6R’¢6WBÔ6×FVÖô7&VFVçF–Ä6ÂÔF—&V7F÷'•F‚GFW7E&ö÷BÔ7&VFVçF–Äf–ÆUF‚GFW7Df–ÆRÔ÷væW%6–BF÷væW%6–@ ¢F6öçFVçG2Ò´”òäf–ÆUÓ£¥&VDÆÅFW‡B‚GFW7Df–ÆR¢–b‚F6öçFVçG2ÖæRw²'FW7B#¢&6ÂÖÖ&¶W"'Òr’²F‡&÷ruF†R7&VF–ærv–æF÷w2W6W"6÷VÆBæ÷B&VBF†R&÷FV7FVBFW7Bf–ÆRârĞ ¢f÷&V6‚‚GF‚–â‚GFW7E&ö÷BÂGFW7Df–ÆR’’°¢F6ÂÒvWBÔ6ÂÔÆ—FW&ÅF‚GF€¢F7GVÅ6–G2Ò‚F6ÂävWD66W75'VÆW2‚GG'VRÂGG'VRÂµ6V7W&—G’å&–æ6—Âå6V7W&—G”–FVçF–f–W%Ò’Âf÷$V6‚Ôö&¦V7B²Eòä–FVçF—G•&VfW&Væ6RåfÇVRÒÂ6÷'BÔö&¦V7BÕVæ—VR¢G'VÆW2Ò‚F6ÂävWD66W75'VÆW2‚GG'VRÂGG'VRÂµ6V7W&—G’å&–æ6—Âå6V7W&—G”–FVçF–f–W%Ò’¢f÷&V6‚‚G6–B–âF7GVÅ6–G2’°¢–b‚G6–BÖæ÷F–âFÆÆ÷vVE6–G2’²F‡&÷r%VæW‡V7FVB7&VFVçF–Â4Â&–æ6—Ã¢G6–B"Ğ¢Ğ¢f÷&V6‚‚G6–B–âFÆÆ÷vVE6–G2’°¢–b‚G6–BÖæ÷F–âF7GVÅ6–G2’²F‡&÷r%&WV—&VB7&VFVçF–Â4Â&–æ6—Â—2Ö—76–æs¢G6–B"Ğ¢Ğ¢–b‚F6ÂävWD÷væW"…µ6V7W&—G’å&–æ6—Âå6V7W&—G”–FVçF–f–W%Ò’åfÇVRÖæRF÷væW%6–B’°¢F‡&÷ruF†R7&VFVçF–ÂF‚÷væW"FöW2æ÷BÖF6‚F†R÷&F–æ'’v–æF÷w266÷VçBâp¢Ğ¢f÷&V6‚‚G'VÆR–âG'VÆW2’°¢–b‚G'VÆRä66W746öçG&öÅG—RÖæRµ6V7W&—G’ä66W746öçG&öÂä66W746öçG&öÅG—UÓ£¤ÆÆ÷rÖ÷ ¢‚G'VÆRäf–ÆU7—7FVÕ&–v‡G2Ö&æBµ6V7W&—G’ä66W746öçG&öÂäf–ÆU7—7FVÕ&–v‡G5Ó£¤gVÆÄ6öçG&öÂ’ÖæRµ6V7W&—G’ä66W746öçG&öÂäf–ÆU7—7FVÕ&–v‡G5Ó£¤gVÆÄ6öçG&öÂ’°¢F‡&÷rt7&VFVçF–Â4ÂVçG'’—2æ÷BâW‡Æ–6—BgVÆÄ6öçG&öÂÆÆ÷rVçG'’âp¢Ğ¢Ğ¢Ğ ¢w&—FRÔ÷WGWBu53¢÷væW"6â&VBF†RFW7Bf–ÆS²4Â6öçF–ç2öæÇ’÷væW"4”BÂ5•5DTÒÂæBFÖ–æ—7G&F÷'2âp§Ğ¦f–æÆÇ’°¢–b…FW7BÕF‚ÔÆ—FW&ÅF‚GFW7E&ö÷B’°¢&VÖ÷fRÔ—FVÒÔÆ—FW&ÅF‚GFW7E&ö÷BÕ&V7W'6RÔf÷&6P¢Ğ§Ğ
+        Write-Log "ELEVATED_PROCESS_EXIT code=$($child.ExitCode)"
+        exit $child.ExitCode
+    }
+    catch {
+        Write-Log 'UAC_NOT_COMPLETED no elevated SQL process was started.'
+        throw
+    }
+}
+
+$connection = $null
+try {
+    if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
+        throw 'The reviewed SQL bootstrap file is missing.'
+    }
+
+    $connectionString = [System.Data.SqlClient.SqlConnectionStringBuilder]::new()
+    $connectionString.DataSource = 'lpc:.\SQLEXPRESS'
+    $connectionString.InitialCatalog = 'master'
+    $connectionString.IntegratedSecurity = $true
+    $connectionString.Encrypt = $false
+    $connectionString.TrustServerCertificate = $true
+    $connectionString.ConnectTimeout = 10
+    $connectionString.ApplicationName = 'CMP-Demo-Gate-A'
+    $connection = [System.Data.SqlClient.SqlConnection]::new($connectionString.ConnectionString)
+    $connection.Open()
+    $identityQuery = @"
+SELECT
+  SYSTEM_USER AS login_name,
+  ORIGINAL_LOGIN() AS original_login,
+  CONVERT(nvarchar(128), SERVERPROPERTY('MachineName')) AS sql_machine,
+  CONVERT(nvarchar(128), SERVERPROPERTY('InstanceName')) AS sql_instance,
+  DB_NAME() AS current_database,
+  IS_SRVROLEMEMBER(N'sysadmin') AS is_sysadmin,
+  DB_ID(N'$expectedDatabase') AS demo_database_id,
+  CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultBackupPath')) AS backup_path
+"@
+    $command = $connection.CreateCommand()
+    $command.CommandText = $identityQuery
+    $reader = $command.ExecuteReader()
+    if (-not $reader.Read()) { throw 'SQL identity query returned no row.' }
+    $login = [string]$reader['login_name']
+    $originalLogin = [string]$reader['original_login']
+    $machine = [string]$reader['sql_machine']
+    $instance = [string]$reader['sql_instance']
+    $currentDatabase = [string]$reader['current_database']
+    $isSysadmin = [int]$reader['is_sysadmin']
+    $demoDatabaseId = if ($reader.IsDBNull($reader.GetOrdinal('demo_database_id'))) { $null } else { [int]$reader['demo_database_id'] }
+    $backupPath = if ($reader.IsDBNull($reader.GetOrdinal('backup_path'))) { '' } else { [string]$reader['backup_path'] }
+    $reader.Dispose()
+    $command.Dispose()
+
+    Write-Log ('IDENTITY ' + (@{ login = $login; original_login = $originalLogin; machine = $machine; instance = $instance; current_database = $currentDatabase; is_sysadmin = $isSysadmin; demo_database_id = $demoDatabaseId; default_backup_path = $backupPath } | ConvertTo-Json -Compress))
+
+    if ($machine -ine $expectedMachine -or $instance -ine $expectedInstance -or $currentDatabase -ine 'master') {
+        throw 'BLOCKED: SQL machine, instance or current database does not match the approved target.'
+    }
+    if ($Apply -and ($login -ine $expectedLogin -or $originalLogin -ine $expectedLogin -or $isSysadmin -ne 1)) {
+        throw 'BLOCKED: Apply requires the verified CTIC-LP-054\Administrator SQL sysadmin session.'
+    }
+
+    if ($null -ne $demoDatabaseId) {
+        Write-Log 'SANDBOX_EXISTS inspect-only; CREATE DATABASE script will not be run.'
+        $inspection = @"
+SELECT d.name,d.state_desc,d.user_access_desc,d.is_read_only,d.create_date,
+       SUSER_SNAME(d.owner_sid) AS owner_login
+FROM sys.databases AS d
+WHERE d.name=N'$expectedDatabase'
+"@
+        Invoke-ReaderQuery -Connection $connection -Query $inspection
+        $databaseState = [string](Invoke-ScalarQuery -Connection $connection -Query "SELECT state_desc FROM sys.databases WHERE name=N'$expectedDatabase'")
+        if ($databaseState -ceq 'ONLINE') {
+            $roleInspection = @"
+SELECT r.name AS database_role,u.name AS member_name
+FROM [$expectedDatabase].sys.database_role_members AS m
+JOIN [$expectedDatabase].sys.database_principals AS r ON r.principal_id=m.role_principal_id
+JOIN [$expectedDatabase].sys.database_principals AS u ON u.principal_id=m.member_principal_id
+WHERE u.name IN (N'$expectedAppLogin',N'$expectedMigratorLogin')
+ORDER BY u.name,r.name
+"@
+            Invoke-ReaderQuery -Connection $connection -Query $roleInspection
+        }
+        else {
+            Write-Log "DATABASE_ROLE_INSPECTION_SKIPPED state=$databaseState"
+        }
+        $backupInspection = @"
+SELECT TOP (5) b.backup_finish_date,b.type,b.is_copy_only,b.has_backup_checksums,mf.physical_device_name
+FROM msdb.dbo.backupset AS b
+JOIN msdb.dbo.backupmediafamily AS mf ON mf.media_set_id=b.media_set_id
+WHERE b.database_name=N'$expectedDatabase' AND b.type=N'D'
+ORDER BY b.backup_finish_date DESC
+"@
+        Invoke-ReaderQuery -Connection $connection -Query $backupInspection
+        Write-Log 'RESULT PENDING_EXISTING_DATABASE_REQUIRES_REVIEW no database writes were made.'
+        exit 3
+    }
+
+    if (-not $Apply) {
+        Write-Log 'RESULT PREFLIGHT_PASS_TARGET_CONFIRMED database is absent; inspect-only mode made no writes.'
+        exit 0
+    }
+    if ([string]::IsNullOrWhiteSpace($backupPath)) {
+        throw 'BLOCKED: SQL Server does not report an instance default backup path.'
+    }
+
+    $loginCheck = Invoke-ScalarQuery -Connection $connection -Query "SELECT CASE WHEN SUSER_ID(N'$expectedAppLogin') IS NULL AND SUSER_ID(N'$expectedMigratorLogin') IS NULL THEN 1 ELSE 0 END"
+    if ([int]$loginCheck -ne 1) { throw 'BLOCKED: A reserved DEMO SQL login already exists; inspect before retrying.' }
+
+    $sql = [IO.File]::ReadAllText($bootstrapPath)
+    foreach ($required in @('CTIC-LP-054', 'SQLEXPRESS', 'CTIC_CMP_DEMO_2026', 'BOOTSTRAP_PASS_BACKUP_VERIFIED', 'RESTORE VERIFYONLY')) {
+        if (-not $sql.Contains($required)) { throw "BLOCKED: Reviewed SQL bootstrap is missing required guard: $required" }
+    }
+    if ($sql -match '(?im)\b(?:DROP|TRUNCATE)\s+(?:DATABASE|TABLE)\b|\b(?:ALTER\s+SERVER\s+ROLE|ALTER\s+LOGIN)\b') {
+        throw 'BLOCKED: SQL bootstrap contains an out-of-scope server or destructive database operation.'
+    }
+    $loginCreates = [regex]::Matches($sql, '(?im)\bCREATE\s+LOGIN\s+\[([^\]]+)\]') | ForEach-Object { $_.Groups[1].Value }
+    if (@($loginCreates | Where-Object { $_ -notin @($expectedAppLogin, $expectedMigratorLogin) }).Count -gt 0 -or
+        @($loginCreates | Sort-Object -Unique).Count -ne 2) {
+        throw 'BLOCKED: SQL bootstrap may create only the two reserved least-privilege DEMO logins.'
+    }
+
+    Write-Log 'APPLY_BEGIN reviewed guarded SQL will create only the absent sandbox and verify its backup.'
+    $script:DemoCredentials = Ensure-DemoCredentials
+    Invoke-ReaderQuery -Connection $connection -Query $sql -Parameters @{
+        demoAppPassword = $script:DemoCredentials.appPassword
+        demoMigratorPassword = $script:DemoCredentials.migratorPassword
+    }
+    $backupInspection = @"
+SELECT TOP (1) b.backup_finish_date,b.type,b.is_copy_only,b.has_backup_checksums,mf.physical_device_name
+FROM msdb.dbo.backupset AS b
+JOIN msdb.dbo.backupmediafamily AS mf ON mf.media_set_id=b.media_set_id
+WHERE b.database_name=N'$expectedDatabase' AND b.type=N'D'
+ORDER BY b.backup_finish_date DESC
+"@
+    Invoke-ReaderQuery -Connection $connection -Query $backupInspection
+    $state = Invoke-ScalarQuery -Connection $connection -Query "SELECT state_desc FROM sys.databases WHERE name=N'$expectedDatabase'"
+    if (
+        $script:VerifiedBootstrapStatus -cne 'BOOTSTRAP_PASS_BACKUP_VERIFIED' -or
+        [string]::IsNullOrWhiteSpace($script:VerifiedBackupPath) -or
+        [string]$state -cne 'ONLINE'
+    ) {
+        throw 'BLOCKED: The script did not return its verified-backup marker with an online demo database.'
+    }
+    Write-Log "RESULT BOOTSTRAP_PASS_BACKUP_VERIFIED database=CTIC_CMP_DEMO_2026 backup_path=$script:VerifiedBackupPath"
+}
+catch {
+    Write-Log ('ERROR ' + $_.Exception.GetBaseException().Message)
+    throw
+}
+finally {
+    if ($connection) { $connection.Dispose() }
+    Write-Log 'END'
+}
