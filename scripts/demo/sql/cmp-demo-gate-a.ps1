@@ -181,6 +181,10 @@ if ($Apply -and (Get-IsElevated) -and -not (Test-Path -LiteralPath $CredentialPa
     throw 'BLOCKED: Start RUN_CMP_DEMO_GATE_A.cmd from the signed-in regular Windows session; direct elevated launch would create credentials under the Administrator profile.'
 }
 
+if ($Apply -and (Get-IsElevated) -and -not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
+    throw 'BLOCKED: Start RUN_CMP_DEMO_GATE_A.cmd from the signed-in regular Windows session; direct elevated launch would create credentials under the Administrator profile.'
+}
+
 if ($Apply -and -not (Get-IsElevated)) {
     $script:GatePhase = 'credential-preparation'
     $script:DemoCredentials = Ensure-DemoCredentials
