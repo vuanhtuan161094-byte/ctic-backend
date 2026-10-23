@@ -9,6 +9,17 @@ $testFile = Join-Path $testRoot 'credentials.test.json'
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
     [IO.File]::WriteAllText($testFile, '{"test":"acl-marker"}', [Text.UTF8Encoding]::new($false))
+    # Seed an unwanted explicit account on an isolated temp directory/file.
+    # The helper must purge the extra DACL ACE while leaving owner unchanged.
+    $unwanted = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+    foreach ($path in @($testRoot, $testFile)) {
+        $item = if ($path -eq $testRoot) { [IO.DirectoryInfo]::new($path) } else { [IO.FileInfo]::new($path) }
+        $access = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+        $access.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $unwanted, [Security.AccessControl.FileSystemRights]::ReadData, [Security.AccessControl.AccessControlType]::Allow
+        ))
+        $item.SetAccessControl($access)
+    }
     Set-CmpDemoCredentialAcl -DirectoryPath $testRoot -CredentialFilePath $testFile -OwnerSid $ownerSid
 
     $contents = [IO.File]::ReadAllText($testFile)

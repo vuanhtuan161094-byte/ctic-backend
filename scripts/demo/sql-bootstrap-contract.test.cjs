@@ -43,8 +43,33 @@ assert.match(gate,/Set-CmpDemoCredentialAcl/);
 assert.match(gate,/direct elevated launch would create credentials under the Administrator profile/);
 assert.match(gate,/CREATE\\s\+LOGIN[\s\S]*?reserved least-privilege DEMO logins/);
 assert.match(acl,/SetAccessRuleProtection\(\$true,\s*\$false\)/);
+assert.match(acl,/GetAccessControl\(\[Security\.AccessControl\.AccessControlSections\]::Access\)/);
+assert.match(acl,/SetAccessControl\(\$acl\)/);
+assert.doesNotMatch(acl, /\bSet-Acl\s+-LiteralPath|\.SetOwner\(|\bSetAuditRule\(/i);
 assert.match(acl,/S-1-5-18/);
 assert.match(acl,/S-1-5-32-544/);
 assert.doesNotMatch(acl,/S-1-1-0|S-1-5-32-545|S-1-5-11/);
 assert.doesNotMatch(gate,/DATABASE_URL|password\s*=\s*['"]/i);
+});
+
+test('Windows PowerShell executes the production connection builder and safe failure reporting', {
+  skip: process.platform !== 'win32' ? 'Requires Windows PowerShell runtime evidence' : false,
+}, () => {
+  const result = require('node:child_process').spawnSync('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    path.join(__dirname, 'sql', 'test-cmp-demo-gate-runtime.ps1'),
+  ], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal((result.stdout.match(/^PASS:/gm) || []).length, 3, result.stdout);
+});
+
+test('SQL inspection is isolated from bootstrap, credentials and service mutations', () => {
+  const inspection = fs.readFileSync(path.join(__dirname, 'sql', 'inspect-cmp-demo-sql.ps1'), 'utf8');
+  assert.doesNotMatch(inspection, /\b(?:Start-Service|Restart-Service|Stop-Service|Set-Service|Set-ItemProperty|Invoke-Expression|Invoke-Sqlcmd)\b/i);
+  assert.doesNotMatch(inspection, /\b(?:CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|BACKUP|RESTORE)\s+(?:DATABASE|LOGIN|USER|TABLE|ROLE)|sql-credentials\.json|Ensure-DemoCredentials|01-bootstrap|cmp-demo-gate-a\.ps1/i);
+  assert.match(inspection, /if \(\$service\.State -ne 'Running'\)[\s\S]*?exit 3/);
+  assert.match(inspection, /IS_SRVROLEMEMBER\(N'sysadmin'\)=1/);
+  assert.equal((inspection.match(/(?:IDENTITY|DATABASE|LOGINS|BACKUPS) = "SELECT /g) || []).length, 4);
+  assert.match(inspection, /BLOCKED_METADATA_VISIBILITY/);
 });
