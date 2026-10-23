@@ -40,6 +40,7 @@ for(const x of [/CTIC-LP-054\\Administrator/,/CTIC-LP-054/,/SQLEXPRESS/,/CTIC_CM
 assert.match(launcher,/cmp-demo-gate-a\.ps1[\s\S]*?-Apply/);
 assert.match(launcher,/%LOCALAPPDATA%[\s\S]*?sql-credentials\.json/i);
 assert.match(gate,/Set-CmpDemoCredentialAcl/);
+assert.equal((gate.match(/if \(\$Apply -and \(Get-IsElevated\) -and -not \(Test-Path -LiteralPath \$CredentialPath -PathType Leaf\)\)/g) || []).length, 1);
 assert.match(gate,/direct elevated launch would create credentials under the Administrator profile/);
 assert.match(gate,/CREATE\\s\+LOGIN[\s\S]*?reserved least-privilege DEMO logins/);
 assert.match(acl,/SetAccessRuleProtection\(\$true,\s*\$false\)/);
