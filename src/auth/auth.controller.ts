@@ -1,7 +1,9 @@
 import {
     Body,
     Controller,
+    ForbiddenException,
     Get,
+    Headers,
     HttpException,
     Post,
     Req,
@@ -23,6 +25,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth/jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { DemoAdminBootstrapDto } from './dto/demo-admin-bootstrap.dto';
 import {
     PublicRegistrationGuard,
 } from '../security/public-registration.guard';
@@ -178,6 +181,25 @@ export class AuthController {
                 permissions: request.user?.permissions ?? [],
             },
         };
+    }
+
+    @Post('demo-bootstrap-admin')
+    @UseGuards(SecurityRateLimitGuard)
+    @SecurityRateLimit('login')
+    @ApiOperation({
+        summary: 'Thiết lập tài khoản quản trị đầu tiên cho CMP DEMO',
+        description: 'Chỉ hoạt động khi bật cờ DEMO riêng, có mã một lần và yêu cầu gọi từ loopback. Mã không được ghi vào log.',
+    })
+    async bootstrapDemoAdmin(
+        @Body() dto: DemoAdminBootstrapDto,
+        @Headers('x-cmp-demo-bootstrap-token') token: string | undefined,
+        @Req() request: SecurityRequest,
+    ) {
+        const remoteAddress = request.socket?.remoteAddress;
+        if (!remoteAddress) {
+            throw new ForbiddenException('Không xác định được địa chỉ kết nối cục bộ');
+        }
+        return this.authService.bootstrapDemoAdmin(dto, token, remoteAddress);
     }
 
     @Post('register')
