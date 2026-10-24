@@ -8,7 +8,7 @@ if not exist "%LAUNCHER%" (
   exit /b 2
 )
 pushd "%BACKEND%"
-node "%LAUNCHER%"
+node "%LAUNCHER%" --runtime-only
 set "RESULT=%ERRORLEVEL%"
 popd
 if not "%RESULT%"=="0" (
