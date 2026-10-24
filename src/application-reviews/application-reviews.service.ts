@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CertificationBodyCapabilitiesService } from '../certification-body-capabilities/certification-body-capabilities.service';
 import { SecurityAuditService } from '../security/security-audit.service';
 import { CreateApplicationReviewDto } from './dto/create-application-review.dto';
+import { CapabilityPrecheckDto } from './dto/capability-precheck.dto';
 import { ReviewApplicationReviewDto } from './dto/review-workflow-action.dto';
 import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 import { WorkItemsService } from '../work-items/work-items.service';
@@ -225,6 +226,16 @@ export class ApplicationReviewsService {
             },
             orderBy: { created_at: 'desc' },
         });
+    }
+
+    async precheckCapability(dto: CapabilityPrecheckDto) {
+        const scopes = dto.industry_scopes?.length
+            ? await this.validateIndustryScopes(dto.industry_scopes)
+            : null;
+        return this.certificationBodyCapabilities.evaluateSelection(
+            dto.standard_names.join(' + '),
+            scopes,
+        );
     }
 
     private async getAndValidateReviewer(reviewerId: string) {

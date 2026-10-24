@@ -2,6 +2,8 @@ import {
     Body,
     Controller,
     Get,
+    HttpCode,
+    HttpStatus,
     Param,
     ParseUUIDPipe,
     Patch,
@@ -29,6 +31,7 @@ import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { ApplicationReviewsService } from './application-reviews.service';
 import { CreateApplicationReviewDto } from './dto/create-application-review.dto';
+import { CapabilityPrecheckDto } from './dto/capability-precheck.dto';
 import { ReviewApplicationReviewDto } from './dto/review-workflow-action.dto';
 
 type AuthenticatedRequest = {
@@ -74,6 +77,19 @@ export class ApplicationReviewsController {
     @ApiOkResponse({ description: 'Danh sách kết quả xem xét hồ sơ' })
     findAll() {
         return this.applicationReviewsService.findAll();
+    }
+
+    @Post('capability-precheck')
+    @HttpCode(HttpStatus.OK)
+    @Roles('ADMIN', 'STAFF', 'COORDINATOR', 'AUDITOR', 'LEAD_AUDITOR', 'TECHNICAL_REVIEWER')
+    @Permissions('applications.read')
+    @ApiOperation({
+        summary: 'Đối chiếu năng lực tổ chức chứng nhận trước khi lưu bản xem xét',
+        description: 'Chỉ đọc cấu hình năng lực và phạm vi đang chọn; không tạo/cập nhật bản xem xét hoặc audit record.',
+    })
+    @ApiOkResponse({ description: 'Kết quả CAPABLE / REVIEW_REQUIRED / NOT_CAPABLE, không ghi dữ liệu' })
+    precheckCapability(@Body() dto: CapabilityPrecheckDto) {
+        return this.applicationReviewsService.precheckCapability(dto);
     }
 
     @Get(':id/capability-evaluation')

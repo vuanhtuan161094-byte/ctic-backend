@@ -94,6 +94,20 @@ function countManifestRecords(manifest) {
 
 function isCompleteManifest(manifest, runId = DEFAULT_RUN_ID) {
   if (manifest?.schema !== 'cmp-demo-workflow-manifest/v1' || manifest.runId !== runId || manifest.status !== 'complete' || manifest.cleanupPerformed !== false) return false;
+  const records = manifest.createdRecords;
+  if (!Array.isArray(records)) return false;
+  const recordKeys = new Set();
+  for (const record of records) {
+    if (!record || typeof record.type !== 'string' || typeof record.id !== 'string' || !record.id.trim()) return false;
+    const key = `${record.type}:${record.id}`;
+    if (recordKeys.has(key)) return false;
+    recordKeys.add(key);
+  }
+  for (const record of records) {
+    for (const dependency of record.dependencies ?? []) {
+      if (!recordKeys.has(`${dependency.type}:${dependency.id}`)) return false;
+    }
+  }
   const counts = countManifestRecords(manifest);
   return counts.admin_user === 1
     && counts.internal_user === 8
@@ -103,6 +117,44 @@ function isCompleteManifest(manifest, runId = DEFAULT_RUN_ID) {
     && counts.certification_application === 1
     && counts.application_site === 1
     && counts.work_item === 1;
+}
+
+function assertManifestRows(manifest, rowsByType) {
+  const records = Array.isArray(manifest?.createdRecords) ? manifest.createdRecords : [];
+  const recordsByKey = new Map(records.map((record) => [`${record.type}:${record.id}`, record]));
+  const manifestedIdsByType = new Map();
+  for (const record of records) {
+    const ids = manifestedIdsByType.get(record.type) ?? new Set();
+    ids.add(record.id);
+    manifestedIdsByType.set(record.type, ids);
+  }
+
+  const relationFields = {
+    customer_portal_access: { customer: 'customer_id', portal_user: 'user_id' },
+    certification_application: { customer: 'customer_id' },
+    application_site: { certification_application: 'application_id' },
+    work_item: { certification_application: 'entity_id' },
+  };
+
+  for (const record of records) {
+    const rows = rowsByType[record.type] ?? [];
+    const row = rows.find((candidate) => String(candidate.id).toLowerCase() === record.id.toLowerCase());
+    if (!row) throw new Error(`A manifested ${record.type} record is missing from SQL DEMO.`);
+    if (record.code && row.code !== record.code) {
+      throw new Error(`A manifested ${record.type} identity no longer matches its recorded code.`);
+    }
+
+    for (const dependency of record.dependencies ?? []) {
+      if (!recordsByKey.has(`${dependency.type}:${dependency.id}`)) {
+        throw new Error(`A manifested ${record.type} record has an unmanifested dependency.`);
+      }
+      const field = relationFields[record.type]?.[dependency.type];
+      if (field && String(row[field] ?? '').toLowerCase() !== dependency.id.toLowerCase()) {
+        throw new Error(`A manifested ${record.type} record no longer matches its original relationship.`);
+      }
+    }
+  }
+  return true;
 }
 
 function findListeningPid(port, netstatOutput) {
@@ -216,26 +268,40 @@ async function verifyDemoData(connectionUrl, manifest) {
         (SELECT COUNT_BIG(*) FROM work_items) AS work_items,
         (SELECT COUNT_BIG(*) FROM audit_logs) AS audit_logs
     `)[0];
-    const app = (await prisma.$queryRaw`
-      SELECT id, application_code, status FROM certification_applications WHERE application_code='APP-2026-0001'
-    `)[0];
-    if (!app) throw new Error('The manifested application is missing from SQL DEMO.');
-    const work = (await prisma.$queryRaw`
-      SELECT status, assigned_role FROM work_items WHERE entity_id=${app.id}
-    `)[0];
+    if (!isCompleteManifest(manifest)) throw new Error('The protected DEMO manifest is incomplete or has invalid record references.');
+    const records = manifest.createdRecords;
+    const idsFor = (type) => records.filter((record) => record.type === type).map((record) => record.id);
+    const readByIds = async (delegate, ids, select) => ids.length
+      ? delegate.findMany({ where: { id: { in: [...new Set(ids)] } }, select })
+      : [];
+    const userRows = await readByIds(prisma.users, [...idsFor('admin_user'), ...idsFor('internal_user'), ...idsFor('portal_user')], { id: true, username: true, email: true });
+    const customerRows = await readByIds(prisma.customers, idsFor('customer'), { id: true, customer_code: true });
+    const accessRows = await readByIds(prisma.customer_user_access, idsFor('customer_portal_access'), { id: true, customer_id: true, user_id: true });
+    const applicationRows = await readByIds(prisma.certification_applications, idsFor('certification_application'), { id: true, application_code: true, customer_id: true, status: true });
+    const applicationSiteRows = await readByIds(prisma.certification_application_sites, idsFor('application_site'), { id: true, application_id: true, site_no: true });
+    const workItemRows = await readByIds(prisma.work_items, idsFor('work_item'), { id: true, source_key: true, entity_id: true, status: true, assigned_role: true });
+    assertManifestRows(manifest, {
+      admin_user: userRows.map((row) => ({ ...row, code: row.username })),
+      internal_user: userRows.map((row) => ({ ...row, code: row.username })),
+      portal_user: userRows.map((row) => ({ ...row, code: row.email })),
+      customer: customerRows.map((row) => ({ ...row, code: row.customer_code })),
+      customer_portal_access: accessRows,
+      certification_application: applicationRows.map((row) => ({ ...row, code: row.application_code })),
+      application_site: applicationSiteRows.map((row) => ({ ...row, code: `site-${row.site_no}` })),
+      work_item: workItemRows.map((row) => ({ ...row, code: row.source_key })),
+    });
+
     const manifestCounts = countManifestRecords(manifest);
     const count = (value) => Number(value);
-    if (count(counts.customers) !== manifestCounts.customer
-      || count(counts.portal_access) !== manifestCounts.customer_portal_access
-      || count(counts.users) !== 29 || count(counts.applications) !== 1
-      || count(counts.work_items) !== 1 || count(counts.audit_logs) < 1
-      || app.status !== 'submitted' || work?.status !== 'OPEN' || work?.assigned_role !== 'COORDINATOR') {
-      throw new Error('Read-only SQL counts or workflow status do not match the completed DEMO manifest.');
-    }
+    const app = applicationRows.find((row) => row.id === records.find((record) => record.type === 'certification_application')?.id);
+    const work = workItemRows.find((row) => row.id === records.find((record) => record.type === 'work_item')?.id);
     return {
       customers: count(counts.customers), portalAccess: count(counts.portal_access), users: count(counts.users),
       applications: count(counts.applications), workItems: count(counts.work_items), auditLogs: count(counts.audit_logs),
-      applicationCode: app.application_code, applicationStatus: app.status, intakeStatus: work.status, assignedRole: work.assigned_role,
+      manifestedCustomers: manifestCounts.customer, manifestedApplications: manifestCounts.certification_application,
+      manifestedWorkItems: manifestCounts.work_item,
+      applicationCode: app?.application_code ?? null, applicationStatus: app?.status ?? null,
+      intakeStatus: work?.status ?? null, assignedRole: work?.assigned_role ?? null,
     };
   } finally {
     await prisma.$disconnect();
@@ -409,4 +475,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { assertLocalSqlEndpoint, buildDemoDatabaseUrl, countManifestRecords, dataRoot, findGateAProof, findListeningPid, isCompleteManifest, loadSqlCredentials, parseGateAProof, readRuntimeMarker, writeRuntimeMarker };
+module.exports = { assertLocalSqlEndpoint, assertManifestRows, buildDemoDatabaseUrl, countManifestRecords, dataRoot, findGateAProof, findListeningPid, isCompleteManifest, loadSqlCredentials, parseGateAProof, readRuntimeMarker, writeRuntimeMarker };

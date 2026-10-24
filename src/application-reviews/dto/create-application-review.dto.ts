@@ -21,7 +21,7 @@ import {
 
 import { ApplicationReviewItemDto } from './application-review-item.dto';
 
-class IndustryScopeDto {
+export class IndustryScopeDto {
     @IsUUID()
     isic_code_id!: string;
 

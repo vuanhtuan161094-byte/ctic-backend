@@ -60,12 +60,14 @@ test('SQL client uses the existing local endpoint without changing the SQL liste
 
 test('runtime-only manifest guard requires the complete manifested DEMO setup', () => {
   const records = [
-    { type: 'admin_user' },
-    ...Array.from({ length: 8 }, () => ({ type: 'internal_user' })),
-    ...Array.from({ length: 20 }, () => ({ type: 'customer' })),
-    ...Array.from({ length: 20 }, () => ({ type: 'portal_user' })),
-    ...Array.from({ length: 20 }, () => ({ type: 'customer_portal_access' })),
-    { type: 'certification_application' }, { type: 'application_site' }, { type: 'work_item' },
+    { type: 'admin_user', id: 'admin-1', code: 'admin' },
+    ...Array.from({ length: 8 }, (_, index) => ({ type: 'internal_user', id: `staff-${index + 1}`, code: `staff-${index + 1}` })),
+    ...Array.from({ length: 20 }, (_, index) => ({ type: 'customer', id: `customer-${index + 1}`, code: `customer-${index + 1}` })),
+    ...Array.from({ length: 20 }, (_, index) => ({ type: 'portal_user', id: `portal-${index + 1}`, code: `portal-${index + 1}`, dependencies: [{ type: 'customer', id: `customer-${index + 1}` }] })),
+    ...Array.from({ length: 20 }, (_, index) => ({ type: 'customer_portal_access', id: `access-${index + 1}`, dependencies: [{ type: 'customer', id: `customer-${index + 1}` }, { type: 'portal_user', id: `portal-${index + 1}` }] })),
+    { type: 'certification_application', id: 'application-1', code: 'APP-2026-0001', dependencies: [{ type: 'customer', id: 'customer-1' }, { type: 'portal_user', id: 'portal-1' }] },
+    { type: 'application_site', id: 'site-1', code: 'site-1', dependencies: [{ type: 'certification_application', id: 'application-1' }] },
+    { type: 'work_item', id: 'work-1', code: 'work-1', dependencies: [{ type: 'certification_application', id: 'application-1' }] },
   ];
   const manifest = { schema: 'cmp-demo-workflow-manifest/v1', runId: 'CMP-DEMO-20261023-A', status: 'complete', cleanupPerformed: false, createdRecords: records };
   assert.equal(launcher.isCompleteManifest(manifest), true);
@@ -74,6 +76,59 @@ test('runtime-only manifest guard requires the complete manifested DEMO setup', 
   assert.equal(launcher.isCompleteManifest({ ...manifest, runId: 'another-run' }), false);
   assert.equal(launcher.isCompleteManifest({ ...manifest, createdRecords: records.filter((record) => record.type !== 'work_item') }), false);
   assert.equal(launcher.isCompleteManifest({ ...manifest, cleanupPerformed: true }), false);
+  assert.equal(launcher.isCompleteManifest({ ...manifest, createdRecords: [...records, records[0]] }), false);
+});
+
+function manifestedSqlRows(manifest) {
+  const rows = {
+    admin_user: [], internal_user: [], portal_user: [], customer: [], customer_portal_access: [],
+    certification_application: [], application_site: [], work_item: [],
+  };
+  for (const record of manifest.createdRecords) {
+    const deps = Object.fromEntries((record.dependencies ?? []).map((dependency) => [dependency.type, dependency.id]));
+    const common = { id: record.id, ...(record.code ? { code: record.code } : {}) };
+    if (record.type === 'customer') rows.customer.push({ ...common });
+    else if (['admin_user', 'internal_user', 'portal_user'].includes(record.type)) rows[record.type].push({ ...common });
+    else if (record.type === 'customer_portal_access') rows.customer_portal_access.push({ ...common, customer_id: deps.customer, user_id: deps.portal_user });
+    else if (record.type === 'certification_application') rows.certification_application.push({ ...common, customer_id: deps.customer, status: 'accepted' });
+    else if (record.type === 'application_site') rows.application_site.push({ ...common, application_id: deps.certification_application });
+    else if (record.type === 'work_item') rows.work_item.push({ ...common, entity_id: deps.certification_application, status: 'DONE', assigned_role: 'TECHNICAL_REVIEWER' });
+  }
+  return rows;
+}
+
+test('read-only launcher verification accepts legitimate growth and progressed manifested records', () => {
+  const records = [
+    { type: 'admin_user', id: 'admin-1', code: 'admin' },
+    ...Array.from({ length: 8 }, (_, index) => ({ type: 'internal_user', id: `staff-${index + 1}`, code: `staff-${index + 1}` })),
+    ...Array.from({ length: 20 }, (_, index) => ({ type: 'customer', id: `customer-${index + 1}`, code: `customer-${index + 1}` })),
+    ...Array.from({ length: 20 }, (_, index) => ({ type: 'portal_user', id: `portal-${index + 1}`, code: `portal-${index + 1}`, dependencies: [{ type: 'customer', id: `customer-${index + 1}` }] })),
+    ...Array.from({ length: 20 }, (_, index) => ({ type: 'customer_portal_access', id: `access-${index + 1}`, dependencies: [{ type: 'customer', id: `customer-${index + 1}` }, { type: 'portal_user', id: `portal-${index + 1}` }] })),
+    { type: 'certification_application', id: 'application-1', code: 'APP-2026-0001', dependencies: [{ type: 'customer', id: 'customer-1' }, { type: 'portal_user', id: 'portal-1' }] },
+    { type: 'application_site', id: 'site-1', code: 'site-1', dependencies: [{ type: 'certification_application', id: 'application-1' }] },
+    { type: 'work_item', id: 'work-1', code: 'work-1', dependencies: [{ type: 'certification_application', id: 'application-1' }] },
+  ];
+  const manifest = { schema: 'cmp-demo-workflow-manifest/v1', runId: 'CMP-DEMO-20261023-A', status: 'complete', cleanupPerformed: false, createdRecords: records };
+  const rows = manifestedSqlRows(manifest);
+  rows.certification_application.push({ id: 'application-extra-1', code: 'APP-2026-0002', customer_id: 'customer-2', status: 'submitted' });
+  for (let index = 0; index < 40; index += 1) rows.work_item.push({ id: `work-extra-${index + 1}`, code: `work-extra-${index + 1}`, entity_id: 'application-1', status: 'OPEN', assigned_role: 'COORDINATOR' });
+  assert.equal(launcher.assertManifestRows(manifest, rows), true);
+});
+
+test('read-only launcher verification fails when an original manifest row is missing or relinked', () => {
+  const records = [
+    { type: 'customer', id: 'customer-1', code: 'customer-1' },
+    { type: 'portal_user', id: 'portal-1', code: 'portal-1', dependencies: [{ type: 'customer', id: 'customer-1' }] },
+    { type: 'customer_portal_access', id: 'access-1', dependencies: [{ type: 'customer', id: 'customer-1' }, { type: 'portal_user', id: 'portal-1' }] },
+    { type: 'certification_application', id: 'application-1', code: 'APP-2026-0001', dependencies: [{ type: 'customer', id: 'customer-1' }, { type: 'portal_user', id: 'portal-1' }] },
+    { type: 'application_site', id: 'site-1', code: 'site-1', dependencies: [{ type: 'certification_application', id: 'application-1' }] },
+    { type: 'work_item', id: 'work-1', code: 'work-1', dependencies: [{ type: 'certification_application', id: 'application-1' }] },
+  ];
+  const manifest = { createdRecords: records };
+  const rows = manifestedSqlRows(manifest);
+  assert.throws(() => launcher.assertManifestRows(manifest, { ...rows, customer: [] }), /manifested customer record is missing/);
+  const relinked = { ...rows, customer_portal_access: [{ ...rows.customer_portal_access[0], customer_id: 'customer-2' }] };
+  assert.throws(() => launcher.assertManifestRows(manifest, relinked), /relationship/);
 });
 
 test('runtime service reuse is grounded by the actual listening PID', () => {

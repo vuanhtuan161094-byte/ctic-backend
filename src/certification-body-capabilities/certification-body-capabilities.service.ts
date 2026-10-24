@@ -370,27 +370,21 @@ export class CertificationBodyCapabilitiesService {
         );
     }
 
-    async evaluateReview(reviewId: string, at = new Date()): Promise<CapabilityEvaluation> {
-        const review = await this.prisma.application_reviews.findUnique({
-            where: { id: reviewId },
-            include: {
-                certification_applications: { select: { standard_name: true } },
-            },
-        });
-        if (!review) throw new NotFoundException('Không tìm thấy bản xem xét đăng ký');
-
-        const programs = this.requestedPrograms(review.certification_applications.standard_name.toUpperCase());
-        const scopes = this.parseScopes(review.industry_scopes_json);
+    async evaluateSelection(
+        standardName: string,
+        scopes: IndustryScope[] | null,
+        at = new Date(),
+    ): Promise<Omit<CapabilityEvaluation, 'review_id'>> {
+        const programs = this.requestedPrograms(standardName.toUpperCase());
         const items: CapabilityEvaluationItem[] = [];
 
         if (!programs.length || !scopes?.length) {
             return {
-                review_id: reviewId,
                 evaluated_at: at,
                 overall_result: 'REVIEW_REQUIRED',
                 items: [{
                     program_code: programs[0]?.code ?? 'UNRESOLVED',
-                    program_name: programs[0]?.name ?? review.certification_applications.standard_name,
+                    program_name: programs[0]?.name ?? standardName,
                     iaf_code: null,
                     result: 'REVIEW_REQUIRED',
                     reason: 'Chưa có đầy đủ phân loại ISIC → NACE → IAF cho phạm vi đăng ký',
@@ -501,7 +495,25 @@ export class CertificationBodyCapabilitiesService {
                 : items.length
                     ? 'CAPABLE'
                     : 'REVIEW_REQUIRED';
-        return { review_id: reviewId, evaluated_at: at, overall_result: overall, items };
+        return { evaluated_at: at, overall_result: overall, items };
+    }
+
+    async evaluateReview(reviewId: string, at = new Date()): Promise<CapabilityEvaluation> {
+        const review = await this.prisma.application_reviews.findUnique({
+            where: { id: reviewId },
+            include: {
+                certification_applications: { select: { standard_name: true } },
+            },
+        });
+        if (!review) throw new NotFoundException('Không tìm thấy bản xem xét đăng ký');
+        return {
+            review_id: reviewId,
+            ...await this.evaluateSelection(
+                review.certification_applications.standard_name,
+                this.parseScopes(review.industry_scopes_json),
+                at,
+            ),
+        };
     }
 
     snapshotData(

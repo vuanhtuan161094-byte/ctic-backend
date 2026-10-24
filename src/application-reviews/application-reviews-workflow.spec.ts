@@ -60,6 +60,11 @@ function createHarness() {
     };
     const capabilities = {
         evaluateReview: jest.fn(),
+        evaluateSelection: jest.fn().mockResolvedValue({
+            evaluated_at: new Date('2026-10-24T00:00:00.000Z'),
+            overall_result: 'CAPABLE',
+            items: [],
+        }),
         snapshotData: jest.fn().mockReturnValue([{
             review_id: 'review-1', program_code: 'ISO_9001', program_name: 'ISO 9001',
             iaf_code: '14', result: 'CAPABLE', evaluated_by: reviewer.id, approval_version: 1,
@@ -108,6 +113,21 @@ describe('ApplicationReviewsService one-reviewer workflow', () => {
         const validate = (service as any).validateIndustryScopes as jest.Mock;
         await expect(service.findAll()).resolves.toBe(historical);
         expect(validate).not.toHaveBeenCalled();
+    });
+
+    it('checks selected organization capability without creating or changing a review', async () => {
+        const { service, prisma, capabilities, tx, audit } = createHarness();
+        const result = await service.precheckCapability({
+            standard_names: ['ISO 9001:2015'],
+            industry_scopes: completePayload.industry_scopes,
+        });
+        expect(result).toEqual(expect.objectContaining({ overall_result: 'CAPABLE' }));
+        expect(capabilities.evaluateSelection).toHaveBeenCalledWith('ISO 9001:2015', [normalizedScope]);
+        expect(prisma.certification_applications.findUnique).not.toHaveBeenCalled();
+        expect(tx.application_reviews.upsert).not.toHaveBeenCalled();
+        expect(tx.application_reviews.update).not.toHaveBeenCalled();
+        expect(tx.application_review_actions.create).not.toHaveBeenCalled();
+        expect(audit.write).not.toHaveBeenCalled();
     });
 
     it('persists EMS and OH&S risk selections so reopening the review does not lose them', async () => {
