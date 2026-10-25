@@ -701,6 +701,7 @@ async function main(argv = process.argv.slice(2)) {
 if (require.main === module) void main();
 
 module.exports = {
+  appendRecord,
   buildCleanupDryRun,
   buildWorkflowPlan,
   customerInputs,
@@ -708,6 +709,7 @@ module.exports = {
   defaultManifestPath,
   main,
   makeOrganizationProfile,
+  newManifest,
   parseArguments,
   requireLoopbackApi,
   runWorkflow,

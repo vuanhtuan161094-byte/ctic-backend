@@ -92,6 +92,40 @@ function countManifestRecords(manifest) {
   }, {});
 }
 
+const VERIFICATION_PHASES = new Set(['manifest_validation', 'aggregate_read', 'row_read', 'manifest_rows']);
+const VERIFICATION_CATEGORIES = new Set([
+  'invalid_manifest', 'database_read_error', 'manifest_record_missing', 'manifest_identity_mismatch',
+  'unmanifested_dependency', 'relationship_mismatch', 'configuration_scheme_mismatch', 'verification_error',
+]);
+const VERIFICATION_RECORD_TYPES = new Set([
+  'admin_user', 'internal_user', 'portal_user', 'customer', 'customer_portal_access',
+  'certification_scheme', 'standard_edition', 'scheme_configuration',
+  'certification_application', 'application_site', 'work_item',
+]);
+
+function verificationError(category, phase, message, recordType = null) {
+  const error = new Error(message);
+  error.verification = { category, phase, recordType };
+  return error;
+}
+
+function safeVerificationDiagnostic(error) {
+  const metadata = error?.verification ?? {};
+  const databaseCode = typeof error?.code === 'string' && /^P\d{4}$/.test(error.code) ? error.code : null;
+  return {
+    at: new Date().toISOString(),
+    event: 'read_only_verification_failure',
+    phase: VERIFICATION_PHASES.has(metadata.phase) ? metadata.phase : 'manifest_rows',
+    category: VERIFICATION_CATEGORIES.has(metadata.category) ? metadata.category : 'verification_error',
+    ...(VERIFICATION_RECORD_TYPES.has(metadata.recordType) ? { recordType: metadata.recordType } : {}),
+    ...(databaseCode ? { prismaCode: databaseCode } : {}),
+  };
+}
+
+function appendVerificationDiagnostic(filePath, error) {
+  fs.appendFileSync(filePath, `${JSON.stringify(safeVerificationDiagnostic(error))}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
 function isCompleteManifest(manifest, runId = DEFAULT_RUN_ID) {
   if (manifest?.schema !== 'cmp-demo-workflow-manifest/v1' || manifest.runId !== runId || manifest.status !== 'complete' || manifest.cleanupPerformed !== false) return false;
   const records = manifest.createdRecords;
@@ -114,6 +148,9 @@ function isCompleteManifest(manifest, runId = DEFAULT_RUN_ID) {
     && counts.customer === 20
     && counts.portal_user === 20
     && counts.customer_portal_access === 20
+    && counts.certification_scheme === 1
+    && counts.standard_edition === 1
+    && counts.scheme_configuration === 1
     && counts.certification_application === 1
     && counts.application_site === 1
     && counts.work_item === 1;
@@ -122,35 +159,59 @@ function isCompleteManifest(manifest, runId = DEFAULT_RUN_ID) {
 function assertManifestRows(manifest, rowsByType) {
   const records = Array.isArray(manifest?.createdRecords) ? manifest.createdRecords : [];
   const recordsByKey = new Map(records.map((record) => [`${record.type}:${record.id}`, record]));
-  const manifestedIdsByType = new Map();
-  for (const record of records) {
-    const ids = manifestedIdsByType.get(record.type) ?? new Set();
-    ids.add(record.id);
-    manifestedIdsByType.set(record.type, ids);
-  }
-
   const relationFields = {
     customer_portal_access: { customer: 'customer_id', portal_user: 'user_id' },
+    standard_edition: { certification_scheme: 'scheme_id' },
+    scheme_configuration: { certification_scheme: 'scheme_id' },
     certification_application: { customer: 'customer_id' },
     application_site: { certification_application: 'application_id' },
     work_item: { certification_application: 'entity_id' },
   };
 
+  const rowFor = (type, id) => (rowsByType[type] ?? []).find((candidate) => String(candidate.id).toLowerCase() === String(id).toLowerCase());
+
+  for (const record of records.filter((candidate) => ['standard_edition', 'scheme_configuration'].includes(candidate.type))) {
+    const dependencies = record.dependencies ?? [];
+    const schemeDependency = dependencies.find((dependency) => dependency.type === 'certification_scheme');
+    const editionDependency = record.type === 'scheme_configuration'
+      ? dependencies.find((dependency) => dependency.type === 'standard_edition')
+      : null;
+    if (!record.code || !schemeDependency || (record.type === 'scheme_configuration' && !editionDependency)) {
+      throw verificationError('invalid_manifest', 'manifest_rows', 'A manifested standard configuration is missing a required identity or dependency.', record.type);
+    }
+    if (record.type === 'scheme_configuration') {
+      const configuration = rowFor('scheme_configuration', record.id);
+      const edition = rowFor('standard_edition', editionDependency.id);
+      if (configuration && edition && String(configuration.scheme_id ?? '').toLowerCase() !== String(edition.scheme_id ?? '').toLowerCase()) {
+        throw verificationError('configuration_scheme_mismatch', 'manifest_rows', 'A manifested scheme configuration and standard edition no longer belong to the same certification scheme.', 'scheme_configuration');
+      }
+    }
+  }
+
+  for (const record of records.filter((candidate) => candidate.type === 'certification_scheme')) {
+    if (!record.code) throw verificationError('invalid_manifest', 'manifest_rows', 'A manifested certification scheme is missing its recorded code.', 'certification_scheme');
+  }
+
   for (const record of records) {
-    const rows = rowsByType[record.type] ?? [];
-    const row = rows.find((candidate) => String(candidate.id).toLowerCase() === record.id.toLowerCase());
-    if (!row) throw new Error(`A manifested ${record.type} record is missing from SQL DEMO.`);
+    const row = rowFor(record.type, record.id);
+    if (!row) throw verificationError('manifest_record_missing', 'manifest_rows', `A manifested ${record.type} record is missing from SQL DEMO.`, record.type);
     if (record.code && row.code !== record.code) {
-      throw new Error(`A manifested ${record.type} identity no longer matches its recorded code.`);
+      throw verificationError('manifest_identity_mismatch', 'manifest_rows', `A manifested ${record.type} identity no longer matches its recorded code.`, record.type);
+    }
+    if (record.type === 'standard_edition' && record.code?.includes(':')) {
+      const expectedEdition = record.code.slice(record.code.lastIndexOf(':') + 1);
+      if (String(row.edition) !== expectedEdition) {
+        throw verificationError('manifest_identity_mismatch', 'manifest_rows', 'A manifested standard edition no longer matches its recorded edition.', record.type);
+      }
     }
 
     for (const dependency of record.dependencies ?? []) {
       if (!recordsByKey.has(`${dependency.type}:${dependency.id}`)) {
-        throw new Error(`A manifested ${record.type} record has an unmanifested dependency.`);
+        throw verificationError('unmanifested_dependency', 'manifest_rows', `A manifested ${record.type} record has an unmanifested dependency.`, record.type);
       }
       const field = relationFields[record.type]?.[dependency.type];
       if (field && String(row[field] ?? '').toLowerCase() !== dependency.id.toLowerCase()) {
-        throw new Error(`A manifested ${record.type} record no longer matches its original relationship.`);
+        throw verificationError('relationship_mismatch', 'manifest_rows', `A manifested ${record.type} record no longer matches its original relationship.`, record.type);
       }
     }
   }
@@ -254,12 +315,13 @@ async function verifySqlIdentity(connectionUrl) {
   }
 }
 
-async function verifyDemoData(connectionUrl, manifest) {
-  const { PrismaMssql } = require('@prisma/adapter-mssql');
-  const { PrismaClient } = require('@prisma/client');
-  const prisma = new PrismaClient({ adapter: new PrismaMssql(connectionUrl) });
+async function verifyDemoDataWithClient(prisma, manifest) {
+  if (!isCompleteManifest(manifest)) {
+    throw verificationError('invalid_manifest', 'manifest_validation', 'The protected DEMO manifest is incomplete or has invalid record references.');
+  }
+  let counts;
   try {
-    const counts = (await prisma.$queryRaw`
+    counts = (await prisma.$queryRaw`
       SELECT
         (SELECT COUNT_BIG(*) FROM customers) AS customers,
         (SELECT COUNT_BIG(*) FROM customer_user_access) AS portal_access,
@@ -268,41 +330,78 @@ async function verifyDemoData(connectionUrl, manifest) {
         (SELECT COUNT_BIG(*) FROM work_items) AS work_items,
         (SELECT COUNT_BIG(*) FROM audit_logs) AS audit_logs
     `)[0];
-    if (!isCompleteManifest(manifest)) throw new Error('The protected DEMO manifest is incomplete or has invalid record references.');
-    const records = manifest.createdRecords;
-    const idsFor = (type) => records.filter((record) => record.type === type).map((record) => record.id);
-    const readByIds = async (delegate, ids, select) => ids.length
-      ? delegate.findMany({ where: { id: { in: [...new Set(ids)] } }, select })
-      : [];
-    const userRows = await readByIds(prisma.users, [...idsFor('admin_user'), ...idsFor('internal_user'), ...idsFor('portal_user')], { id: true, username: true, email: true });
-    const customerRows = await readByIds(prisma.customers, idsFor('customer'), { id: true, customer_code: true });
-    const accessRows = await readByIds(prisma.customer_user_access, idsFor('customer_portal_access'), { id: true, customer_id: true, user_id: true });
-    const applicationRows = await readByIds(prisma.certification_applications, idsFor('certification_application'), { id: true, application_code: true, customer_id: true, status: true });
-    const applicationSiteRows = await readByIds(prisma.certification_application_sites, idsFor('application_site'), { id: true, application_id: true, site_no: true });
-    const workItemRows = await readByIds(prisma.work_items, idsFor('work_item'), { id: true, source_key: true, entity_id: true, status: true, assigned_role: true });
+  } catch (error) {
+    const failure = verificationError('database_read_error', 'aggregate_read', 'Read-only DEMO aggregate query failed.');
+    if (typeof error?.code === 'string' && /^P\d{4}$/.test(error.code)) failure.code = error.code;
+    throw failure;
+  }
+  if (!counts || ['customers', 'portal_access', 'users', 'applications', 'work_items', 'audit_logs'].some((field) => counts[field] === null || counts[field] === undefined)) {
+    throw verificationError('database_read_error', 'aggregate_read', 'Read-only DEMO aggregate query returned an incomplete result.');
+  }
+  const records = manifest.createdRecords;
+  const idsFor = (type) => records.filter((record) => record.type === type).map((record) => record.id);
+  const readByIds = async (type, delegate, ids, select) => {
+    if (!ids.length) return [];
+    try {
+      return await delegate.findMany({ where: { id: { in: [...new Set(ids)] } }, select });
+    } catch (error) {
+      const failure = verificationError('database_read_error', 'row_read', `Read-only ${type} lookup failed.`, type);
+      if (typeof error?.code === 'string' && /^P\d{4}$/.test(error.code)) failure.code = error.code;
+      throw failure;
+    }
+  };
+  const userRows = await readByIds('admin_user', prisma.users, [...idsFor('admin_user'), ...idsFor('internal_user'), ...idsFor('portal_user')], { id: true, username: true, email: true });
+  const customerRows = await readByIds('customer', prisma.customers, idsFor('customer'), { id: true, customer_code: true });
+  const accessRows = await readByIds('customer_portal_access', prisma.customer_user_access, idsFor('customer_portal_access'), { id: true, customer_id: true, user_id: true });
+  const schemeRows = await readByIds('certification_scheme', prisma.certification_schemes, idsFor('certification_scheme'), { id: true, code: true });
+  const standardEditionRows = await readByIds('standard_edition', prisma.standard_editions, idsFor('standard_edition'), { id: true, scheme_id: true, standard_code: true, edition: true });
+  const schemeConfigurationRows = await readByIds('scheme_configuration', prisma.scheme_configuration_versions, idsFor('scheme_configuration'), { id: true, scheme_id: true, version_no: true });
+  const applicationRows = await readByIds('certification_application', prisma.certification_applications, idsFor('certification_application'), { id: true, application_code: true, customer_id: true, status: true });
+  const applicationSiteRows = await readByIds('application_site', prisma.certification_application_sites, idsFor('application_site'), { id: true, application_id: true, site_no: true });
+  const workItemRows = await readByIds('work_item', prisma.work_items, idsFor('work_item'), { id: true, source_key: true, entity_id: true, status: true, assigned_role: true });
+  const schemeCodeById = new Map(schemeRows.map((row) => [String(row.id).toLowerCase(), row.code]));
+  try {
     assertManifestRows(manifest, {
       admin_user: userRows.map((row) => ({ ...row, code: row.username })),
       internal_user: userRows.map((row) => ({ ...row, code: row.username })),
       portal_user: userRows.map((row) => ({ ...row, code: row.email })),
       customer: customerRows.map((row) => ({ ...row, code: row.customer_code })),
       customer_portal_access: accessRows,
+      certification_scheme: schemeRows.map((row) => ({ ...row, code: row.code })),
+      standard_edition: standardEditionRows.map((row) => ({ ...row, code: row.standard_code })),
+      scheme_configuration: schemeConfigurationRows.map((row) => ({
+        ...row,
+        code: `${schemeCodeById.get(String(row.scheme_id).toLowerCase()) ?? 'unresolved-scheme'}-v${row.version_no}`,
+      })),
       certification_application: applicationRows.map((row) => ({ ...row, code: row.application_code })),
       application_site: applicationSiteRows.map((row) => ({ ...row, code: `site-${row.site_no}` })),
       work_item: workItemRows.map((row) => ({ ...row, code: row.source_key })),
     });
+  } catch (error) {
+    if (error?.verification) throw error;
+    throw verificationError('verification_error', 'manifest_rows', 'Manifested DEMO rows could not be validated.');
+  }
 
-    const manifestCounts = countManifestRecords(manifest);
-    const count = (value) => Number(value);
-    const app = applicationRows.find((row) => row.id === records.find((record) => record.type === 'certification_application')?.id);
-    const work = workItemRows.find((row) => row.id === records.find((record) => record.type === 'work_item')?.id);
-    return {
-      customers: count(counts.customers), portalAccess: count(counts.portal_access), users: count(counts.users),
-      applications: count(counts.applications), workItems: count(counts.work_items), auditLogs: count(counts.audit_logs),
-      manifestedCustomers: manifestCounts.customer, manifestedApplications: manifestCounts.certification_application,
-      manifestedWorkItems: manifestCounts.work_item,
-      applicationCode: app?.application_code ?? null, applicationStatus: app?.status ?? null,
-      intakeStatus: work?.status ?? null, assignedRole: work?.assigned_role ?? null,
-    };
+  const manifestCounts = countManifestRecords(manifest);
+  const count = (value) => Number(value);
+  const app = applicationRows.find((row) => row.id === records.find((record) => record.type === 'certification_application')?.id);
+  const work = workItemRows.find((row) => row.id === records.find((record) => record.type === 'work_item')?.id);
+  return {
+    customers: count(counts.customers), portalAccess: count(counts.portal_access), users: count(counts.users),
+    applications: count(counts.applications), workItems: count(counts.work_items), auditLogs: count(counts.audit_logs),
+    manifestedCustomers: manifestCounts.customer, manifestedApplications: manifestCounts.certification_application,
+    manifestedWorkItems: manifestCounts.work_item,
+    applicationCode: app?.application_code ?? null, applicationStatus: app?.status ?? null,
+    intakeStatus: work?.status ?? null, assignedRole: work?.assigned_role ?? null,
+  };
+}
+
+async function verifyDemoData(connectionUrl, manifest) {
+  const { PrismaMssql } = require('@prisma/adapter-mssql');
+  const { PrismaClient } = require('@prisma/client');
+  const prisma = new PrismaClient({ adapter: new PrismaMssql(connectionUrl) });
+  try {
+    return await verifyDemoDataWithClient(prisma, manifest);
   } finally {
     await prisma.$disconnect();
   }
@@ -373,11 +472,25 @@ async function main() {
   log(`sql_identity=PASS database=${identity.database_name} machine=${identity.sql_machine} instance=${identity.sql_instance}`);
 
   const manifestPath = path.join(root, 'manifest.json');
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  if (!isCompleteManifest(manifest)) throw new Error('The protected DEMO manifest is not complete; runtime-only startup will not create or repair data.');
+  const diagnosticPath = path.join(root, 'launcher-diagnostics.log');
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
+  catch {
+    const error = verificationError('invalid_manifest', 'manifest_validation', 'The protected DEMO manifest could not be read or parsed.');
+    try { appendVerificationDiagnostic(diagnosticPath, error); } catch { /* Keep the parse failure secret-free on the console. */ }
+    throw new Error('The protected DEMO manifest could not be read or parsed; inspect the protected local launcher diagnostics.');
+  }
+  if (!isCompleteManifest(manifest)) {
+    const error = verificationError('invalid_manifest', 'manifest_validation', 'The protected DEMO manifest is not complete.');
+    try { appendVerificationDiagnostic(diagnosticPath, error); } catch { /* Preserve the generic, secret-free launcher failure. */ }
+    throw new Error('The protected DEMO manifest is not complete; runtime-only startup will not create or repair data.');
+  }
   let dataSummary;
   try { dataSummary = await verifyDemoData(sql, manifest); }
-  catch (error) { throw new Error(`Read-only DEMO data verification failed (${error?.code ?? error?.name ?? 'unknown'}); inspect the protected local log.`); }
+  catch (error) {
+    try { appendVerificationDiagnostic(diagnosticPath, error); } catch { /* Preserve the generic, secret-free launcher failure. */ }
+    throw new Error('Read-only DEMO data verification failed; inspect the protected local launcher diagnostics.');
+  }
   log(`demo_data=PASS customers=${dataSummary.customers} portal_access=${dataSummary.portalAccess} users=${dataSummary.users} applications=${dataSummary.applications} work_items=${dataSummary.workItems} audit_logs=${dataSummary.auditLogs} application=${dataSummary.applicationCode}:${dataSummary.applicationStatus} intake=${dataSummary.intakeStatus}:${dataSummary.assignedRole}`);
 
   const baseEnv = {
@@ -475,4 +588,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { assertLocalSqlEndpoint, assertManifestRows, buildDemoDatabaseUrl, countManifestRecords, dataRoot, findGateAProof, findListeningPid, isCompleteManifest, loadSqlCredentials, parseGateAProof, readRuntimeMarker, writeRuntimeMarker };
+module.exports = {
+  appendVerificationDiagnostic, assertLocalSqlEndpoint, assertManifestRows, buildDemoDatabaseUrl,
+  countManifestRecords, dataRoot, findGateAProof, findListeningPid, isCompleteManifest,
+  loadSqlCredentials, parseGateAProof, readRuntimeMarker, safeVerificationDiagnostic,
+  verifyDemoDataWithClient, verificationError, writeRuntimeMarker,
+};
