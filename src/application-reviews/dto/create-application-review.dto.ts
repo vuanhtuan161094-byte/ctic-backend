@@ -94,9 +94,10 @@ export class CreateApplicationReviewDto {
     @IsDateString()
     review_date?: string;
 
-    @ApiProperty({ enum: ['ACCEPTED', 'REJECTED', 'NEED_MORE_INFO'] })
+    @ApiPropertyOptional({ enum: ['ACCEPTED', 'REJECTED', 'NEED_MORE_INFO'] })
+    @IsOptional()
     @IsIn(['ACCEPTED', 'REJECTED', 'NEED_MORE_INFO'])
-    result!: string;
+    result?: string;
 
     @ApiPropertyOptional()
     @IsOptional()

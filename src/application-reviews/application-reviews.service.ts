@@ -310,7 +310,7 @@ export class ApplicationReviewsService {
         if (!application.standard_name?.trim() || !application.certification_scope?.trim() || !application.declaration_accepted) {
             throw new BadRequestException('Thông tin bắt buộc của đơn đăng ký chưa đầy đủ');
         }
-        if (dto.result.trim().toUpperCase() !== 'ACCEPTED' || !dto.conclusion?.trim()) {
+        if (dto.result?.trim().toUpperCase() !== 'ACCEPTED' || !dto.conclusion?.trim()) {
             throw new BadRequestException('Kết luận xem xét chưa đủ điều kiện để gửi reviewer');
         }
         if (!scopes.length) {
@@ -370,7 +370,7 @@ export class ApplicationReviewsService {
             throw new BadRequestException('Người lập/coordinator và reviewer phải là hai tài khoản khác nhau');
         }
 
-        const normalizedResult = dto.result.trim().toUpperCase();
+        const normalizedResult = dto.result?.trim().toUpperCase() ?? (isSubmit ? '' : 'DRAFT');
         const normalizedMandays = isSubmit
             ? this.normalizeReviewMandays(dto)
             : {

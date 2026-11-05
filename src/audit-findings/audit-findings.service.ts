@@ -1106,14 +1106,26 @@ export class AuditFindingsService {
                 'Hạn hành động khắc phục',
             );
 
+        const policyDueDate = isNonconformity
+            ? new Date(
+                detectedDate.getTime() +
+                correctiveActionDays * 24 * 60 * 60 * 1000,
+            )
+            : null;
+
+        if (
+            isNonconformity &&
+            suppliedDueDate &&
+            policyDueDate &&
+            suppliedDueDate > policyDueDate
+        ) {
+            throw new BadRequestException(
+                'Hạn CAP ban đầu vượt quá thời hạn chính sách; việc gia hạn cần được yêu cầu và phê duyệt riêng',
+            );
+        }
+
         const dueDate =
-            suppliedDueDate ??
-            (isNonconformity
-                ? new Date(
-                    detectedDate.getTime() +
-                    correctiveActionDays * 24 * 60 * 60 * 1000,
-                )
-                : null);
+            suppliedDueDate ?? policyDueDate;
 
         if (
             dueDate &&

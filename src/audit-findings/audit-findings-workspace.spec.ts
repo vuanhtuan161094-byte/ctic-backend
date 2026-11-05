@@ -1,8 +1,55 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditFindingsService } from './audit-findings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResourceAccessService } from '../security/resource-access.service';
 import { ActionAuthorizationService } from '../work-items/action-authorization.service';
+
+function createFindingCreateHarness(auditType: string) {
+  const db = {
+    audit_findings: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({
+        id: 'finding',
+        due_date: null,
+        corrective_actions: [],
+      }),
+    },
+    reports: {
+      findUnique: jest.fn().mockResolvedValue({
+        audit_plan_id: 'plan',
+        status: 'draft',
+        form_data: null,
+        technical_reviews: [],
+        audit_plans: {
+          id: 'plan',
+          project_id: 'case',
+          audit_type: auditType,
+        },
+      }),
+      update: jest.fn(),
+    },
+    users: {
+      findUnique: jest.fn().mockResolvedValue({
+        expert_profile: { id: 'expert' },
+      }),
+    },
+    audit_team_appointments: {
+      findUnique: jest.fn().mockResolvedValue({
+        status: 'issued',
+        members: [{ expert_id: 'expert' }],
+      }),
+    },
+    $transaction: jest.fn(),
+  };
+  db.$transaction.mockImplementation(
+    (run: (tx: unknown) => Promise<unknown>) => run(db),
+  );
+  const service = new AuditFindingsService(
+    db as unknown as PrismaService,
+    {} as ResourceAccessService,
+  );
+  return { db, service };
+}
 
 describe('Step 17.4 preserves existing CAP creation deadlines', () => {
   it.each([
@@ -13,49 +60,12 @@ describe('Step 17.4 preserves existing CAP creation deadlines', () => {
   ])(
     '%s / %s keeps its source-owned deadline',
     async (auditType, findingType, due) => {
-      const db = {
-        audit_findings: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          create: jest.fn().mockResolvedValue({
-            id: 'finding',
-            due_date: new Date(due),
-            corrective_actions: [],
-          }),
-        },
-        reports: {
-          findUnique: jest.fn().mockResolvedValue({
-            audit_plan_id: 'plan',
-            status: 'draft',
-            form_data: null,
-            technical_reviews: [],
-            audit_plans: {
-              id: 'plan',
-              project_id: 'case',
-              audit_type: auditType,
-            },
-          }),
-          update: jest.fn(),
-        },
-        users: {
-          findUnique: jest
-            .fn()
-            .mockResolvedValue({ expert_profile: { id: 'expert' } }),
-        },
-        audit_team_appointments: {
-          findUnique: jest.fn().mockResolvedValue({
-            status: 'issued',
-            members: [{ expert_id: 'expert' }],
-          }),
-        },
-        $transaction: jest.fn(),
-      };
-      db.$transaction.mockImplementation(
-        (run: (tx: unknown) => Promise<unknown>) => run(db),
-      );
-      const service = new AuditFindingsService(
-        db as unknown as PrismaService,
-        {} as ResourceAccessService,
-      );
+      const { db, service } = createFindingCreateHarness(auditType);
+      db.audit_findings.create.mockResolvedValue({
+        id: 'finding',
+        due_date: new Date(due),
+        corrective_actions: [],
+      });
       await service.create(
         {
           report_id: 'report',
@@ -73,6 +83,40 @@ describe('Step 17.4 preserves existing CAP creation deadlines', () => {
       expect(write.data.due_date.toISOString()).toBe(due);
     },
   );
+});
+
+describe('P.09 CAP initial deadline guard', () => {
+  it.each([
+    ['surveillance1', '2026-10-02'],
+    ['stage2', '2026-10-17'],
+  ])('rejects an unapproved later deadline for %s', async (auditType, dueDate) => {
+    const { db, service } = createFindingCreateHarness(auditType);
+    await expect(service.create({
+      report_id: 'report',
+      finding_type: 'minor_nc',
+      description: 'Description',
+      objective_evidence: 'Evidence',
+      detected_date: '2026-09-01T12:00:00+07:00',
+      due_date: dueDate,
+    }, 'actor')).rejects.toBeInstanceOf(BadRequestException);
+    expect(db.audit_findings.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an earlier user-entered due date without treating it as an extension', async () => {
+    const { db, service } = createFindingCreateHarness('surveillance1');
+    await service.create({
+      report_id: 'report',
+      finding_type: 'minor_nc',
+      description: 'Description',
+      objective_evidence: 'Evidence',
+      detected_date: '2026-09-01T12:00:00+07:00',
+      due_date: '2026-09-20',
+    }, 'actor');
+    const calls = db.audit_findings.create.mock.calls as Array<
+      [{ data: { due_date: Date } }]
+    >;
+    expect(calls[0][0].data.due_date.toISOString()).toBe('2026-09-20T00:00:00.000Z');
+  });
 });
 
 describe('Step 17.4 bounded CAP workspace', () => {

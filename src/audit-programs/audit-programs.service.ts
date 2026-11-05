@@ -302,21 +302,15 @@ export class AuditProgramsService {
         let nextEventType = 'surveillance1';
 
         if (
-            eventTypes.has('stage1') ||
-            eventTypes.has('stage2')
-        ) {
-            nextEventType = 'surveillance1';
-        } else if (
-            eventTypes.has('surveillance1')
-        ) {
-            nextEventType = 'surveillance2';
-        } else if (
-            eventTypes.has('surveillance2')
-        ) {
-            nextEventType = 'recertification';
-        } else if (
             eventTypes.has('recertification')
         ) {
+            // A copied programme after recertification starts the next cycle.
+            nextEventType = 'surveillance1';
+        } else if (eventTypes.has('surveillance2')) {
+            nextEventType = 'recertification';
+        } else if (eventTypes.has('surveillance1')) {
+            nextEventType = 'surveillance2';
+        } else if (eventTypes.has('stage1') || eventTypes.has('stage2')) {
             nextEventType = 'surveillance1';
         }
 

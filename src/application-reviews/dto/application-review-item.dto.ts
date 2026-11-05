@@ -21,7 +21,8 @@ export class ApplicationReviewItemDto {
     content_en?: string;
 
     @IsIn(['YES', 'NO', 'NA'])
-    result!: string;
+    @IsOptional()
+    result?: string;
 
     @IsOptional()
     @IsString()

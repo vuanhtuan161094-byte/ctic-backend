@@ -151,14 +151,39 @@ describe('ApplicationReviewsService one-reviewer workflow', () => {
         const { service, prisma, tx } = createHarness();
         prisma.certification_applications.findUnique.mockResolvedValue(application());
         await service.create({
-            application_id: 'application-1', submission_action: 'SAVE_DRAFT', result: 'ACCEPTED',
+            application_id: 'application-1', submission_action: 'SAVE_DRAFT',
         }, 'preparer-1');
         expect(tx.application_reviews.upsert).toHaveBeenCalledWith(expect.objectContaining({
-            create: expect.objectContaining({ workflow_status: 'DRAFT', reviewer_id: null }),
+            create: expect.objectContaining({ workflow_status: 'DRAFT', reviewer_id: null, result: 'DRAFT' }),
         }));
         expect(tx.application_review_actions.create).toHaveBeenCalledWith({
             data: expect.objectContaining({ action: 'SAVE_DRAFT', to_status: 'DRAFT' }),
         });
+    });
+
+    it('persists an incomplete draft without assigning an acceptance outcome', async () => {
+        const { service, prisma, tx } = createHarness();
+        prisma.certification_applications.findUnique.mockResolvedValue(application());
+        await service.create({
+            application_id: 'application-1',
+            submission_action: 'SAVE_DRAFT',
+            review_items: [{ item_code: 'F01-01', content_vi: 'Tiêu chí kiểm tra' }],
+        }, 'preparer-1');
+        expect(tx.application_reviews.upsert).toHaveBeenCalledWith(expect.objectContaining({
+            create: expect.objectContaining({
+                workflow_status: 'DRAFT',
+                result: 'DRAFT',
+                review_items_json: '[{"item_code":"F01-01","content_vi":"Tiêu chí kiểm tra"}]',
+            }),
+        }));
+    });
+
+    it('rejects submitting a review without an explicit acceptance result', async () => {
+        const { service, prisma, tx } = createHarness();
+        prisma.certification_applications.findUnique.mockResolvedValue(application());
+        await expect(service.create({ ...completePayload, result: undefined }, 'preparer-1'))
+            .rejects.toBeInstanceOf(BadRequestException);
+        expect(tx.application_reviews.upsert).not.toHaveBeenCalled();
     });
 
     it('submits a complete review to one reviewer without expert/auditor assignment dependency', async () => {
