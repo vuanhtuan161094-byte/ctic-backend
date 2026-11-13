@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { getDeploymentConfig } from '../common/deployment-config';
 import { DocumentFilesService } from '../document-files/document-files.service';
 import { WorkItemsService } from '../work-items/work-items.service';
+import { expiryDateFromValidityMonths } from '../master-data-configuration/scheme-runtime-rules';
 
 import { CreateCertificateDto } from './dto/create-certificate.dto';
 import {
@@ -1103,6 +1104,21 @@ export class CertificatesService {
         ) {
             throw new BadRequestException(
                 'Ngày hết hạn phải sau ngày cấp chứng chỉ',
+            );
+        }
+
+        // Issuance must not extend the lifespan beyond the approved decision
+        // or override the maximum three-year validity required by P.09.
+        if (expireDate.getTime() >
+            expiryDateFromValidityMonths(issueDate, 36).getTime()) {
+            throw new BadRequestException(
+                'Thời hạn chứng chỉ không được vượt quá 03 năm',
+            );
+        }
+        if (decision.expiry_date &&
+            expireDate.getTime() !== decision.expiry_date.getTime()) {
+            throw new BadRequestException(
+                'Ngày hết hạn chứng chỉ phải đúng ngày đã phê duyệt trong quyết định F.13',
             );
         }
 

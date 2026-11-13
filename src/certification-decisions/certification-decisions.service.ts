@@ -1109,7 +1109,7 @@ export class CertificationDecisionsService {
             expiryDate =
                 expiryDateFromValidityMonths(
                     effectiveDate,
-                    runtimeRules.validity_duration_months,
+                    Math.min(36, runtimeRules.validity_duration_months),
                 );
         }
 
@@ -1134,6 +1134,23 @@ export class CertificationDecisionsService {
         ) {
             throw new BadRequestException(
                 'Ngày hết hiệu lực phải sau ngày hiệu lực',
+            );
+        }
+
+        // P.09 maximum validity is 36 months. An explicit requested expiry
+        // cannot override a shorter approved scheme configuration either.
+        if (
+            dto.decision_result === 'approved' &&
+            decisionRequiresCertificateVersion(decisionType) &&
+            effectiveDate &&
+            expiryDate &&
+            expiryDate.getTime() > expiryDateFromValidityMonths(
+                effectiveDate,
+                Math.min(36, runtimeRules.validity_duration_months),
+            ).getTime()
+        ) {
+            throw new BadRequestException(
+                'Thời hạn chứng nhận không được vượt quá 03 năm hoặc thời hạn ngắn hơn theo chương trình áp dụng',
             );
         }
 

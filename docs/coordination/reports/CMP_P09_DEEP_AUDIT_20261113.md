@@ -55,6 +55,8 @@
 
 **A09 — P1 / performance operations.** `scripts/production/performance-smoke.cjs` defaults only to `/health/live,/health`; an informational health PASS cannot prove multi-user P.09 API latency, queue throughput, backup recovery or search/page p95. Production checklist remains uncompleted. **Status: OPEN**.
 
+**A10 — P0 / certification validity integrity.** P.09 (p. 22) limits certification validity to 3 years. The decision API previously accepted manually supplied expiry past 3 years, and issuance API previously accepted an expiry inconsistent with F.13. Patched `CertificationDecisionsService` to cap at the shorter of 36 months and the effective scheme duration; patched `CertificatesService` to refuse >36-month issuance and any expiry differing from the issued F.13 decision. Added 4 unit tests: beyond-max decision, boundary decision, beyond-max certificate, F.13 mismatch. **Status: SOURCE FIX COMMITTED; CI and staging business acceptance must be verified by exact SHA.** Note: this is a guard for **new** decisions/issuance only; audit legacy certificates separately, do not rewrite historical approval dates.
+
 ## Execution gates to close P.09 Stage 1
 
 1. **G1**: verify exact backend/frontend branch SHA and stage SQL identity, isolated safe DB/storage and test actor accounts; non-destructive readback; do not re-run Gate A.

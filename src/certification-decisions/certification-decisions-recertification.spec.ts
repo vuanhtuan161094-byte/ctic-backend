@@ -183,6 +183,24 @@ function createHarness(input: {
 }
 
 describe('CertificationDecisionsService recertification eligibility', () => {
+    it('rejects a manually extended certification expiry beyond 3 years before any DB write', async () => {
+        const harness = createHarness();
+        harness.dto.expiry_date = '2030-09-01';
+
+        await expect(harness.service.create(harness.dto))
+            .rejects.toThrow('không được vượt quá 03 năm');
+        expect(harness.prisma.$transaction).not.toHaveBeenCalled();
+        expect(harness.createdDecision).not.toHaveBeenCalled();
+    });
+
+    it('accepts exactly the 36-month maximum expiry boundary', async () => {
+        const harness = createHarness();
+        harness.dto.expiry_date = '2029-08-31';
+
+        await expect(harness.service.create(harness.dto))
+            .resolves.toEqual(expect.objectContaining({ decision_type: 'RECERTIFY' }));
+    });
+
     it('allows RECERTIFY for an active certificate in a recertification cycle', async () => {
         const harness = createHarness();
 

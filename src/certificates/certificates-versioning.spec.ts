@@ -142,6 +142,24 @@ const dto = {
 };
 
 describe('CertificatesService series-aware versioning', () => {
+    it('rejects certificate expiry beyond 3 years before allocating any version', async () => {
+        const harness = createHarness({ decisionType: 'GRANT' });
+        await expect(harness.service.create({
+            ...dto,
+            expire_date: '2030-08-20',
+        }, 'user-1')).rejects.toThrow('không được vượt quá 03 năm');
+        expect(harness.prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an issue expiry that differs from the approved F.13 decision', async () => {
+        const harness = createHarness({ decisionType: 'GRANT' });
+        await expect(harness.service.create({
+            ...dto,
+            expire_date: '2028-08-20',
+        }, 'user-1')).rejects.toThrow('đúng ngày đã phê duyệt');
+        expect(harness.prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('creates a Certificate Series and version 1 for first GRANT', async () => {
         const harness = createHarness({ decisionType: 'GRANT' });
 
