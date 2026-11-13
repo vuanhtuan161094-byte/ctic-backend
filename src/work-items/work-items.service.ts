@@ -510,6 +510,7 @@ export class WorkItemsService {
                 WORK_ITEM_STATUSES,
                 'status',
             );
+        const priorityImportant = query.priority?.trim().toUpperCase() === 'IMPORTANT';
         const priority =
             this.enumFilter(
                 priorityImportant ? undefined : query.priority,
@@ -534,7 +535,6 @@ export class WorkItemsService {
         // Preserve existing lightweight dashboard callers; explicit paging/search
         // scans all candidate batches before resource-scope filtering and counts.
         const paginated = query.page !== undefined || query.search !== undefined;
-        const priorityImportant = query.priority?.trim().toUpperCase() === 'IMPORTANT';
         const limit =
             Math.min(
                 Math.max(
