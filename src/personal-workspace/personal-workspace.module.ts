@@ -2,6 +2,8 @@ import {
     Module,
 } from '@nestjs/common';
 
+import { GlobalSearchController } from './global-search.controller';
+import { GlobalSearchService } from './global-search.service';
 import {
     PersonalWorkspaceController,
 } from './personal-workspace.controller';
@@ -12,9 +14,11 @@ import {
 @Module({
     controllers: [
         PersonalWorkspaceController,
+        GlobalSearchController,
     ],
     providers: [
         PersonalWorkspaceService,
+        GlobalSearchService,
     ],
     exports: [
         PersonalWorkspaceService,
