@@ -531,7 +531,11 @@ export class WorkItemsService {
         if (rawSearch.length > 100) {
             throw new BadRequestException('Từ khóa tối đa 100 ký tự');
         }
-        const search = rawSearch.toLocaleLowerCase('vi');
+        // Match Vietnamese names with or without diacritics; never search before ACL.
+        const normalizeSearch = (value: string) =>
+            value.toLocaleLowerCase('vi').normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+        const search = normalizeSearch(rawSearch);
         // Preserve existing lightweight dashboard callers; explicit paging/search
         // scans all candidate batches before resource-scope filtering and counts.
         const paginated = query.page !== undefined || query.search !== undefined;
@@ -696,6 +700,7 @@ export class WorkItemsService {
                                 updated_at:
                                     'desc',
                             },
+                            { id: 'asc' },
                         ]
                         : [
                             {
@@ -710,6 +715,7 @@ export class WorkItemsService {
                                 updated_at:
                                     'desc',
                             },
+                            { id: 'asc' },
                         ],
                 take: paginated ? 250 : Math.min(limit * 5, 1_000),
                 ...(paginated ? { skip } : {}),
@@ -1044,7 +1050,7 @@ export class WorkItemsService {
         });
 
         const matchingItems = search
-            ? safeItems.filter((item) => [
+            ? safeItems.filter((item) => normalizeSearch([
                 item.title,
                 item.description,
                 item.project_code,
@@ -1052,7 +1058,7 @@ export class WorkItemsService {
                 item.assignee,
                 item.work_type,
                 item.status,
-            ].filter(Boolean).join(' ').toLocaleLowerCase('vi').includes(search))
+            ].filter(Boolean).join(' ')).includes(search))
             : safeItems;
         const total = matchingItems.length;
         const pageCount = Math.ceil(total / limit);

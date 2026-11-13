@@ -615,6 +615,7 @@ describe('WorkItemsService', () => {
         expect(result.items).toHaveLength(10);
         expect(new Set(result.items.map((item) => item.id)).size).toBe(10);
         expect(workItems.findMany).toHaveBeenCalledTimes(5);
+        expect(workItems.findMany.mock.calls[0][0].orderBy.at(-1)).toEqual({ id: 'asc' });
     });
 
     it('applies search after resource scope authorization, never returning hidden project names', async () => {
@@ -641,6 +642,28 @@ describe('WorkItemsService', () => {
         expect(result.items).toHaveLength(0);
         expect(result.summary.total).toBe(1);
         expect(result.filter.search).toBe('SECRET');
+    });
+
+    it('matches Vietnamese organization names without diacritics after scope filtering', async () => {
+        const now = new Date();
+        workItems.findMany.mockResolvedValue([{
+            id: 'work-1', source_key: 'source-1', work_type: 'AUDIT_PLAN',
+            action_code: 'audit_plan.prepare', title: 'Chuẩn bị đánh giá',
+            description: null, entity_type: 'audit_plan', entity_id: 'plan-1',
+            project_id: 'project-1',
+            project: { project_code: 'HS-001', certification_applications: { customers: { company_name: 'Công ty Cổ phần Hà Nội' } } },
+            assigned_user_id: 'user-1', assigned_role: null, assigned_user: null,
+            audit_event_id: null, audit_plan_id: null, cycle_key: null, status: 'OPEN',
+            priority: 'NORMAL', due_at: null, destination_path: null, context_json: null,
+            available_at: null, completed_at: null, cancelled_at: null,
+            created_at: now, updated_at: now,
+        }]);
+        const result = await service.getMyWork(
+            { userId: 'user-1', roles: ['AUDITOR'] },
+            { page: '1', limit: '20', search: 'cong ty co phan ha noi' },
+        );
+        expect(result.pagination.total).toBe(1);
+        expect(result.items[0].organization_name).toBe('Công ty Cổ phần Hà Nội');
     });
 
     it.each([
