@@ -8,6 +8,7 @@ import { CertificatesController } from './certificates.controller';
 import { CertificateWorkspaceController } from './certificate-workspace.controller';
 import { PublicCertificatesController } from './public-certificates.controller';
 import { CertificatesService } from './certificates.service';
+import { P09SuspensionCaseService } from './p09-suspension-case.service';
 import { CertificatesScheduler } from './certificates.scheduler';
 
 @Module({
@@ -26,6 +27,7 @@ import { CertificatesScheduler } from './certificates.scheduler';
   providers: [
     CertificatesService,
     CertificatesScheduler,
+    P09SuspensionCaseService,
   ],
 
   exports: [

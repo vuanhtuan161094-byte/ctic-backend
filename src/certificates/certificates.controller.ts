@@ -41,6 +41,9 @@ import { ActionAuthorizationService } from '../work-items/action-authorization.s
 import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 
 import { CertificatesService } from './certificates.service';
+import { P09SuspensionCaseService } from './p09-suspension-case.service';
+import { RequestP09SuspensionReviewDto, DecideP09SuspensionReviewDto } from './dto/p09-suspension-case.dto';
+import type { SuspensionAction } from './p09-suspension-case';
 import { CreateCertificateDto } from './dto/create-certificate.dto';
 import { UpdateCertificateStatusDto } from './dto/update-certificate-status.dto';
 
@@ -69,6 +72,7 @@ export class CertificatesController {
             DocumentFilesService,
         private readonly actionAuthorization:
             ActionAuthorizationService,
+        private readonly suspensionCase: P09SuspensionCaseService,
     ) { }
 
     private getUserId(
@@ -318,6 +322,51 @@ export class CertificatesController {
     ) {
         return this.certificatesService
             .getStatusHistory(id);
+    }
+
+    @Get('suspension-review/reviewers')
+    @Roles('ADMIN', 'STAFF', 'COORDINATOR', 'DECISION_MAKER')
+    @Permissions('certificates.read')
+    @ApiOperation({ summary: 'Người ra quyết định đình chỉ độc lập đang hoạt động' })
+    suspensionReviewers() {
+        return this.suspensionCase.eligibleReviewers();
+    }
+
+    @Get(':id/suspension-case')
+    @Roles('ADMIN', 'STAFF', 'COORDINATOR', 'DECISION_MAKER')
+    @Permissions('certificates.read')
+    @ApiOperation({ summary: 'Xem xét đình chỉ 3+3 tháng có bằng chứng và tình trạng F11/F13' })
+    getSuspensionCase(@Param('id', ParseUUIDPipe) id: string) {
+        return this.suspensionCase.get(id);
+    }
+
+    @Post(':id/suspension-case/request')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_programs.manage')
+    @ApiOperation({ summary: 'Đề nghị thẩm xét gia hạn đình chỉ hoặc khôi phục/thu hồi/thu hẹp' })
+    requestSuspensionCase(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() dto: RequestP09SuspensionReviewDto,
+        @Req() request: AuthenticatedRequest,
+    ) {
+        const actor = this.getUserId(request);
+        if (!actor) throw new BadRequestException('Thiếu người đề nghị xem xét đình chỉ');
+        return this.suspensionCase.request(id, dto, actor);
+    }
+
+    @Post(':id/suspension-case/:action/decide')
+    @Roles('DECISION_MAKER')
+    @Permissions('certification_decisions.issue')
+    @ApiOperation({ summary: 'Quyết định độc lập xem xét đình chỉ, KHÔNG đổi trạng thái chứng chỉ (F13 riêng)' })
+    decideSuspensionCase(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Param('action') action: SuspensionAction,
+        @Body() dto: DecideP09SuspensionReviewDto,
+        @Req() request: AuthenticatedRequest,
+    ) {
+        const actor = this.getUserId(request);
+        if (!actor) throw new BadRequestException('Thiếu tài khoản người quyết định');
+        return this.suspensionCase.decide(id, action, dto, actor);
     }
 
     @Post('actions/expire-due')
