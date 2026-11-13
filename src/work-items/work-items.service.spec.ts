@@ -574,6 +574,85 @@ describe('WorkItemsService', () => {
             );
     });
 
+    it('pages across more than 1000 candidate work items without skipping later pages', async () => {
+        const now = new Date();
+        const rows = Array.from({ length: 1_050 }, (_, index) => ({
+            id: `work-${String(index).padStart(4, '0')}`,
+            source_key: `source-${index}`,
+            work_type: 'AUDIT_PLAN',
+            action_code: 'audit_plan.prepare',
+            title: `Hồ sơ công việc ${index}`,
+            description: null,
+            entity_type: 'audit_plan',
+            entity_id: `plan-${index}`,
+            project_id: 'project-1',
+            project: { project_code: 'CASE-2026', certification_applications: { customers: { company_name: 'CTIC Demo' } } },
+            assigned_user_id: 'user-1',
+            assigned_role: null,
+            assigned_user: null,
+            audit_event_id: null,
+            audit_plan_id: null,
+            cycle_key: null,
+            status: 'OPEN',
+            priority: 'NORMAL',
+            due_at: null,
+            destination_path: '/certifications/project-1',
+            context_json: null,
+            available_at: null,
+            completed_at: null,
+            cancelled_at: null,
+            created_at: now,
+            updated_at: now,
+        }));
+        workItems.findMany.mockImplementation(async ({ skip = 0, take }) => rows.slice(skip, skip + take));
+        const result = await service.getMyWork(
+            { userId: 'user-1', roles: ['AUDITOR'] },
+            { page: '53', limit: '20' },
+        );
+        expect(result.pagination).toEqual({
+            page: 53, page_size: 20, total: 1050, page_count: 53, has_more: false,
+        });
+        expect(result.items).toHaveLength(10);
+        expect(new Set(result.items.map((item) => item.id)).size).toBe(10);
+        expect(workItems.findMany).toHaveBeenCalledTimes(5);
+    });
+
+    it('applies search after resource scope authorization, never returning hidden project names', async () => {
+        const now = new Date();
+        const rows = ['Visible Client', 'SECRET UNAUTHORIZED CLIENT'].map((name, index) => ({
+            id: `work-${index}`, source_key: `source-${index}`, work_type: 'AUDIT_PLAN',
+            action_code: 'audit_plan.prepare', title: 'Lập kế hoạch',
+            description: null, entity_type: 'audit_plan', entity_id: `plan-${index}`,
+            project_id: `project-${index}`,
+            project: { project_code: `PRJ-${index}`, certification_applications: { customers: { company_name: name } } },
+            assigned_user_id: 'user-1', assigned_role: null, assigned_user: null,
+            audit_event_id: null, audit_plan_id: null, cycle_key: null, status: 'OPEN',
+            priority: 'NORMAL', due_at: null, destination_path: null, context_json: null,
+            available_at: null, completed_at: null, cancelled_at: null,
+            created_at: now, updated_at: now,
+        }));
+        workItems.findMany.mockResolvedValue(rows);
+        resourceAccess.filterProjectIds.mockResolvedValue(['project-0']);
+        const result = await service.getMyWork(
+            { userId: 'user-1', roles: ['AUDITOR'] },
+            { page: '1', limit: '10', search: 'SECRET' },
+        );
+        expect(result.pagination.total).toBe(0);
+        expect(result.items).toHaveLength(0);
+        expect(result.summary.total).toBe(1);
+        expect(result.filter.search).toBe('SECRET');
+    });
+
+    it.each([
+        { page: '0' }, { page: '-1' }, { page: 'abc' }, { page: '1.5' },
+        { search: 'x'.repeat(101) },
+    ])('rejects malformed page or oversized query %p', async (query) => {
+        await expect(service.getMyWork(
+            { userId: 'user-1', roles: ['AUDITOR'] }, query,
+        )).rejects.toBeInstanceOf(BadRequestException);
+        expect(workItems.findMany).not.toHaveBeenCalled();
+    });
+
     it('defaults reconciliation to dry-run and performs no writes', async () => {
         const result =
             await service.reconcile();

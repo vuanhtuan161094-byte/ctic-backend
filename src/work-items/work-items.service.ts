@@ -82,6 +82,8 @@ export interface MyWorkQuery {
     work_type?: string;
     due?: string;
     limit?: string;
+    page?: string;
+    search?: string;
 }
 
 @Injectable()
@@ -510,7 +512,7 @@ export class WorkItemsService {
             );
         const priority =
             this.enumFilter(
-                query.priority,
+                priorityImportant ? undefined : query.priority,
                 WORK_ITEM_PRIORITIES,
                 'priority',
             );
@@ -520,6 +522,19 @@ export class WorkItemsService {
                 WORK_ITEM_TYPES,
                 'work_type',
             );
+        const page = query.page === undefined ? 1 : Number(query.page);
+        if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) {
+            throw new BadRequestException('Trang công việc không hợp lệ');
+        }
+        const rawSearch = query.search?.trim() ?? '';
+        if (rawSearch.length > 100) {
+            throw new BadRequestException('Từ khóa tối đa 100 ký tự');
+        }
+        const search = rawSearch.toLocaleLowerCase('vi');
+        // Preserve existing lightweight dashboard callers; explicit paging/search
+        // scans all candidate batches before resource-scope filtering and counts.
+        const paginated = query.page !== undefined || query.search !== undefined;
+        const priorityImportant = query.priority?.trim().toUpperCase() === 'IMPORTANT';
         const limit =
             Math.min(
                 Math.max(
@@ -566,8 +581,8 @@ export class WorkItemsService {
             );
         }
 
-        const items =
-            await this.prisma.work_items.findMany({
+        const loadChunk = (skip: number) =>
+            this.prisma.work_items.findMany({
                 where: {
                     AND: [
                         ...(!roles.includes('ADMIN')
@@ -614,11 +629,7 @@ export class WorkItemsService {
                                 'IN_PROGRESS',
                             ],
                         },
-                    ...(priority
-                        ? {
-                            priority,
-                        }
-                        : {}),
+                    ...(priorityImportant ? { priority: { in: ['HIGH', 'URGENT'] } } : priority ? { priority } : {}),
                     ...(workType
                         ? {
                             work_type:
@@ -700,12 +711,19 @@ export class WorkItemsService {
                                     'desc',
                             },
                         ],
-                take:
-                    Math.min(
-                        limit * 5,
-                        1_000,
-                    ),
+                take: paginated ? 250 : Math.min(limit * 5, 1_000),
+                ...(paginated ? { skip } : {}),
             });
+        const items = await loadChunk(0);
+        if (paginated) {
+            // Authorization is not equivalent to assignment: never paginate raw
+            // DB results, or a user may receive short/empty or unauthorized pages.
+            for (let skip = 250; items.length >= skip; skip += 250) {
+                const next = await loadChunk(skip);
+                items.push(...next);
+                if (next.length < 250) break;
+            }
+        }
 
         const projectIds =
             Array.from(
@@ -1025,9 +1043,30 @@ export class WorkItemsService {
             );
         });
 
+        const matchingItems = search
+            ? safeItems.filter((item) => [
+                item.title,
+                item.description,
+                item.project_code,
+                item.organization_name,
+                item.assignee,
+                item.work_type,
+                item.status,
+            ].filter(Boolean).join(' ').toLocaleLowerCase('vi').includes(search))
+            : safeItems;
+        const total = matchingItems.length;
+        const pageCount = Math.ceil(total / limit);
+
         return {
             generated_at:
                 now,
+            pagination: {
+                page,
+                page_size: limit,
+                total,
+                page_count: pageCount,
+                has_more: page < pageCount,
+            },
             summary: {
                 open:
                     safeItems.filter(
@@ -1080,12 +1119,10 @@ export class WorkItemsService {
                     dueFilter ??
                     null,
                 limit,
+                page,
+                search: rawSearch,
             },
-            items:
-                safeItems.slice(
-                    0,
-                    limit,
-                ),
+            items: matchingItems.slice((page - 1) * limit, page * limit),
         };
     }
 
