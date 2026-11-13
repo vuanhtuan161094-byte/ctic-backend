@@ -72,6 +72,7 @@ describe('P09 QMR independent request and decision', () => {
         audit_programs: { id: 'program-1', project_id: 'project-1' } };
     const prisma = {
         audit_program_events: { findUnique: jest.fn() },
+        users: { findFirst: jest.fn(), findMany: jest.fn() },
         certification_decisions: { findFirst: jest.fn() },
         workflow_approvals: { findFirst: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
         audit_logs: { create: jest.fn() },
@@ -84,6 +85,10 @@ describe('P09 QMR independent request and decision', () => {
         jest.clearAllMocks();
         process.env.P09_QMR_APPROVER_IDS = qmr;
         prisma.audit_program_events.findUnique.mockResolvedValue(row);
+        prisma.users.findFirst.mockResolvedValue({ id: qmr });
+        prisma.users.findMany.mockResolvedValue([
+            { id: qmr, username: 'qmr.test', full_name: 'Người phụ trách QMR' },
+        ]);
         prisma.certification_decisions.findFirst.mockResolvedValue({
             id: 'decision-1', decision_date: new Date('2026-02-28T00:00:00Z'),
         });
@@ -103,6 +108,21 @@ describe('P09 QMR independent request and decision', () => {
         proposed_start_date: '2027-03-01',
         reason: 'Lý do khách quan và phương án giảm thiểu rủi ro',
         qmr_approver_id: qmr,
+    });
+    it('lists only active configured QMR administrator accounts', async () => {
+        expect(await service.availableApprovers()).toHaveLength(1);
+        expect(prisma.users.findMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({
+                id: { in: [qmr] }, status: 'active',
+                user_roles: { some: { roles: { role_name: 'ADMIN' } } },
+            }),
+        }));
+    });
+    it('rejects a configured QMR without an active ADMIN account', async () => {
+        prisma.users.findFirst.mockResolvedValue(null);
+        await expect(service.request('program-1', 'event-1', request(), requester))
+            .rejects.toThrow('ADMIN đang hoạt động');
+        expect(prisma.workflow_approvals.create).not.toHaveBeenCalled();
     });
     it('stores requested schedule with independent designated QMR, actor and audit log', async () => {
         const result = await service.request('program-1', 'event-1', request(), requester);

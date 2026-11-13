@@ -224,6 +224,14 @@ export class AuditProgramsController {
         );
     }
 
+    @Get('gs1-exception/approvers')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_programs.manage')
+    @ApiOperation({ summary: 'Danh sách QMR được chỉ định và có tài khoản ADMIN hoạt động' })
+    getGs1Approvers() {
+        return this.gs1Exception.availableApprovers();
+    }
+
     @Get(':id')
     @Roles(
         'ADMIN',

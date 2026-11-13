@@ -22,6 +22,20 @@ export class P09Gs1ExceptionService {
         }
     }
 
+    async availableApprovers() {
+        const ids = Array.from(configuredQmrIds());
+        if (!ids.length) return [];
+        return this.prisma.users.findMany({
+            where: {
+                id: { in: ids },
+                status: 'active',
+                user_roles: { some: { roles: { role_name: 'ADMIN' } } },
+            },
+            select: { id: true, username: true, full_name: true },
+            orderBy: [{ full_name: 'asc' }, { username: 'asc' }],
+        });
+    }
+
     private async programEvent(
         database: Pick<Prisma.TransactionClient, 'audit_program_events'>,
         programId: string, eventId: string,
@@ -97,6 +111,18 @@ export class P09Gs1ExceptionService {
                 WHERE id = ${eventId}
             `;
             const event = await this.programEvent(transaction, programId, eventId);
+            // Only active ADMIN users independently configured as QMR can be
+            // assigned. The later decision endpoint checks the actor again.
+            const eligible = await transaction.users.findFirst({
+                where: {
+                    id: dto.qmr_approver_id, status: 'active',
+                    user_roles: { some: { roles: { role_name: 'ADMIN' } } },
+                },
+                select: { id: true },
+            });
+            if (!eligible) throw new BadRequestException(
+                'QMR được chỉ định phải có tài khoản ADMIN đang hoạt động',
+            );
             const decision = await this.decisionForProject(transaction, event.audit_programs.project_id);
             const deadline = firstSurveillanceDeadline(decision.decision_date);
             if (new Date(dto.proposed_start_date).getTime() <= deadline.getTime()) {
