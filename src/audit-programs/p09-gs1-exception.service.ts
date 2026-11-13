@@ -6,7 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { firstSurveillanceDeadline, isFirstSurveillanceEvent } from './surveillance-deadline';
 import {
     configuredQmrIds, dateKey, GS1_EXCEPTION_ENTITY_TYPE,
-    GS1_EXCEPTION_SCHEMA, readGs1ExceptionEvidence,
+    GS1_EXCEPTION_SCHEMA, hasCurrentGs1QmrApproval, readGs1ExceptionEvidence,
 } from './p09-gs1-exception';
 import { DecideGs1ExceptionDto, RequestGs1ExceptionDto } from './dto/p09-gs1-exception.dto';
 
@@ -75,16 +75,38 @@ export class P09Gs1ExceptionService {
     }
 
     async latest(programId: string, eventId: string) {
-        await this.programEvent(this.prisma, programId, eventId);
+        const event = await this.programEvent(this.prisma, programId, eventId);
         const latest = await this.prisma.workflow_approvals.findFirst({
             where: { entity_type: GS1_EXCEPTION_ENTITY_TYPE, entity_id: eventId },
             orderBy: [{ step_no: 'desc' }],
             select: { id: true, status: true, approver_id: true, approved_at: true, comment: true },
         });
-        if (!latest) return { status: 'none', evidence: null };
+        if (!latest) return { status: 'none', effective_approved: false, evidence: null };
         const evidence = readGs1ExceptionEvidence(latest.comment);
+        let effectiveApproved = false;
+        if (latest.status === 'approved' && evidence) {
+            const decision = await this.prisma.certification_decisions.findFirst({
+                where: {
+                    project_id: event.audit_programs.project_id, status: 'issued',
+                    decision_result: 'approved',
+                    decision_type: { in: ['GRANT', 'RECERTIFY'] },
+                },
+                orderBy: [{ decision_date: 'desc' }, { created_at: 'desc' }],
+                select: { id: true, decision_date: true },
+            });
+            if (decision) {
+                effectiveApproved = await hasCurrentGs1QmrApproval({
+                    database: this.prisma, eventId, programId,
+                    projectId: event.audit_programs.project_id,
+                    decisionId: decision.id, decisionDate: decision.decision_date,
+                    proposedDate: evidence.approved_date,
+                });
+            }
+        }
         return {
-            status: latest.status, id: latest.id,
+            status: latest.status === 'approved' && !effectiveApproved ? 'stale' : latest.status,
+            effective_approved: effectiveApproved,
+            id: latest.id,
             approver_id: latest.approver_id,
             approved_at: latest.approved_at,
             evidence,
