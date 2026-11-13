@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { hasPreparedAuditPlan } from './audit-cycle-workflow';
 import { firstSurveillanceDeadline, isFirstSurveillanceEvent } from '../audit-programs/surveillance-deadline';
+import { hasCurrentGs1QmrApproval } from '../audit-programs/p09-gs1-exception';
 import { WORK_ITEM_ACTIONS } from '../work-items/work-item.constants';
 import { WorkItemsService } from '../work-items/work-items.service';
 
@@ -359,7 +360,8 @@ export class AuditPlansService {
         projectId: string,
         auditType: string | null | undefined,
         plannedStartDate: Date | string | null | undefined,
-        database: Pick<Prisma.TransactionClient, 'certification_decisions'> = this.prisma,
+        database: Pick<Prisma.TransactionClient, 'certification_decisions' | 'workflow_approvals'> = this.prisma,
+        auditEventId?: string | null,
     ) {
         if (!isFirstSurveillanceEvent(auditType ?? '') || !plannedStartDate) return;
         const decision = await database.certification_decisions.findFirst({
@@ -370,15 +372,30 @@ export class AuditPlansService {
                 decision_type: { in: ['GRANT', 'RECERTIFY'] },
             },
             orderBy: [{ decision_date: 'desc' }, { created_at: 'desc' }],
-            select: { decision_date: true },
+            select: { id: true, decision_date: true },
         });
         if (!decision) return;
         const scheduled = new Date(plannedStartDate);
-        if (Number.isNaN(scheduled.getTime()) ||
-            scheduled.getTime() > firstSurveillanceDeadline(decision.decision_date).getTime()) {
-            throw new BadRequestException(
-                'Kế hoạch giám sát lần 1 vượt quá 12 tháng từ ngày quyết định chứng nhận; phải có phê duyệt ngoại lệ QMR theo P.09',
-            );
+        if (Number.isNaN(scheduled.getTime())) {
+            throw new BadRequestException('Ngày giám sát lần 1 không hợp lệ');
+        }
+        if (scheduled.getTime() > firstSurveillanceDeadline(decision.decision_date).getTime()) {
+            const approved = auditEventId
+                ? await hasCurrentGs1QmrApproval({
+                    database, eventId: auditEventId,
+                    programId: (await this.prisma.audit_program_events.findUnique({
+                        where: { id: auditEventId },
+                        select: { program_id: true },
+                    }))?.program_id ?? '',
+                    projectId,
+                    decisionId: decision.id, decisionDate: decision.decision_date,
+                    proposedDate: scheduled,
+                }) : false;
+            if (!approved) {
+                throw new BadRequestException(
+                    'Kế hoạch giám sát lần 1 vượt quá 12 tháng từ ngày quyết định chứng nhận; phải có phê duyệt ngoại lệ QMR theo P.09',
+                );
+            }
         }
     }
 
@@ -537,7 +554,7 @@ export class AuditPlansService {
                 auditEvent?.event_type ??
                 null;
             await this.ensureSurveillancePlanDeadline(
-                dto.project_id, auditType, plannedStartDate, transaction,
+                dto.project_id, auditType, plannedStartDate, transaction, dto.audit_event_id,
             );
             const organizationName =
                 auditEvent?.audit_programs
@@ -825,6 +842,8 @@ export class AuditPlansService {
             current.project_id,
             dto.audit_type ?? current.audit_type,
             plannedStartDate,
+            this.prisma,
+            current.audit_event_id,
         );
 
         let serializedFormData:

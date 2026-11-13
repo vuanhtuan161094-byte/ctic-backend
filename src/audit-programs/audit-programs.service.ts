@@ -15,6 +15,7 @@ import {
 import { UpdateAuditProgramDto } from './dto/update-audit-program.dto';
 import { UpdateAuditProgramEventDto } from './dto/update-audit-program-event.dto';
 import { firstSurveillanceDeadline, isFirstSurveillanceEvent } from './surveillance-deadline';
+import { hasCurrentGs1QmrApproval } from './p09-gs1-exception';
 
 type JsonObject = Record<string, unknown>;
 
@@ -203,7 +204,8 @@ export class AuditProgramsService {
 
     private async assertFirstSurveillanceDeadline(
         projectId: string,
-        events: Array<{ event_type: string; planned_start_date?: string | Date | null }>,
+        events: Array<{ id?: string; event_type: string; planned_start_date?: string | Date | null }>,
+        programId?: string,
     ) {
         const scheduled = events.filter((item) =>
             isFirstSurveillanceEvent(item.event_type) && Boolean(item.planned_start_date),
@@ -220,7 +222,7 @@ export class AuditProgramsService {
                 decision_type: { in: ['GRANT', 'RECERTIFY'] },
             },
             orderBy: [{ decision_date: 'desc' }, { created_at: 'desc' }],
-            select: { decision_date: true },
+            select: { id: true, decision_date: true },
         });
         if (!decision) return;
 
@@ -231,9 +233,19 @@ export class AuditProgramsService {
                 throw new BadRequestException('Ngày đánh giá giám sát lần 1 không hợp lệ');
             }
             if (plannedStart.getTime() > deadline.getTime()) {
-                throw new BadRequestException(
-                    `Giám sát lần 1 phải bắt đầu không quá 12 tháng từ ngày quyết định chứng nhận (hạn ${deadline.toISOString().slice(0, 10)}). Trường hợp ngoại lệ cần phê duyệt QMR theo P.09; chưa được tự ý bỏ qua điều kiện này.`,
-                );
+                const approved = programId && event.id
+                    ? await hasCurrentGs1QmrApproval({
+                        database: this.prisma,
+                        eventId: event.id, programId, projectId,
+                        decisionId: decision.id, decisionDate: decision.decision_date,
+                        proposedDate: plannedStart,
+                    })
+                    : false;
+                if (!approved) {
+                    throw new BadRequestException(
+                        `Giám sát lần 1 phải bắt đầu không quá 12 tháng từ ngày quyết định chứng nhận (hạn ${deadline.toISOString().slice(0, 10)}). Trường hợp ngoại lệ cần phê duyệt QMR theo P.09; chưa được tự ý bỏ qua điều kiện này.`,
+                    );
+                }
             }
         }
     }
@@ -1054,6 +1066,7 @@ export class AuditProgramsService {
             await this.assertFirstSurveillanceDeadline(
                 current.project_id,
                 current.events,
+                current.id,
             );
         }
 
@@ -1258,9 +1271,10 @@ export class AuditProgramsService {
             'dự kiến',
         );
         await this.assertFirstSurveillanceDeadline(program.project_id, [{
+            id: event.id,
             event_type: dto.event_type ?? event.event_type,
             planned_start_date: plannedStart,
-        }]);
+        }], programId);
 
         this.validateDateRange(
             actualStart,

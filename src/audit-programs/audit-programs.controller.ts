@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     Body,
     Controller,
     Delete,
@@ -30,6 +31,8 @@ import { getResourceActor } from '../security/security-request';
 import type { SecurityRequest } from '../security/security-request';
 
 import { AuditProgramsService } from './audit-programs.service';
+import { P09Gs1ExceptionService } from './p09-gs1-exception.service';
+import { RequestGs1ExceptionDto, DecideGs1ExceptionDto } from './dto/p09-gs1-exception.dto';
 import {
     AuditProgramEventDto,
     CopyAuditProgramDto,
@@ -52,6 +55,7 @@ export class AuditProgramsController {
             AuditProgramsService,
         private readonly resourceAccess:
             ResourceAccessService,
+        private readonly gs1Exception: P09Gs1ExceptionService,
     ) { }
 
     private getUserId(
@@ -354,6 +358,60 @@ export class AuditProgramsController {
             eventId,
             dto,
         );
+    }
+
+    @Get(':programId/events/:eventId/gs1-exception')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_programs.read')
+    @ApiOperation({ summary: 'Xem hồ sơ ngoại lệ hạn giám sát lần 1 và quyết định QMR gần nhất' })
+    async getGs1Exception(
+        @Param('programId') programId: string,
+        @Param('eventId') eventId: string,
+        @Req() request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_program', entity_id: programId },
+            getResourceActor(request),
+        );
+        return this.gs1Exception.latest(programId, eventId);
+    }
+
+    @Post(':programId/events/:eventId/gs1-exception/request')
+    @Roles('ADMIN', 'COORDINATOR')
+    @Permissions('audit_programs.manage')
+    @ApiOperation({ summary: 'Đề nghị ngoại lệ GS1 sau 12 tháng với QMR chỉ định; không tự phê duyệt' })
+    async requestGs1Exception(
+        @Param('programId') programId: string,
+        @Param('eventId') eventId: string,
+        @Body() dto: RequestGs1ExceptionDto,
+        @Req() request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_program', entity_id: programId },
+            getResourceActor(request),
+        );
+        const actor = this.getUserId(request);
+        if (!actor) throw new BadRequestException('Thiếu người lập đề nghị ngoại lệ');
+        return this.gs1Exception.request(programId, eventId, dto, actor);
+    }
+
+    @Post(':programId/events/:eventId/gs1-exception/decide')
+    @Roles('ADMIN')
+    @Permissions('audit_programs.manage')
+    @ApiOperation({ summary: 'QMR được chỉ định quyết định ngoại lệ GS1, có bằng chứng và SoD' })
+    async decideGs1Exception(
+        @Param('programId') programId: string,
+        @Param('eventId') eventId: string,
+        @Body() dto: DecideGs1ExceptionDto,
+        @Req() request: SecurityRequest,
+    ) {
+        await this.resourceAccess.assertEntityAccess(
+            { entity_type: 'audit_program', entity_id: programId },
+            getResourceActor(request),
+        );
+        const actor = this.getUserId(request);
+        if (!actor) throw new BadRequestException('Thiếu tài khoản QMR');
+        return this.gs1Exception.decide(programId, eventId, dto, actor);
     }
 
     @Delete(':programId/events/:eventId')
