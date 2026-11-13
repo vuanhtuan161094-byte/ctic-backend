@@ -360,7 +360,7 @@ export class AuditPlansService {
         projectId: string,
         auditType: string | null | undefined,
         plannedStartDate: Date | string | null | undefined,
-        database: Pick<Prisma.TransactionClient, 'certification_decisions' | 'workflow_approvals'> = this.prisma,
+        database: Pick<Prisma.TransactionClient, 'certification_decisions' | 'workflow_approvals' | 'audit_program_events'> = this.prisma,
         auditEventId?: string | null,
     ) {
         if (!isFirstSurveillanceEvent(auditType ?? '') || !plannedStartDate) return;
@@ -383,7 +383,7 @@ export class AuditPlansService {
             const approved = auditEventId
                 ? await hasCurrentGs1QmrApproval({
                     database, eventId: auditEventId,
-                    programId: (await this.prisma.audit_program_events.findUnique({
+                    programId: (await database.audit_program_events.findUnique({
                         where: { id: auditEventId },
                         select: { program_id: true },
                     }))?.program_id ?? '',
@@ -456,6 +456,13 @@ export class AuditPlansService {
                 ) {
                     throw new BadRequestException(
                         'Cuộc đánh giá không thuộc dự án chứng nhận đã chọn',
+                    );
+                }
+
+                if (isFirstSurveillanceEvent(auditEvent.event_type) &&
+                    dto.audit_type && !isFirstSurveillanceEvent(dto.audit_type)) {
+                    throw new BadRequestException(
+                        'Không được đổi kỳ giám sát lần 1 thành loại đánh giá khác khi tạo kế hoạch',
                     );
                 }
 
@@ -838,6 +845,14 @@ export class AuditPlansService {
             plannedStartDate,
             plannedEndDate,
         );
+        if (current.audit_event &&
+            isFirstSurveillanceEvent(current.audit_event.event_type) &&
+            dto.audit_type && !isFirstSurveillanceEvent(dto.audit_type)) {
+            throw new BadRequestException(
+                'Không được thay loại kỳ giám sát lần 1 để bỏ qua kiểm soát thời hạn',
+            );
+        }
+
         await this.ensureSurveillancePlanDeadline(
             current.project_id,
             dto.audit_type ?? current.audit_type,
