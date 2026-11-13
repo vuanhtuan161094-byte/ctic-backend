@@ -109,19 +109,34 @@ export class P09SuspensionCaseService {
             reviewer_id: row.approver_id, reviewed_at: row.approved_at,
             evidence: parseSuspensionEvidence(row.comment),
         }) : null;
-        const approvedExtension = hasValidSuspensionApproval({
-            row: extension, action: 'EXTEND_3_MONTHS', certificateId: id,
-            seriesId: certificate.certificate_series_id,
-            projectId: certificate.certificate_series.project_id,
-            historyId: suspension.id,
+        // A later declined request must not erase an earlier valid extension.
+        const approvedRows = await this.prisma.workflow_approvals.findMany({
+            where: {
+                entity_type: SUSPENSION_EXTENSION_ENTITY,
+                entity_id: id,
+                status: 'approved',
+            },
+            orderBy: [{ step_no: 'desc' }],
+            select: {
+                status: true, approver_id: true, approved_at: true, comment: true,
+            },
         });
+        const approvedExtension = approvedRows.some((row) =>
+            hasValidSuspensionApproval({
+                row, action: 'EXTEND_3_MONTHS', certificateId: id,
+                seriesId: certificate.certificate_series_id,
+                projectId: certificate.certificate_series.project_id,
+                historyId: suspension.id,
+            }),
+        );
         return {
             certificate: { id, cert_number: certificate.cert_number, status: certificate.status },
             suspension: { id: suspension.id, effective_date: suspension.effective_date,
                 decision_id: suspension.certification_decision_id },
             deadline, approved_extension: approvedExtension, extension: present(extension),
             recommendation: present(recommendation),
-            requires_f13: deadline.after_maximum,
+            requires_f13: deadline.after_maximum ||
+                (recommendation?.status === 'approved'),
             // Never auto-publish, withdraw or restore by elapsed time.
             legal_status_unchanged: true,
         };

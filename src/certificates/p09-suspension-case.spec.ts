@@ -160,6 +160,21 @@ describe('P09 suspension case independent review transaction', () => {
             .rejects.toBeInstanceOf(ConflictException);
         expect(db.workflow_approvals.create).not.toHaveBeenCalled();
     });
+    it('continues to project the approved extension after another request was rejected', async () => {
+        db.workflow_approvals.findFirst.mockResolvedValue({
+            status: 'rejected', step_no: 2,
+            approver_id: maker, approved_at: null,
+            comment: JSON.stringify({ ...proof, reviewer_comment: 'Từ chối lại' }),
+        });
+        db.workflow_approvals.findMany.mockResolvedValue([{
+            status: 'approved', approver_id: maker,
+            approved_at: new Date(), comment: JSON.stringify(proof),
+        }]);
+        const result = await service.get(ref);
+        expect(result.approved_extension).toBe(true);
+        expect(result.extension?.status).toBe('rejected');
+        expect(result.legal_status_unchanged).toBe(true);
+    });
     it('cannot approve extension after maximum six months', async () => {
         jest.setSystemTime(new Date('2026-08-01T00:00:00Z'));
         await expect(service.request(ref, request(), actor))
