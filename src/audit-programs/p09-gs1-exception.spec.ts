@@ -118,6 +118,23 @@ describe('P09 QMR independent request and decision', () => {
             }),
         }));
     });
+    it('marks previously approved QMR date stale if an authoritative grant changes', async () => {
+        prisma.workflow_approvals.findFirst.mockResolvedValue({
+            id: 'approval-1', status: 'approved', approver_id: qmr,
+            approved_at: new Date('2026-07-03T00:00:00Z'), comment: JSON.stringify(evidence),
+        });
+        const valid = await service.latest('program-1', 'event-1');
+        expect(valid).toEqual(expect.objectContaining({
+            status: 'approved', effective_approved: true,
+        }));
+        prisma.certification_decisions.findFirst.mockResolvedValue({
+            id: 'new-cycle', decision_date: new Date('2026-02-28T00:00:00Z'),
+        });
+        const stale = await service.latest('program-1', 'event-1');
+        expect(stale).toEqual(expect.objectContaining({
+            status: 'stale', effective_approved: false,
+        }));
+    });
     it('rejects a configured QMR without an active ADMIN account', async () => {
         prisma.users.findFirst.mockResolvedValue(null);
         await expect(service.request('program-1', 'event-1', request(), requester))
