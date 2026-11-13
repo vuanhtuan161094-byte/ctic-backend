@@ -14,6 +14,7 @@ import {
 
 import { UpdateAuditProgramDto } from './dto/update-audit-program.dto';
 import { UpdateAuditProgramEventDto } from './dto/update-audit-program-event.dto';
+import { firstSurveillanceDeadline, isFirstSurveillanceEvent } from './surveillance-deadline';
 
 type JsonObject = Record<string, unknown>;
 
@@ -197,6 +198,43 @@ export class AuditProgramsService {
             throw new BadRequestException(
                 `Ngày kết thúc ${label} phải sau hoặc bằng ngày bắt đầu`,
             );
+        }
+    }
+
+    private async assertFirstSurveillanceDeadline(
+        projectId: string,
+        events: Array<{ event_type: string; planned_start_date?: string | Date | null }>,
+    ) {
+        const scheduled = events.filter((item) =>
+            isFirstSurveillanceEvent(item.event_type) && Boolean(item.planned_start_date),
+        );
+        if (!scheduled.length) return;
+
+        // A prior certification decision is the timing authority, not program year
+        // or a client's unverified input. No historical record is rewritten.
+        const decision = await this.prisma.certification_decisions.findFirst({
+            where: {
+                project_id: projectId,
+                status: 'issued',
+                decision_result: 'approved',
+                decision_type: { in: ['GRANT', 'RECERTIFY'] },
+            },
+            orderBy: [{ decision_date: 'desc' }, { created_at: 'desc' }],
+            select: { decision_date: true },
+        });
+        if (!decision) return;
+
+        const deadline = firstSurveillanceDeadline(decision.decision_date);
+        for (const event of scheduled) {
+            const plannedStart = new Date(event.planned_start_date!);
+            if (Number.isNaN(plannedStart.getTime())) {
+                throw new BadRequestException('Ngày đánh giá giám sát lần 1 không hợp lệ');
+            }
+            if (plannedStart.getTime() > deadline.getTime()) {
+                throw new BadRequestException(
+                    `Giám sát lần 1 phải bắt đầu không quá 12 tháng từ ngày quyết định chứng nhận (hạn ${deadline.toISOString().slice(0, 10)}). Trường hợp ngoại lệ cần phê duyệt QMR theo P.09; chưa được tự ý bỏ qua điều kiện này.`,
+                );
+            }
         }
     }
 
@@ -590,6 +628,7 @@ export class AuditProgramsService {
                 : this.getInitialEvents();
 
         this.validateEvents(events);
+        await this.assertFirstSurveillanceDeadline(dto.project_id, events);
 
         const defaultFormData =
             this.buildDefaultFormData(
@@ -1011,6 +1050,13 @@ export class AuditProgramsService {
             }
         }
 
+        if (dto.status === 'issued') {
+            await this.assertFirstSurveillanceDeadline(
+                current.project_id,
+                current.events,
+            );
+        }
+
         const updated =
             await this.prisma.audit_programs.update({
                 where: {
@@ -1066,6 +1112,7 @@ export class AuditProgramsService {
         }
 
         this.validateEvents([dto]);
+        await this.assertFirstSurveillanceDeadline(program.project_id, [dto]);
 
         const latestEvent =
             await this.prisma.audit_program_events.findFirst({
@@ -1210,6 +1257,10 @@ export class AuditProgramsService {
             plannedEnd,
             'dự kiến',
         );
+        await this.assertFirstSurveillanceDeadline(program.project_id, [{
+            event_type: dto.event_type ?? event.event_type,
+            planned_start_date: plannedStart,
+        }]);
 
         this.validateDateRange(
             actualStart,
