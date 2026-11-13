@@ -504,9 +504,10 @@ export class WorkItemsService {
             normalizeRoles(
                 user.roles,
             );
+        const allStatuses = query.status?.trim().toUpperCase() === 'ALL';
         const status =
             this.enumFilter(
-                query.status,
+                allStatuses ? undefined : query.status,
                 WORK_ITEM_STATUSES,
                 'status',
             );
@@ -585,10 +586,29 @@ export class WorkItemsService {
             );
         }
 
+        // For scoped staff, discard definitely inaccessible project work in
+        // SQL BEFORE fetching 250-row batches. Delegated assignments remain
+        // eligible for the existing delegation authorization downstream.
+        // Avoid SQL Server's parameter ceiling for very large project scopes.
+        const preScopeIds = paginated && !roles.includes('ADMIN')
+            ? await this.resourceAccess.getAccessibleProjectIds(user)
+            : null;
+        const canPreScope = preScopeIds !== null && preScopeIds.size <= 1000;
+        const candidateProjectScope = canPreScope ? [{
+            OR: [
+                { project_id: null },
+                { project_id: { in: Array.from(preScopeIds!) } },
+                ...(delegatedFromIds.length
+                    ? [{ assigned_user_id: { in: delegatedFromIds } }]
+                    : []),
+            ],
+        }] : [];
+
         const loadChunk = (skip: number) =>
             this.prisma.work_items.findMany({
                 where: {
                     AND: [
+                        ...candidateProjectScope,
                         ...(!roles.includes('ADMIN')
                             ? [{
                                 OR: [
@@ -625,14 +645,18 @@ export class WorkItemsService {
                             ],
                         },
                     ],
-                    status:
-                        status ??
-                        {
-                            in: [
-                                'OPEN',
-                                'IN_PROGRESS',
-                            ],
-                        },
+                    ...(allStatuses
+                        ? {}
+                        : {
+                            status:
+                                status ??
+                                {
+                                    in: [
+                                        'OPEN',
+                                        'IN_PROGRESS',
+                                    ],
+                                },
+                        }),
                     ...(priorityImportant ? { priority: { in: ['HIGH', 'URGENT'] } } : priority ? { priority } : {}),
                     ...(workType
                         ? {
@@ -1113,8 +1137,7 @@ export class WorkItemsService {
             },
             filter: {
                 status:
-                    status ??
-                    'ACTIVE',
+                    allStatuses ? 'ALL' : status ?? 'ACTIVE',
                 priority:
                     priority ??
                     null,

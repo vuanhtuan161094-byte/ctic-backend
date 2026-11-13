@@ -60,6 +60,8 @@ describe('WorkItemsService', () => {
             jest.fn(),
         filterEntities:
             jest.fn(),
+        getAccessibleProjectIds:
+            jest.fn(),
     };
     let service:
         WorkItemsService;
@@ -112,6 +114,8 @@ describe('WorkItemsService', () => {
                 async (ids) =>
                     ids,
             );
+        resourceAccess.getAccessibleProjectIds
+            .mockResolvedValue(null);
         resourceAccess.filterEntities
             .mockImplementation(
                 async (items) =>
@@ -674,6 +678,41 @@ describe('WorkItemsService', () => {
             { userId: 'user-1', roles: ['AUDITOR'] }, query,
         )).rejects.toBeInstanceOf(BadRequestException);
         expect(workItems.findMany).not.toHaveBeenCalled();
+    });
+
+    it('searches ALL work statuses without accidentally excluding completed history', async () => {
+        await service.getMyWork(
+            { userId: 'reviewer-1', roles: ['TECHNICAL_REVIEWER'] },
+            { status: 'ALL', search: 'review', page: '1', limit: '10' },
+        );
+        const query = workItems.findMany.mock.calls[0][0];
+        expect(query.where).not.toHaveProperty('status');
+    });
+
+    it('pushes project access into SQL candidate filtering and preserves delegation', async () => {
+        resourceAccess.getAccessibleProjectIds.mockResolvedValue(new Set(['assigned-project']));
+        await service.getMyWork(
+            { userId: 'auditor-1', roles: ['AUDITOR'] },
+            { page: '1', search: 'f04', limit: '20' },
+        );
+        const query = workItems.findMany.mock.calls[0][0];
+        expect(query.where.AND).toEqual(expect.arrayContaining([
+            { OR: [
+                { project_id: null },
+                { project_id: { in: ['assigned-project'] } },
+            ] },
+        ]));
+    });
+
+    it('falls back to safe ACL filtering when over 1000 assigned projects', async () => {
+        resourceAccess.getAccessibleProjectIds.mockResolvedValue(
+            new Set(Array.from({ length: 1001 }, (_, i) => `p-${i}`)),
+        );
+        await service.getMyWork(
+            { userId: 'auditor-1', roles: ['AUDITOR'] }, { page: '1' },
+        );
+        const query = workItems.findMany.mock.calls[0][0];
+        expect(query.where.AND).toHaveLength(2);
     });
 
     it('defaults reconciliation to dry-run and performs no writes', async () => {
