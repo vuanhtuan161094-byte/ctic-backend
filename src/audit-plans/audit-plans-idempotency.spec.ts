@@ -6,6 +6,10 @@ describe('AuditPlansService operational plan idempotency', () => {
     it('serializes three creates for one event into exactly one plan row', async () => {
         const rows: any[] = [];
         const transaction = {
+            // No GRANT decision yet in this isolated draft-plan idempotency fixture.
+            certification_decisions: {
+                findFirst: jest.fn().mockResolvedValue(null),
+            },
             certification_projects: {
                 findUnique: jest.fn().mockResolvedValue({
                     id: 'project-1',
