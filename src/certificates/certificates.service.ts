@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 
 import { UpdateCertificateStatusDto } from './dto/update-certificate-status.dto';
 import { projectSuspensionReview } from './suspension-review';
+import { hasValidSuspensionApproval, SUSPENSION_REVIEW_ENTITY } from './p09-suspension-case';
 
 import * as QRCode from 'qrcode';
 
@@ -1256,15 +1257,48 @@ export class CertificatesService {
                         );
                     }
 
-                    try {
-                        assertCertificateStatusTransition(
-                            previousStatus,
-                            'replaced',
-                        );
-                    } catch {
-                        throw new BadRequestException(
-                            `Không thể thay thế certificate ở trạng thái ${previousStatus}`,
-                        );
+                    if (previousStatus === 'suspended' && decisionType === 'REDUCE_SCOPE') {
+                        // Exclusive P.09 exception: scope reduction following a
+                        // reviewed suspension may replace that suspended version;
+                        // other amendments/renewals remain blocked.
+                        const history = await transaction.certificate_status_histories.findFirst({
+                            where: { certificate_id: previousCertificate.id, to_status: 'suspended' },
+                            orderBy: [{ effective_date: 'desc' }, { created_at: 'desc' }],
+                            select: { id: true },
+                        });
+                        const review = await transaction.workflow_approvals.findFirst({
+                            where: {
+                                entity_type: SUSPENSION_REVIEW_ENTITY,
+                                entity_id: previousCertificate.id,
+                            },
+                            orderBy: [{ step_no: 'desc' }],
+                            select: {
+                                status: true, approver_id: true, approved_at: true, comment: true,
+                            },
+                        });
+                        if (!history || !hasValidSuspensionApproval({
+                            row: review, action: 'RECOMMEND_REDUCE_SCOPE',
+                            certificateId: previousCertificate.id,
+                            seriesId: certificateSeriesId,
+                            projectId: project.id,
+                            historyId: history.id,
+                            f11Id: dto.technical_review_id,
+                        })) {
+                            throw new BadRequestException(
+                                'Thu hẹp phạm vi sau đình chỉ yêu cầu F.11, quyết định F.13 và xem xét độc lập cùng lần đình chỉ',
+                            );
+                        }
+                    } else {
+                        try {
+                            assertCertificateStatusTransition(
+                                previousStatus,
+                                'replaced',
+                            );
+                        } catch {
+                            throw new BadRequestException(
+                                `Không thể thay thế certificate ở trạng thái ${previousStatus}`,
+                            );
+                        }
                     }
                 }
 

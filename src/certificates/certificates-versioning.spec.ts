@@ -97,6 +97,12 @@ function createHarness(input: {
         },
         certificate_status_histories: {
             createMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findFirst: jest.fn().mockResolvedValue({
+                id: 'suspension-history-1',
+            }),
+        },
+        workflow_approvals: {
+            findFirst: jest.fn().mockResolvedValue(null),
         },
         certification_projects: {
             update: jest.fn().mockResolvedValue({}),
@@ -308,6 +314,57 @@ describe('CertificatesService series-aware versioning', () => {
             .not.toHaveProperty('organization_name');
         expect(harness.createdCertificate.verification_code)
             .not.toBe(previous.verification_code);
+    });
+
+    it('permits only reviewed REDUCE_SCOPE from a suspended version and retains its history', async () => {
+        const prev = { id: 'certificate-suspended', version_no: 2, status: 'suspended',
+            certificate_series_id: 'series-a', certification_scope: 'Original scope' };
+        const harness = createHarness({
+            decisionType: 'REDUCE_SCOPE', seriesId: 'series-a', previousCertificate: prev,
+        });
+        const issue = { ...dto, change_reason: 'Loại bỏ các hoạt động không đáp ứng' };
+        await expect(harness.service.create(issue, 'user-1'))
+            .rejects.toThrow('xem xét độc lập');
+        expect(harness.transaction.certificates.create).not.toHaveBeenCalled();
+
+        harness.transaction.workflow_approvals.findFirst.mockResolvedValue({
+            status: 'approved', approved_at: new Date(),
+            approver_id: 'independent-decision-maker',
+            comment: JSON.stringify({
+                schema: 'P09_SUSPENSION_3_PLUS_3_V1',
+                action: 'RECOMMEND_REDUCE_SCOPE',
+                certificate_id: prev.id,
+                series_id: 'series-a', project_id: 'project-1',
+                suspension_history_id: 'suspension-history-1',
+                suspended_at: '2026-01-31',
+                technical_review_id: 'review-1',
+                requested_by: 'independent-coordinator',
+                requested_at: '2026-04-01T00:00:00Z',
+                reason: 'Thẩm xét phạm vi không phù hợp và đối chiếu CAP',
+                corrective_evidence: 'F11/2026/001',
+                reviewer_comment: 'Chấp thuận thu hẹp có căn cứ phù hợp',
+                reviewed_at: '2026-04-02T00:00:00Z',
+            }),
+        });
+        await harness.service.create(issue, 'user-1');
+        expect(harness.transaction.certificates.create).toHaveBeenCalledTimes(1);
+        expect(harness.transaction.certificate_status_histories.createMany)
+            .toHaveBeenCalledWith({
+                data: [expect.objectContaining({
+                    certificate_id: prev.id,
+                    from_status: 'suspended', to_status: 'replaced',
+                })],
+            });
+    });
+
+    it('never allows unrestricted AMEND to replace a suspended certificate', async () => {
+        const harness = createHarness({
+            decisionType: 'AMEND', seriesId: 'series-a',
+            previousCertificate: { id: 'susp-2', version_no: 1, status: 'suspended' },
+        });
+        await expect(harness.service.create({ ...dto, change_reason: 'Đổi tên công ty' }))
+            .rejects.toThrow('Không thể thay thế');
+        expect(harness.transaction.certificates.create).not.toHaveBeenCalled();
     });
 
     it('does not create a duplicate certificate for MAINTAIN or REFUSE', async () => {

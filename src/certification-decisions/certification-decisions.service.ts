@@ -1234,6 +1234,41 @@ export class CertificationDecisionsService {
 
         return this.runSerializableTransaction(
             async (transaction) => {
+                // P.09: a suspended certificate cannot be silently reissued
+                // with a narrower scope. It requires the same independent
+                // suspension/F.11 review as restoration or withdrawal.
+                if (dto.decision_result === 'approved' &&
+                    decisionType === 'REDUCE_SCOPE' && certificateSeriesId) {
+                    const current = await transaction.certificates.findFirst({
+                        where: { certificate_series_id: certificateSeriesId },
+                        orderBy: { version_no: 'desc' },
+                        select: { id: true, status: true },
+                    });
+                    if (current?.status === 'suspended') {
+                        const history = await transaction.certificate_status_histories.findFirst({
+                            where: { certificate_id: current.id, to_status: 'suspended' },
+                            orderBy: [{ effective_date: 'desc' }, { created_at: 'desc' }],
+                            select: { id: true },
+                        });
+                        const review = await transaction.workflow_approvals.findFirst({
+                            where: { entity_type: SUSPENSION_REVIEW_ENTITY, entity_id: current.id },
+                            orderBy: [{ step_no: 'desc' }],
+                            select: {
+                                status: true, approver_id: true, approved_at: true, comment: true,
+                            },
+                        });
+                        if (!history || !hasValidSuspensionApproval({
+                            row: review, action: 'RECOMMEND_REDUCE_SCOPE',
+                            certificateId: current.id, seriesId: certificateSeriesId,
+                            projectId: project.id, historyId: history.id,
+                            f11Id: dto.technical_review_id,
+                        })) {
+                            throw new BadRequestException(
+                                'Thu hẹp chứng nhận đang đình chỉ cần F.11 và hồ sơ xem xét P.09 độc lập được chấp thuận cho cùng lần đình chỉ',
+                            );
+                        }
+                    }
+                }
                 const decision =
                     await transaction.certification_decisions.create(
                         {
