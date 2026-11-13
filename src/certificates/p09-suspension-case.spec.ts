@@ -1,4 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { PERMISSIONS_KEY } from '../auth/permissions.decorator';
+import { ROLES_KEY } from '../auth/roles.decorator';
+import { CertificatesController } from './certificates.controller';
 import { addCalendarMonthsClamped } from './suspension-review';
 import {
     hasValidSuspensionApproval, parseSuspensionEvidence, SUSPENSION_REVIEW_SCHEMA,
@@ -22,6 +25,24 @@ const proof = {
     reviewer_comment: 'Chấp thuận gia hạn có giới hạn đúng 3 tháng',
     reviewed_at: '2026-02-02T00:00:00Z',
 };
+describe('P09 independent suspension endpoint role gates', () => {
+    it('restricts request, decision and reviewer-list endpoint to intended roles and permissions', () => {
+        const proto = CertificatesController.prototype;
+        expect(Reflect.getMetadata(ROLES_KEY, proto.requestSuspensionCase))
+            .toEqual(['ADMIN', 'COORDINATOR']);
+        expect(Reflect.getMetadata(PERMISSIONS_KEY, proto.requestSuspensionCase))
+            .toEqual(['audit_programs.manage']);
+        expect(Reflect.getMetadata(ROLES_KEY, proto.decideSuspensionCase))
+            .toEqual(['DECISION_MAKER']);
+        expect(Reflect.getMetadata(PERMISSIONS_KEY, proto.decideSuspensionCase))
+            .toEqual(['certification_decisions.issue']);
+        for (const method of [proto.requestSuspensionCase, proto.decideSuspensionCase]) {
+            const roles = Reflect.getMetadata(ROLES_KEY, method) as string[];
+            expect(roles).not.toContain('CUSTOMER');
+            expect(roles).not.toContain('AUDITOR');
+        }
+    });
+});
 describe('P09 3+3 suspension controls', () => {
     it('uses calendar months with bounded six-month maximum', () => {
         expect(addCalendarMonthsClamped(new Date('2026-01-31T00:00:00Z'), 3)
