@@ -58,7 +58,7 @@ describe('P09 suspension case independent review transaction', () => {
         technical_reviews: { findUnique: jest.fn() },
         audit_team_members: { findFirst: jest.fn() },
         workflow_approvals: {
-            findFirst: jest.fn(), create: jest.fn(), updateMany: jest.fn(),
+            findFirst: jest.fn(), findMany: jest.fn(), create: jest.fn(), updateMany: jest.fn(),
         },
         audit_logs: { create: jest.fn() },
         $queryRaw: jest.fn(), $transaction: jest.fn(),
@@ -89,6 +89,7 @@ describe('P09 suspension case independent review transaction', () => {
                 audit_plans: { project_id: 'project-1' } },
         });
         db.workflow_approvals.findFirst.mockResolvedValue(null);
+        db.workflow_approvals.findMany.mockResolvedValue([]);
         db.workflow_approvals.create.mockResolvedValue({ id: 'review-1', status: 'pending', step_no: 1 });
         db.workflow_approvals.updateMany.mockResolvedValue({ count: 1 });
         db.audit_team_members.findFirst.mockResolvedValue(null);
@@ -121,8 +122,22 @@ describe('P09 suspension case independent review transaction', () => {
             status: 'approved', step_no: 1, approver_id: maker,
             approved_at: new Date(), comment: JSON.stringify(proof),
         });
+        db.workflow_approvals.findMany.mockResolvedValue([{
+            status: 'approved', approver_id: maker,
+            approved_at: new Date(), comment: JSON.stringify(proof),
+        }]);
         await expect(service.request(ref, request(), actor))
             .rejects.toBeInstanceOf(ConflictException);
+    });
+    it('prevents second extension after a rejected newer request hides a prior approval', async () => {
+        db.workflow_approvals.findFirst.mockResolvedValue({ status: 'rejected', step_no: 2 });
+        db.workflow_approvals.findMany.mockResolvedValue([{
+            status: 'approved', approver_id: maker,
+            approved_at: new Date(), comment: JSON.stringify(proof),
+        }]);
+        await expect(service.request(ref, request(), actor))
+            .rejects.toBeInstanceOf(ConflictException);
+        expect(db.workflow_approvals.create).not.toHaveBeenCalled();
     });
     it('cannot approve extension after maximum six months', async () => {
         jest.setSystemTime(new Date('2026-08-01T00:00:00Z'));

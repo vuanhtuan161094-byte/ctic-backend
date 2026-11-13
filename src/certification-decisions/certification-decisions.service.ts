@@ -8,6 +8,8 @@ import {
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { addCalendarMonthsClamped } from '../certificates/suspension-review';
+import { hasValidSuspensionApproval, SUSPENSION_REVIEW_ENTITY } from '../certificates/p09-suspension-case';
 import {
     assertCertificateStatusTransition,
     canReplaceCertificateStatus,
@@ -1399,6 +1401,54 @@ export class CertificationDecisionsService {
                         throw new BadRequestException(
                             `Không được thực hiện ${decisionType} khi chứng chỉ đang ở trạng thái ${statusLabels[currentStatus]}`,
                         );
+                    }
+
+                    // F.13 remains the ONLY authority to change certificate status.
+                    // For an already suspended certificate, require an independent
+                    // P.09 review recommendation for this same F.11 and suspension.
+                    if (dto.decision_result === 'approved' &&
+                        currentStatus === 'suspended' &&
+                        (decisionType === 'RESTORE' || decisionType === 'WITHDRAW')) {
+                        const suspension = await transaction.certificate_status_histories.findFirst({
+                            where: {
+                                certificate_id: currentCertificate.id,
+                                to_status: 'suspended',
+                            },
+                            orderBy: [{ effective_date: 'desc' }, { created_at: 'desc' }],
+                            select: { id: true, effective_date: true },
+                        });
+                        const review = await transaction.workflow_approvals.findFirst({
+                            where: {
+                                entity_type: SUSPENSION_REVIEW_ENTITY,
+                                entity_id: currentCertificate.id,
+                            },
+                            orderBy: [{ step_no: 'desc' }],
+                            select: {
+                                status: true, approver_id: true, approved_at: true, comment: true,
+                            },
+                        });
+                        const reviewAction = decisionType === 'RESTORE'
+                            ? 'RECOMMEND_RESTORE' : 'RECOMMEND_WITHDRAW';
+                        if (!suspension || !hasValidSuspensionApproval({
+                            row: review,
+                            action: reviewAction,
+                            certificateId: currentCertificate.id,
+                            seriesId: certificateSeriesId!,
+                            projectId: project.id,
+                            historyId: suspension.id,
+                            f11Id: dto.technical_review_id,
+                        })) {
+                            throw new BadRequestException(
+                                'F.13 yêu cầu hồ sơ xem xét đình chỉ P.09 được người độc lập chấp thuận và liên kết đúng F.11, chứng chỉ và lần đình chỉ hiện hành',
+                            );
+                        }
+                        if (decisionType === 'RESTORE' &&
+                            this.getTodayInVietnam().getTime() >
+                                addCalendarMonthsClamped(suspension.effective_date, 6).getTime()) {
+                            throw new BadRequestException(
+                                'Đã quá 6 tháng đình chỉ, phải xử lý thu hồi hoặc thu hẹp; không thể khôi phục theo luồng 3+3 tháng',
+                            );
+                        }
                     }
 
                     if (targetStatus === 'active') {

@@ -82,6 +82,31 @@ function createHarness(input: {
         certificate_status_histories: {
             create:
                 jest.fn(async ({ data }: any) => data),
+            findFirst: jest.fn(async () => ({
+                id: '00000000-0000-4000-8000-000000000049',
+                effective_date: new Date('2026-08-01T00:00:00.000Z'),
+            })),
+        },
+        workflow_approvals: {
+            findFirst: jest.fn(async () => ({
+                approver_id: '00000000-0000-4000-8000-000000000050',
+                approved_at: new Date('2026-08-18T00:00:00.000Z'),
+                status: 'approved',
+                comment: JSON.stringify({
+                    schema: 'P09_SUSPENSION_3_PLUS_3_V1',
+                    action: 'RECOMMEND_RESTORE', certificate_id: certificateId,
+                    project_id: projectId, series_id: seriesId,
+                    suspension_history_id: '00000000-0000-4000-8000-000000000049',
+                    suspended_at: '2026-08-01',
+                    technical_review_id: technicalReviewId,
+                    requested_by: '00000000-0000-4000-8000-000000000051',
+                    requested_at: '2026-08-02T00:00:00.000Z',
+                    reason: 'Đã đối chiếu hành động khắc phục và kết quả thẩm xét',
+                    corrective_evidence: 'CAP/2026/0001',
+                    reviewer_comment: 'Đánh giá khách quan đầy đủ trước khi đưa ra quyết định',
+                    reviewed_at: '2026-08-18T00:00:00.000Z',
+                }),
+            })),
         },
         certification_projects: {
             update:
@@ -190,6 +215,27 @@ function createHarness(input: {
             ),
     };
 
+    // The case review recommendation matches each lifecycle action at the
+    // exact F.11 authority; active certificates do not require this gate.
+    transaction.workflow_approvals.findFirst.mockImplementation(async () => ({
+        approver_id: '00000000-0000-4000-8000-000000000050',
+        approved_at: new Date('2026-08-18T00:00:00.000Z'),
+        status: 'approved',
+        comment: JSON.stringify({
+            schema: 'P09_SUSPENSION_3_PLUS_3_V1',
+            action: 'RECOMMEND_RESTORE', certificate_id: certificateId,
+            project_id: projectId, series_id: seriesId,
+            suspension_history_id: '00000000-0000-4000-8000-000000000049',
+            suspended_at: '2026-08-01',
+            technical_review_id: technicalReviewId,
+            requested_by: '00000000-0000-4000-8000-000000000051',
+            requested_at: '2026-08-02T00:00:00.000Z',
+            reason: 'Đã đối chiếu hành động khắc phục và kết quả thẩm xét',
+            corrective_evidence: 'CAP/2026/0001',
+            reviewer_comment: 'Đánh giá khách quan đầy đủ trước khi đưa ra quyết định',
+            reviewed_at: '2026-08-18T00:00:00.000Z',
+        }),
+    }));
     const service =
         new CertificationDecisionsService(
             prisma as any,
@@ -299,6 +345,29 @@ describe('certification decision certificate status lifecycle', () => {
                 createHarness({
                     certificateStatus,
                 });
+            if (certificateStatus === 'suspended' && decisionType === 'WITHDRAW') {
+                harness.transaction.workflow_approvals.findFirst.mockImplementation(async () => ({
+                    approver_id: '00000000-0000-4000-8000-000000000050',
+                    approved_at: new Date('2026-08-18T00:00:00.000Z'),
+                    status: 'approved',
+                    comment: JSON.stringify({
+                        schema: 'P09_SUSPENSION_3_PLUS_3_V1',
+                        action: 'RECOMMEND_WITHDRAW',
+                        certificate_id: harness.certificateId,
+                        series_id: '00000000-0000-4000-8000-000000000043',
+                        project_id: '00000000-0000-4000-8000-000000000044',
+                        suspension_history_id: '00000000-0000-4000-8000-000000000049',
+                        suspended_at: '2026-08-01',
+                        technical_review_id: '00000000-0000-4000-8000-000000000045',
+                        requested_by: '00000000-0000-4000-8000-000000000051',
+                        requested_at: '2026-08-02T00:00:00.000Z',
+                        reason: 'Không khắc phục, chứng nhận phải thu hồi theo thẩm xét',
+                        corrective_evidence: 'F11/2026/004',
+                        reviewer_comment: 'Có căn cứ đầy đủ để kiến nghị thu hồi',
+                        reviewed_at: '2026-08-18T00:00:00.000Z',
+                    }),
+                }));
+            }
 
             await harness.service.create(
                 harness.dto(
@@ -362,6 +431,33 @@ describe('certification decision certificate status lifecycle', () => {
             ).not.toHaveBeenCalled();
         },
     );
+
+    it('blocks suspended RESTORE F.13 when P.09 independent recommendation was not approved', async () => {
+        const harness = createHarness({ certificateStatus: 'suspended' });
+        harness.transaction.workflow_approvals.findFirst.mockResolvedValue(null);
+        await expect(harness.service.create(harness.dto('RESTORE'), harness.createdBy))
+            .rejects.toThrow('hồ sơ xem xét đình chỉ P.09');
+        expect(harness.transaction.certificates.updateMany).not.toHaveBeenCalled();
+        expect(harness.transaction.certificate_status_histories.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks suspended WITHDRAW when recommendation refers to another F.11', async () => {
+        const harness = createHarness({ certificateStatus: 'suspended' });
+        await expect(harness.service.create(harness.dto('WITHDRAW'), harness.createdBy))
+            .rejects.toThrow('hồ sơ xem xét đình chỉ P.09');
+        expect(harness.transaction.certificates.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does not restore a suspended certificate after the six-month window even with review', async () => {
+        const harness = createHarness({ certificateStatus: 'suspended' });
+        harness.transaction.certificate_status_histories.findFirst.mockResolvedValue({
+            id: '00000000-0000-4000-8000-000000000049',
+            effective_date: new Date('2025-01-31T00:00:00.000Z'),
+        });
+        await expect(harness.service.create(harness.dto('RESTORE'), harness.createdBy))
+            .rejects.toThrow('quá 6 tháng đình chỉ');
+        expect(harness.transaction.certificates.updateMany).not.toHaveBeenCalled();
+    });
 
     it('rejects RESTORE when the effective date is after certificate expiry', async () => {
         const harness =

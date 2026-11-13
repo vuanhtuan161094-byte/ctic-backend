@@ -121,7 +121,7 @@ export class P09SuspensionCaseService {
                 decision_id: suspension.certification_decision_id },
             deadline, approved_extension: approvedExtension, extension: present(extension),
             recommendation: present(recommendation),
-            requires_f13: Boolean(deadline.after_maximum && !recommendation?.approved_at),
+            requires_f13: deadline.after_maximum,
             // Never auto-publish, withdraw or restore by elapsed time.
             legal_status_unchanged: true,
         };
@@ -159,14 +159,29 @@ export class P09SuspensionCaseService {
                 select: { step_no: true, status: true, comment: true, approver_id: true, approved_at: true },
             });
             if (last?.status === 'pending') throw new ConflictException('Đang có đề nghị chờ quyết định');
-            if (dto.action === 'EXTEND_3_MONTHS' && last?.status === 'approved' &&
-                hasValidSuspensionApproval({
-                    row: last, action: 'EXTEND_3_MONTHS', certificateId: id,
+            if (dto.action === 'EXTEND_3_MONTHS') {
+                // A newer declined request must not erase an older grant of
+                // the sole permitted extension for the same suspension.
+                const pastApprovals = await tx.workflow_approvals.findMany({
+                    where: {
+                        entity_type: SUSPENSION_EXTENSION_ENTITY, entity_id: id,
+                        status: 'approved',
+                    },
+                    orderBy: [{ step_no: 'desc' }],
+                    select: {
+                        status: true, approver_id: true, approved_at: true, comment: true,
+                    },
+                });
+                if (pastApprovals.some((row) => hasValidSuspensionApproval({
+                    row, action: 'EXTEND_3_MONTHS', certificateId: id,
                     seriesId: certificate.certificate_series_id,
                     projectId: certificate.certificate_series.project_id,
                     historyId: suspension.id,
-                })) {
-                throw new ConflictException('Đã duyệt gia hạn 3 tháng; không được gia hạn lần hai');
+                }))) {
+                    throw new ConflictException(
+                        'Đã duyệt gia hạn 3 tháng cho lần đình chỉ này; không thể gia hạn lần hai',
+                    );
+                }
             }
             const evidence = {
                 schema: SUSPENSION_REVIEW_SCHEMA, action: dto.action,
