@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 
 import { UpdateCertificateStatusDto } from './dto/update-certificate-status.dto';
+import { projectSuspensionReview } from './suspension-review';
 
 import * as QRCode from 'qrcode';
 
@@ -1600,9 +1601,20 @@ export class CertificatesService {
                     },
                 });
 
+        const latestSuspension = certificate.status?.trim().toLowerCase() === 'suspended'
+            ? history.find((entry) => entry.to_status?.trim().toLowerCase() === 'suspended')
+            : null;
+
         return {
             certificate,
             history,
+            // Monitoring projection only; a review/extension/withdrawal requires
+            // separate accountable approval and cannot be inferred from elapsed time.
+            suspension_review: projectSuspensionReview({
+                status: certificate.status,
+                effectiveDate: latestSuspension?.effective_date ?? null,
+                now: this.getTodayInVietnam(),
+            }),
         };
     }
     async findPublicCertificate(
