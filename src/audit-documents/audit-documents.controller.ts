@@ -67,7 +67,7 @@ export class AuditDocumentsController {
     )
     @Permissions('audit_plans.read')
     @ApiOperation({
-        summary: 'Xem dữ liệu và lịch sử hồ sơ F.03, F.04, F.05, F.06, F.07, F.10, F.11, F.15, F.17',
+        summary: 'Xem dữ liệu và lịch sử hồ sơ F.03, F.04, F.05, F.06, F.07, F.08, F.10, F.11, F.15, F.17',
     })
     @ApiParam({
         name: 'planId',
@@ -164,6 +164,7 @@ export class AuditDocumentsController {
             'audit_log_f15',
             'audit_monitoring_f17',
             'audit_checklist_f06',
+            'audit_note_f08',
             'corrective_action_request_f10',
             'technical_review_report_f11',
         ],
