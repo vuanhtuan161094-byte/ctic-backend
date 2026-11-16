@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsString, IsUUID, MaxLength, MinLength, ValidateNested } from 'class-validator';
 
 export class P09RecognizedOrganizationDto {
     @IsString()
@@ -35,9 +35,7 @@ export class ApproveP09RecognizedListDto {
 }
 
 export class IssueP09RecognizedListDto {
-    @IsString()
-    @MinLength(36)
-    @MaxLength(36)
+    @IsUUID('4')
     signed_file_id!: string;
 
     @IsString()
