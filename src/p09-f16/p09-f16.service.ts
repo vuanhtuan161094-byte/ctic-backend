@@ -152,6 +152,15 @@ export class P09F16Service {
             throw new ConflictException('Phải phê duyệt độc lập phiên bản F.16 trước khi xuất');
         }
         if (!this.documentFiles) throw new ConflictException('Dịch vụ quản lý tài liệu chưa được cấu hình');
+        const signatures = await this.prisma.users.findMany({
+            where: { id: { in: [item.prepared_by, item.approved_by] } },
+            select: { id: true, full_name: true, username: true },
+        });
+        const preparer = signatures.find((u) => u.id === item.prepared_by);
+        const approver = signatures.find((u) => u.id === item.approved_by);
+        if (!preparer?.full_name?.trim() || !approver?.full_name?.trim()) {
+            throw new ConflictException('Thiếu tên người lập hoặc người phê duyệt để in biểu mẫu F.16');
+        }
         const templateCandidates = [
             join(__dirname, '..', 'reports', 'templates', 'F.03-P.09.audit-program.template.docx'),
             join(process.cwd(), 'dist', 'reports', 'templates', 'F.03-P.09.audit-program.template.docx'),
@@ -180,8 +189,8 @@ export class P09F16Service {
                 data: {
                     organizations: JSON.parse(item.organizations_json),
                     revision_no: item.revision_no,
-                    preparer_name: item.prepared_by,
-                    approver_name: item.approved_by,
+                    preparer_name: preparer.full_name.trim(),
+                    approver_name: approver.full_name.trim(),
                     prepared_date: item.created_at.toISOString().slice(0, 10),
                     approved_date: item.approved_at?.toISOString().slice(0, 10) ?? '',
                 },
