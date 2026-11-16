@@ -119,7 +119,7 @@ export class CertificationAgreementsController {
     ) {
         return this.certificationAgreementsService.create(
             dto,
-            getActorUserId(request),
+            getActorUserId(request) ?? undefined,
         );
     }
 }
