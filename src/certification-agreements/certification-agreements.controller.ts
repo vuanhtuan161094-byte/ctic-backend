@@ -29,6 +29,7 @@ import { getActorUserId } from '../security/security-request';
 
 import { CertificationAgreementsService } from './certification-agreements.service';
 import { CreateCertificationAgreementDto } from './dto/create-certification-agreement.dto';
+import { VerifyF18EvidenceDto } from './dto/verify-f18-evidence.dto';
 
 @Controller('certification-agreements')
 @ApiTags('06. Thỏa thuận chứng nhận')
@@ -122,4 +123,26 @@ export class CertificationAgreementsController {
             getActorUserId(request) ?? undefined,
         );
     }
+    @Get(':id/evidence-status')
+    @Roles('ADMIN', 'STAFF', 'SALES', 'COORDINATOR')
+    @Permissions('contracts.read')
+    @ApiOperation({ summary: 'Trạng thái đối chiếu SHA và người xác minh bản ký F.18' })
+    evidenceStatus(@Param('id') id: string) {
+        return this.certificationAgreementsService.evidenceStatus(id);
+    }
+
+    @Post(':id/verify-evidence')
+    @Roles('ADMIN')
+    @Permissions('contracts.manage')
+    @ApiOperation({ summary: 'Xác minh độc lập bản ký F.18; không tạo chữ ký pháp lý thay người ký' })
+    verifyEvidence(
+        @Param('id') id: string,
+        @Body() dto: VerifyF18EvidenceDto,
+        @Req() request: SecurityRequest,
+    ) {
+        return this.certificationAgreementsService.verifyEvidence(
+            id, dto, getActorUserId(request) ?? undefined,
+        );
+    }
+
 }
