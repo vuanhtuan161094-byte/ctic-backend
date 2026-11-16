@@ -37,6 +37,7 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
     'audit_log_f15',
     'audit_monitoring_f17',
     'audit_checklist_f06',
+    'audit_note_f08',
     'corrective_action_request_f10',
     'technical_review_report_f11',
 ]);
@@ -1263,6 +1264,52 @@ export class AuditDocumentsService {
         });
     }
 
+    private buildAuditNoteDocument(plan: any) {
+        const common = this.commonSnapshot(plan);
+        const documentData = this.planDocumentData(plan);
+        const notes = Array.isArray(documentData.audit_note_rows)
+            ? documentData.audit_note_rows.filter((note): note is JsonObject =>
+                this.isPlainObject(note))
+            : [];
+        const auditorName = this.displayText(
+            this.teamLeader(plan.audit_team_appointment)?.experts?.full_name, '',
+        );
+        const snapshot = {
+            customer_code: common.customer_code,
+            organization_name: common.organization_name_vi,
+            audit_location: common.audit_location,
+            auditor_name: auditorName,
+            audit_date: this.formatDate(plan.planned_start_date),
+            rows: notes.map((row) => ({
+                clause: this.displayText(row.clause, ''),
+                content: this.displayText(row.content, ''),
+                finding: this.displayText(row.finding, ''),
+            })),
+        };
+        const missingFields = this.collectMissing([
+            ['Mã khách hàng', snapshot.customer_code],
+            ['Tên khách hàng', snapshot.organization_name],
+            ['Địa điểm đánh giá', snapshot.audit_location],
+            ['Ngày đánh giá', plan.planned_start_date],
+            ['Chuyên gia đánh giá', auditorName],
+            ['Ghi chép đánh giá', notes.length],
+        ]);
+        return {
+            definition: {
+                requestType: 'audit_note_f08',
+                formCode: 'F.08-P.09',
+                label: 'Ghi chép đánh giá',
+                // Existing approved DOCX ZIP shell; builder replaces its visible body.
+                templateFile: 'F.03-P.09.audit-program.template.docx',
+                entityType: 'audit_plan',
+                entityId: plan.id,
+                documentType: 'audit_note_f08',
+            } satisfies AuditDocumentDefinition,
+            snapshot,
+            missingFields,
+        };
+    }
+
     private async buildProgramDocument(plan: any, program: any) {
         if (!program) {
             throw new BadRequestException(
@@ -2355,6 +2402,7 @@ export class AuditDocumentsService {
 
         documents.push(this.buildPlanDocument(plan));
         documents.push(this.buildAttendanceDocument(plan));
+        documents.push(this.buildAuditNoteDocument(plan));
         documents.push(...this.buildAuditLogDocuments(plan));
         documents.push(...this.buildChecklistDocuments(plan));
         documents.push(...await this.buildCorrectiveActionDocuments(plan));
@@ -2790,7 +2838,7 @@ export class AuditDocumentsService {
 
         if (!ALLOWED_DOCUMENT_TYPES.has(normalizedType)) {
             throw new BadRequestException(
-                'Loại tài liệu chỉ chấp nhận F.03, F.04, F.05, F.06, F.07, F.10, F.11, F.15 hoặc F.17',
+                'Loại tài liệu phải thuộc danh mục F.03–F.08, F.10, F.11, F.15 hoặc F.17',
             );
         }
 
@@ -2850,11 +2898,34 @@ export class AuditDocumentsService {
             pdfStoredName,
         );
 
-        templateEngine.renderDocxTemplate({
-            templatePath,
-            outputPath: docxPath,
-            data: document.snapshot,
-        });
+        if (normalizedType === 'audit_note_f08') {
+            const filename = 'p09-f08-builder.cjs';
+            const builderPath = [
+                join(__dirname, '..', 'reports', 'runtime', filename),
+                join(process.cwd(), 'dist', 'reports', 'runtime', filename),
+                join(process.cwd(), 'src', 'reports', 'runtime', filename),
+            ].find((candidate) => existsSync(candidate));
+            if (!builderPath) {
+                throw new NotFoundException('Thiếu bộ tạo biểu mẫu F.08-P.09');
+            }
+            const builder = require(builderPath) as {
+                renderAuditNotesDocx: (input: {
+                    baseTemplatePath: string; outputPath: string;
+                    data: Record<string, unknown>;
+                }) => string;
+            };
+            builder.renderAuditNotesDocx({
+                baseTemplatePath: templatePath,
+                outputPath: docxPath,
+                data: document.snapshot,
+            });
+        } else {
+            templateEngine.renderDocxTemplate({
+                templatePath,
+                outputPath: docxPath,
+                data: document.snapshot,
+            });
+        }
 
         const customerCode = (
             document.snapshot as Record<string, unknown>
