@@ -330,6 +330,19 @@ export class CertificationAgreementsService {
         vi_cn: '29347d5d9c2df454bceb91b9028a56e5980287b653f5888e04bc3afcf17eecf8',
     } as const;
 
+    // The owner-provided 2026-11-16 VI-CN source has a footer that identifies
+    // itself as F.19-P.09, even though the contract is F.18-P.09.03.
+    // Its exact SHA is prohibited for release until a corrected original has
+    // gone through controlled template review and an explicit hash update.
+    private readonly blockedF18LegalSourceHashes = new Set([
+        '29347d5d9c2df454bceb91b9028a56e5980287b653f5888e04bc3afcf17eecf8',
+    ]);
+
+    private sourceBlocked(sha256?: string | null) {
+        return Boolean(sha256 &&
+            this.blockedF18LegalSourceHashes.has(sha256.toLowerCase()));
+    }
+
     async languageSources() {
         const values = await Promise.all(
             Object.entries(this.f18Languages).map(async ([language, templateCode]) => {
@@ -346,7 +359,11 @@ export class CertificationAgreementsService {
                     source_ready: Boolean(template?.source_file?.sha256 &&
                         template.source_file.original_name.toLowerCase().endsWith('.docx') &&
                         template.source_file.sha256.toLowerCase() ===
-                            this.f18SourceSha256[language as 'vi' | 'vi_en' | 'vi_cn']),
+                            this.f18SourceSha256[language as 'vi' | 'vi_en' | 'vi_cn'] &&
+                        !this.sourceBlocked(template.source_file.sha256)),
+                    blocked_reason: this.sourceBlocked(template?.source_file?.sha256)
+                        ? 'Nguồn Việt–Trung có mã chân trang F.19-P.09 sai so với biểu mẫu F.18; cần duyệt lại bản gốc'
+                        : null,
                     effective_template_id: template?.id ?? null,
                     source_sha256: template?.source_file?.sha256 ?? null,
                 };
@@ -386,7 +403,8 @@ export class CertificationAgreementsService {
         });
         if (!controlledSource?.source_file?.sha256 ||
             !controlledSource.source_file.original_name.toLowerCase().endsWith('.docx') ||
-            controlledSource.source_file.sha256.toLowerCase() !== this.f18SourceSha256[language]) {
+            controlledSource.source_file.sha256.toLowerCase() !== this.f18SourceSha256[language] ||
+            this.sourceBlocked(controlledSource.source_file.sha256)) {
             throw new ConflictException('Chưa có nguồn mẫu F.18 gốc đã được kiểm soát và có hiệu lực');
         }
         const docsDir = getStorageConfig().documentsDirectory;
