@@ -2784,15 +2784,15 @@ model delegated_action_logs {
 
 
 model p09_recognized_certification_bodies {
-  id                 String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  revision_no        Int      @unique
+  id                 String   @id(map: "PK_p09_f16") @default(dbgenerated("newid()"), map: "DF_p09_f16_id") @db.UniqueIdentifier
+  revision_no        Int      @unique(map: "UQ_p09_f16_revision")
   organizations_json String   @db.NVarChar(Max)
-  status             String   @default("draft") @db.NVarChar(20)
+  status             String   @default("draft", map: "DF_p09_f16_status") @db.NVarChar(20)
   prepared_by        String   @db.UniqueIdentifier
   approved_by        String?  @db.UniqueIdentifier
   approved_at        DateTime?
   note               String?  @db.NVarChar(4000)
-  created_at         DateTime @default(now())
+  created_at         DateTime @default(now(), map: "DF_p09_f16_created_at")
 
-  @@index([status, revision_no])
+  @@index([status, revision_no], map: "IX_p09_f16_status_revision")
 }
