@@ -7,6 +7,13 @@ import {
 } from '@nestjs/common';
 
 import { Prisma } from '@prisma/client';
+import { existsSync, mkdirSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { Optional } from '@nestjs/common';
+import { DocumentFilesService } from '../document-files/document-files.service';
+import { getStorageConfig } from '../common/storage-config';
+import { convertDocxToPdf } from '../common/document-conversion';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCertificationAgreementDto } from './dto/create-certification-agreement.dto';
 import { VerifyF18EvidenceDto } from './dto/verify-f18-evidence.dto';
@@ -15,6 +22,7 @@ import { VerifyF18EvidenceDto } from './dto/verify-f18-evidence.dto';
 export class CertificationAgreementsService {
     constructor(
         private readonly prisma: PrismaService,
+        @Optional() private readonly documentFiles?: DocumentFilesService,
     ) { }
 
     // Lấy danh sách thỏa thuận chứng nhận
@@ -305,6 +313,133 @@ export class CertificationAgreementsService {
             return { agreement_id: id, evidence_verified: true, signed_file_id: signedFile.id,
                 verified_by: actor, evidence_approval_id: result.id };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }
+
+
+    private readonly f18Languages = {
+        vi: 'F.18-P.09.01',
+        vi_en: 'F.18-P.09.02',
+        vi_cn: 'F.18-P.09.03',
+    } as const;
+
+    async languageSources() {
+        const values = await Promise.all(
+            Object.entries(this.f18Languages).map(async ([language, templateCode]) => {
+                const template = await this.prisma.controlled_template_versions.findFirst({
+                    where: {
+                        series: { template_code: templateCode, status: 'ACTIVE' },
+                        status: 'EFFECTIVE',
+                    },
+                    orderBy: { revision_no: 'desc' },
+                    include: { source_file: true },
+                });
+                return {
+                    language, template_code: templateCode,
+                    source_ready: Boolean(template?.source_file?.sha256 &&
+                        template.source_file.original_name.toLowerCase().endsWith('.docx')),
+                    effective_template_id: template?.id ?? null,
+                    source_sha256: template?.source_file?.sha256 ?? null,
+                };
+            }),
+        );
+        return values;
+    }
+
+    async prepareLanguage(
+        id: string,
+        language: keyof CertificationAgreementsService['f18Languages'],
+        format: 'docx' | 'pdf',
+        actorId?: string,
+    ) {
+        if (!actorId) throw new ForbiddenException('Không xác định được người lập F.18');
+        const templateCode = this.f18Languages[language];
+        if (!templateCode || !['docx', 'pdf'].includes(format)) {
+            throw new BadRequestException('Ngôn ngữ hoặc định dạng F.18 không hợp lệ');
+        }
+        if (!this.documentFiles) throw new ConflictException('Chưa cấu hình quản lý hồ sơ phiên bản');
+        const agreement = await this.findOne(id);
+        const project = await this.prisma.certification_projects.findFirst({
+            where: { agreement_id: id },
+            include: { certification_applications: true },
+        });
+        const application = project?.certification_applications;
+        if (!application?.representative_name || !agreement.customers.company_name) {
+            throw new ConflictException('Thiếu tên tổ chức hoặc người đại diện theo hồ sơ đăng ký');
+        }
+        const controlledSource = await this.prisma.controlled_template_versions.findFirst({
+            where: {
+                series: { template_code: templateCode, status: 'ACTIVE' },
+                status: 'EFFECTIVE',
+            },
+            orderBy: { revision_no: 'desc' },
+            include: { source_file: true },
+        });
+        if (!controlledSource?.source_file?.sha256 ||
+            !controlledSource.source_file.original_name.toLowerCase().endsWith('.docx')) {
+            throw new ConflictException('Chưa có nguồn mẫu F.18 gốc đã được kiểm soát và có hiệu lực');
+        }
+        const docsDir = getStorageConfig().documentsDirectory;
+        const originalPath = join(docsDir, controlledSource.source_file.stored_name);
+        if (!existsSync(originalPath)) throw new NotFoundException('Tệp nguồn F.18 không có trong kho lưu trữ');
+        const builderCandidates = [
+            join(__dirname, '..', 'reports', 'runtime', 'p09-f18-language-builder.cjs'),
+            join(process.cwd(), 'dist', 'reports', 'runtime', 'p09-f18-language-builder.cjs'),
+            join(process.cwd(), 'src', 'reports', 'runtime', 'p09-f18-language-builder.cjs'),
+        ];
+        const builderPath = builderCandidates.find(existsSync);
+        if (!builderPath) throw new NotFoundException('Thiếu bộ xuất thỏa thuận đa ngôn ngữ');
+        const render = require(builderPath) as {
+            renderAgreementLanguage: (options: {
+                templatePath: string; outputPath: string; language: string;
+                data: Record<string, string>;
+            }) => string;
+        };
+        mkdirSync(docsDir, { recursive: true });
+        const filename = randomUUID();
+        const docxPath = join(docsDir, filename + '.docx');
+        const pdfPath = join(docsDir, filename + '.pdf');
+        try {
+            render.renderAgreementLanguage({
+                templatePath: originalPath, outputPath: docxPath, language,
+                data: {
+                    agreement_number: agreement.agreement_number,
+                    company: agreement.customers.company_name,
+                    representative: application.representative_name,
+                    position: application.representative_position ?? '',
+                    address: application.headquarters_address ?? agreement.customers.address ?? '',
+                    proposed_date: agreement.sign_date.toISOString().slice(0, 10),
+                },
+            });
+            if (format === 'pdf') await convertDocxToPdf(docxPath, pdfPath, 600_000);
+            const saved = await this.documentFiles.registerGenerated({
+                entity_type: 'certification_agreement', entity_id: id,
+                document_type: 'f18_agreement_' + language,
+                file_kind: format === 'docx' ? 'generated_docx' : 'generated_pdf',
+                original_name: `${templateCode}-${agreement.agreement_number.replace(/[^a-z0-9_-]/gi, '_')}.${format}`,
+                stored_name: filename + '.' + format,
+                absolute_path: format === 'docx' ? docxPath : pdfPath,
+                mime_type: format === 'docx'
+                    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                    : 'application/pdf',
+                note: `F.18 ${language} UNSIGNED. Source template ${controlledSource.id}, original SHA-256 ${controlledSource.source_file.sha256}. Original clauses retained.`,
+                uploaded_by: actorId,
+            });
+            await this.prisma.audit_logs.create({ data: {
+                user_id: actorId, action: 'P09_F18_PREPARE_LANGUAGE',
+                entity_type: 'certification_agreement', entity_id: id,
+                outcome: 'SUCCESS',
+                details_json: JSON.stringify({
+                    language, file_id: saved.id, source_template_id: controlledSource.id,
+                    source_sha256: controlledSource.source_file.sha256, format,
+                    unsigned: true,
+                }),
+            }});
+            return { agreement_id: id, language, unsigned: true, document: saved,
+                source_template_id: controlledSource.id,
+                source_sha256: controlledSource.source_file.sha256 };
+        } finally {
+            if (format === 'pdf' && existsSync(docxPath)) unlinkSync(docxPath);
+        }
     }
 
 }
