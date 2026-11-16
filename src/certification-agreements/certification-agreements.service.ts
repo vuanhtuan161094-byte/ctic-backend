@@ -260,11 +260,11 @@ export class CertificationAgreementsService {
                     is_current: true,
                 },
             });
-            if (!signedFile?.sha256) {
+            if (!signedFile?.sha256 || !/^[a-f0-9]{64}$/i.test(signedFile.sha256)) {
                 throw new BadRequestException('Bản ký hiện hành F.18 không có mã kiểm tra SHA-256 hợp lệ');
             }
-            if (signedFile.uploaded_by?.toLowerCase() === actor.toLowerCase()) {
-                throw new ForbiddenException('Người tải bản ký không được tự xác minh');
+            if (!signedFile.uploaded_by || signedFile.uploaded_by.toLowerCase() === actor.toLowerCase()) {
+                throw new ForbiddenException('Không có người tải bản ký độc lập để xác minh');
             }
             const prior = await tx.workflow_approvals.findFirst({
                 where: { entity_type: 'P09_F18_SIGNED_EVIDENCE', entity_id: id },
