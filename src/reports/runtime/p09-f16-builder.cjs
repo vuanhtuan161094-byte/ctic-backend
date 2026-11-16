@@ -6,16 +6,24 @@ const escapeXml = (x) => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 const p = (s, bold = false) => '<w:p><w:r>' + (bold ? '<w:rPr><w:b/></w:rPr>' : '') +
     '<w:t xml:space="preserve">' + escapeXml(s) + '</w:t></w:r></w:p>';
-const row = (cells, bold = false) => '<w:tr>' + cells.map(v =>
-    '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr>' + p(v, bold) + '</w:tc>').join('') + '</w:tr>';
+const row = (cells, bold = false) => '<w:tr>' +
+    (bold ? '<w:trPr><w:tblHeader w:val="true"/></w:trPr>' : '') +
+    cells.map((v) => '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>' +
+        '<w:tcMar><w:top w:w="90" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/>' +
+        '<w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar></w:tcPr>' +
+        p(v, bold) + '</w:tc>').join('') + '</w:tr>';
+const tablePr = '<w:tblPr><w:tblW w:w="9400" w:type="dxa"/>' +
+    '<w:tblBorders>' + ['top','left','bottom','right','insideH','insideV']
+        .map((edge) => '<w:' + edge + ' w:val="single" w:sz="5" w:color="7F8FA0"/>')
+        .join('') + '</w:tblBorders></w:tblPr>';
 function renderF16({ baseTemplatePath, outputPath, data }) {
     if (!data || !Array.isArray(data.organizations) || !data.organizations.length) throw Error('F16 requires recognized organizations');
     const header = row(['TT/No.', 'Tổ chức / Organizations', 'Nội dung thừa nhận / Content recognition'], true);
     const bodyRows = data.organizations.map((v, i) => row([i + 1, v.name, v.recognition_scope])).join('');
-    const grid = '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>' +
+    const grid = '<w:tbl>' + tablePr +
         '<w:tblGrid><w:gridCol w:w="800"/><w:gridCol w:w="3600"/><w:gridCol w:w="5000"/></w:tblGrid>' +
         header + bodyRows + '</w:tbl>';
-    const sign = '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>' +
+    const sign = '<w:tbl>' + tablePr +
         row(['', 'Người lập / Prepared by', 'Người duyệt / Approved by'], true) +
         row(['Ký tên / Signature', 'CHỜ KÝ / SIGNATURE REQUIRED', 'CHỜ KÝ / SIGNATURE REQUIRED']) +
         row(['Họ tên / Full name', data.preparer_name ?? '', data.approver_name ?? '']) +
