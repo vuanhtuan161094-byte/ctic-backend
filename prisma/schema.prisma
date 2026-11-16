@@ -2781,3 +2781,18 @@ model delegated_action_logs {
   @@index([delegation_id, created_at], map: "IX_delegated_action_logs_delegation")
   @@index([actor_user_id, created_at], map: "IX_delegated_action_logs_actor")
 }
+
+
+model p09_recognized_certification_bodies {
+  id                 String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  revision_no        Int      @unique
+  organizations_json String   @db.NVarChar(Max)
+  status             String   @default("draft") @db.NVarChar(20)
+  prepared_by        String   @db.UniqueIdentifier
+  approved_by        String?  @db.UniqueIdentifier
+  approved_at        DateTime?
+  note               String?  @db.NVarChar(4000)
+  created_at         DateTime @default(now())
+
+  @@index([status, revision_no])
+}
