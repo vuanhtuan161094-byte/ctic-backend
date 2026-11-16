@@ -19,6 +19,7 @@ describe('F.16 independent controlled signed issuance',()=>{
   const db={
     p09_recognized_certification_bodies:{findUnique:jest.fn()},
     workflow_approvals:{findFirst:jest.fn(),create:jest.fn()},
+    users:{findMany:jest.fn()},
     documentFile:{findFirst:jest.fn()},
     audit_logs:{create:jest.fn()},
     $queryRaw:jest.fn(),$transaction:jest.fn(),
@@ -58,6 +59,15 @@ describe('F.16 independent controlled signed issuance',()=>{
     expect(db.audit_logs.create).toHaveBeenCalledWith(expect.objectContaining({
       data:expect.objectContaining({action:'P09_F16_OFFICIAL_ISSUE',user_id:issuer}),
     }));
+  });
+  it('rejects unsigned Word/PDF export if the preparer or approver has no verifiable full name',async()=>{
+    db.users.findMany.mockResolvedValue([
+      {id:preparedBy,full_name:'Người lập A',username:'preparer'},
+      {id:approvedBy,full_name:null,username:'reviewer'},
+    ]);
+    const serviceWithFiles=new P09F16Service(db as never, {} as never);
+    await expect(serviceWithFiles.renderForm(id,'docx',issuer))
+      .rejects.toThrow('Thiếu tên người lập hoặc người phê duyệt');
   });
   it('invalidates an issued record when the signed scan changes',async()=>{
     db.workflow_approvals.findFirst.mockResolvedValue({approver_id:issuer,approved_at:new Date(),
