@@ -33,3 +33,15 @@ export class ApproveP09RecognizedListDto {
     @MaxLength(2000)
     approval_note!: string;
 }
+
+export class IssueP09RecognizedListDto {
+    @IsString()
+    @MinLength(36)
+    @MaxLength(36)
+    signed_file_id!: string;
+
+    @IsString()
+    @MinLength(20)
+    @MaxLength(2000)
+    issue_note!: string;
+}
