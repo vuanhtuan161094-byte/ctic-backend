@@ -7,9 +7,9 @@ import {
 } from '@nestjs/common';
 
 import { Prisma } from '@prisma/client';
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Optional } from '@nestjs/common';
 import { DocumentFilesService } from '../document-files/document-files.service';
 import { getStorageConfig } from '../common/storage-config';
@@ -392,6 +392,11 @@ export class CertificationAgreementsService {
         const docsDir = getStorageConfig().documentsDirectory;
         const originalPath = join(docsDir, controlledSource.source_file.stored_name);
         if (!existsSync(originalPath)) throw new NotFoundException('Tệp nguồn F.18 không có trong kho lưu trữ');
+        const physicalSha256 = createHash('sha256').update(readFileSync(originalPath)).digest('hex');
+        if (physicalSha256 !== controlledSource.source_file.sha256.toLowerCase() ||
+            physicalSha256 !== this.f18SourceSha256[language]) {
+            throw new ConflictException('Tệp nguồn F.18 đã bị thay đổi hoặc không khớp bản gốc đã duyệt');
+        }
         const builderCandidates = [
             join(__dirname, '..', 'reports', 'runtime', 'p09-f18-language-builder.cjs'),
             join(process.cwd(), 'dist', 'reports', 'runtime', 'p09-f18-language-builder.cjs'),
