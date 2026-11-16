@@ -2724,26 +2724,47 @@ export class AuditDocumentsService {
             document_generation: nextDocumentData,
         });
 
-        await this.prisma.audit_plans.update({
-            where: {
-                id: planId,
-            },
-            data: {
-                form_data: JSON.stringify(nextFormData),
-            },
-        });
-
-        if (userId) {
-            await this.prisma.audit_logs.create({
-                data: {
-                    user_id: userId,
-                    action: dto.audit_note_rows !== undefined
-                        ? 'SAVE_P09_F08_AUDIT_NOTES'
-                        : 'SAVE_AUDIT_DOCUMENT_DATA',
-                    entity_type: 'audit_plan',
-                    entity_id: planId,
-                },
+        const oldNoteRows = this.isPlainObject(existing)
+            ? existing.audit_note_rows ?? [] : [];
+        const noteChanged = dto.audit_note_rows !== undefined &&
+            JSON.stringify(oldNoteRows) !== JSON.stringify(nextDocumentData.audit_note_rows ?? []);
+        // Persist the F.08 change and its audit evidence atomically.
+        // Other form updates retain their pre-existing behavior.
+        if (noteChanged && userId) {
+            await this.prisma.$transaction(async (tx) => {
+                await tx.audit_plans.update({
+                    where: { id: planId },
+                    data: { form_data: JSON.stringify(nextFormData) },
+                });
+                await tx.audit_logs.create({
+                    data: {
+                        user_id: userId,
+                        action: 'SAVE_P09_F08_AUDIT_NOTES',
+                        entity_type: 'audit_plan',
+                        entity_id: planId,
+                        outcome: 'SUCCESS',
+                        details_json: JSON.stringify({
+                            rows: dto.audit_note_rows?.length ?? 0,
+                            plan_id: planId,
+                        }),
+                    },
+                });
             });
+        } else {
+            await this.prisma.audit_plans.update({
+                where: { id: planId },
+                data: { form_data: JSON.stringify(nextFormData) },
+            });
+            if (userId) {
+                await this.prisma.audit_logs.create({
+                    data: {
+                        user_id: userId,
+                        action: 'SAVE_AUDIT_DOCUMENT_DATA',
+                        entity_type: 'audit_plan',
+                        entity_id: planId,
+                    },
+                });
+            }
         }
 
         return this.preview(planId);
