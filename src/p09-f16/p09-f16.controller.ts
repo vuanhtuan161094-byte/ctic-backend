@@ -36,7 +36,7 @@ export class P09F16Controller {
     @Permissions('documents.manage')
     @ApiOperation({ summary: 'Lập phiên bản F.16 mới, chưa có hiệu lực trước phê duyệt' })
     create(@Body() dto: CreateP09RecognizedListDto, @Req() request: SecurityRequest) {
-        return this.service.create(dto, getActorUserId(request));
+        return this.service.create(dto, getActorUserId(request) ?? undefined);
     }
 
     @Post(':id/approve')
@@ -48,6 +48,6 @@ export class P09F16Controller {
         @Body() dto: ApproveP09RecognizedListDto,
         @Req() request: SecurityRequest,
     ) {
-        return this.service.approve(id, dto, getActorUserId(request));
+        return this.service.approve(id, dto, getActorUserId(request) ?? undefined);
     }
 }
