@@ -22,10 +22,18 @@ function renderAgreementLanguage({templatePath, outputPath, language, data}) {
   const xml = body.data.toString('utf8');
   if (!/<w:body(?:\s|>)/.test(xml)) throw Error('Missing OOXML body');
   const labels = LABELS[language];
-  const cover = para('', labels[0]) +
+  const header = '<w:p><w:pPr><w:spacing w:before="240" w:after="220"/>' +
+    '<w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="30"/></w:rPr>' +
+    '<w:t xml:space="preserve">' + escapeXml(labels[0]) + '</w:t></w:r></w:p>';
+  const note = {
+    vi: 'Bản dự thảo chưa ký. Điều khoản và vị trí ký gốc được giữ nguyên ở những trang tiếp theo.',
+    vi_en: 'Unsigned draft. The original legal clauses and signature blocks follow unchanged.',
+    vi_cn: '未签署草稿。原始条款和签名栏保留在后续页面。',
+  }[language];
+  const cover = header +
     para('F.18', data.agreement_number) +
     values.map((v,i)=>para(labels[i+1], v)).join('') +
-    para('SOURCE', 'Original legal clauses and signature blocks follow unmodified; no signature is generated.') +
+    para(language === 'vi' ? 'Lưu ý' : language === 'vi_cn' ? '说明' : 'Note', note) +
     '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   // The source body and all original signature tables are preserved byte-for-byte
   // after the inserted cover. Only the cover text is personalized.
