@@ -4,6 +4,7 @@ import {
     Get,
     Param,
     Post,
+    Req,
     UseGuards,
 } from '@nestjs/common';
 import {
@@ -22,6 +23,9 @@ import { Permissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+
+import type { SecurityRequest } from '../security/security-request';
+import { getActorUserId } from '../security/security-request';
 
 import { CertificationAgreementsService } from './certification-agreements.service';
 import { CreateCertificationAgreementDto } from './dto/create-certification-agreement.dto';
@@ -111,9 +115,11 @@ export class CertificationAgreementsController {
     create(
         @Body()
         dto: CreateCertificationAgreementDto,
+        @Req() request: SecurityRequest,
     ) {
         return this.certificationAgreementsService.create(
             dto,
+            getActorUserId(request),
         );
     }
 }
