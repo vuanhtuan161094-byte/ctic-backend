@@ -346,7 +346,7 @@ export class CertificationAgreementsService {
                     source_ready: Boolean(template?.source_file?.sha256 &&
                         template.source_file.original_name.toLowerCase().endsWith('.docx') &&
                         template.source_file.sha256.toLowerCase() ===
-                            this.f18SourceSha256[language as keyof typeof this.f18SourceSha256]),
+                            this.f18SourceSha256[language as 'vi' | 'vi_en' | 'vi_cn']),
                     effective_template_id: template?.id ?? null,
                     source_sha256: template?.source_file?.sha256 ?? null,
                 };
