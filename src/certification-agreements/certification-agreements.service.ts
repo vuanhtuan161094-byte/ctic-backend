@@ -67,6 +67,7 @@ export class CertificationAgreementsService {
                             company_name: true,
                             tax_code: true,
                             status: true,
+                            address: true,
                         },
                     },
                     contracts: {
