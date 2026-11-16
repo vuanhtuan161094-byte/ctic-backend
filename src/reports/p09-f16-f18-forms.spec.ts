@@ -67,7 +67,9 @@ describe('P.09 F.16, F.18 Word publishing assets and multilingual governance', (
         expect(result).toContain(marker);
         expect(result).toContain('Khách hàng A &amp; B');
         expect(result).toContain('F18-001');
-        expect(result).toContain('no signature is generated');
+        expect(result).toContain(language === 'vi' ? 'Bản dự thảo chưa ký' :
+            language === 'vi_cn' ? '未签署草稿' : 'Unsigned draft');
+        expect(result).not.toContain(': '+marker);
         // The cover is inserted before the unchanged original body.
         expect(result).toContain(originalBody.replace(/^<w:body(?:\s[^>]*)?>/, ''));
     });
