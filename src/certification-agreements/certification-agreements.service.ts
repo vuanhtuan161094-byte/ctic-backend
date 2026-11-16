@@ -322,6 +322,13 @@ export class CertificationAgreementsService {
         vi_en: 'F.18-P.09.02',
         vi_cn: 'F.18-P.09.03',
     } as const;
+    // SHA-256 of the three owner-provided original F.18 legal templates.
+    // An unrelated/even 'effective' template is not silently substituted.
+    private readonly f18SourceSha256 = {
+        vi: 'd74ba3d3a827f6578d04ce11e0e248b381b2d936ce2a47b73c62c59548f420c0',
+        vi_en: 'b3254eea3fca969a56e9d8d58d6c9a85752f320381e41920e8838ae84da9077a',
+        vi_cn: '29347d5d9c2df454bceb91b9028a56e5980287b653f5888e04bc3afcf17eecf8',
+    } as const;
 
     async languageSources() {
         const values = await Promise.all(
@@ -337,7 +344,9 @@ export class CertificationAgreementsService {
                 return {
                     language, template_code: templateCode,
                     source_ready: Boolean(template?.source_file?.sha256 &&
-                        template.source_file.original_name.toLowerCase().endsWith('.docx')),
+                        template.source_file.original_name.toLowerCase().endsWith('.docx') &&
+                        template.source_file.sha256.toLowerCase() ===
+                            this.f18SourceSha256[language as keyof typeof this.f18SourceSha256]),
                     effective_template_id: template?.id ?? null,
                     source_sha256: template?.source_file?.sha256 ?? null,
                 };
@@ -376,7 +385,8 @@ export class CertificationAgreementsService {
             include: { source_file: true },
         });
         if (!controlledSource?.source_file?.sha256 ||
-            !controlledSource.source_file.original_name.toLowerCase().endsWith('.docx')) {
+            !controlledSource.source_file.original_name.toLowerCase().endsWith('.docx') ||
+            controlledSource.source_file.sha256.toLowerCase() !== this.f18SourceSha256[language]) {
             throw new ConflictException('Chưa có nguồn mẫu F.18 gốc đã được kiểm soát và có hiệu lực');
         }
         const docsDir = getStorageConfig().documentsDirectory;
