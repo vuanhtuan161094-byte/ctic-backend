@@ -45,6 +45,7 @@ import { MasterDataConfigurationModule } from './master-data-configuration/maste
 import { NotificationsModule } from './notifications/notifications.module';
 import { PersonalWorkspaceModule } from './personal-workspace/personal-workspace.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { P09F16Module } from './p09-f16/p09-f16.module';
 import { ReportsModule } from './reports/reports.module';
 import { SecurityModule } from './security/security.module';
 import { TechnicalReviewsModule } from './technical-reviews/technical-reviews.module';
@@ -63,6 +64,7 @@ import { SystemAdministrationModule } from './system-administration/system-admin
         ScheduleModule.forRoot(),
 
         PrismaModule,
+        P09F16Module,
         SecurityModule,
         WorkItemsModule,
         HealthModule,
