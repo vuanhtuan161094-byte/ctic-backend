@@ -266,8 +266,8 @@ export class P09F16Service {
             if (!signed?.sha256 || !/^[a-f0-9]{64}$/i.test(signed.sha256)) {
                 throw new BadRequestException('Thiếu bản ký hiện hành F.16 có SHA-256');
             }
-            if (signed.uploaded_by?.toLowerCase() === publisher.toLowerCase()) {
-                throw new ForbiddenException('Người tải bản ký không được tự xác nhận phát hành');
+            if (!signed.uploaded_by || signed.uploaded_by.toLowerCase() === publisher.toLowerCase()) {
+                throw new ForbiddenException('Không có người tải bản ký độc lập để xác nhận phát hành');
             }
             const prior = await tx.workflow_approvals.findFirst({
                 where: { entity_type: 'P09_F16_OFFICIAL_ISSUE', entity_id: id },
