@@ -98,7 +98,27 @@ export class AuditChecklistProgramDto {
     rows!: AuditChecklistRowDto[];
 }
 
+export class AuditNoteRowDto {
+    @IsString()
+    @MaxLength(50)
+    clause!: string;
+
+    @IsString()
+    @MaxLength(8000)
+    content!: string;
+
+    @IsString()
+    @MaxLength(8000)
+    finding!: string;
+}
+
 export class SaveAuditDocumentDataDto {
+    @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => AuditNoteRowDto)
+    audit_note_rows?: AuditNoteRowDto[];
+
     @IsOptional()
     @IsString()
     @MaxLength(100)
