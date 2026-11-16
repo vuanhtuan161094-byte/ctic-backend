@@ -36,11 +36,14 @@ describe('P09 F18 original VN/VN-EN/VN-CN source governance',()=>{
             },
         });
     });
-    it('shows all three exact original source variants as ready when SHA matches',async()=>{
+    it('marks only the two correctly identified original sources ready and blocks F18 VI-CN with F19 footer',async()=>{
         const sources=await service.languageSources();
         expect(sources.map(s=>s.language)).toEqual(['vi','vi_en','vi_cn']);
-        expect(sources.every(s=>s.source_ready)).toBe(true);
+        expect(sources.map(s=>s.source_ready)).toEqual([true,true,false]);
+        expect(sources[2].blocked_reason).toMatch(/F\.19-P\.09/);
         expect(sources.map(s=>s.source_sha256)).toEqual(Object.values(sourceSha));
+        await expect(service.prepareLanguage(id,'vi_cn','docx','actor-1'))
+            .rejects.toBeInstanceOf(ConflictException);
     });
     it('rejects wrong template hash even when template was marked EFFECTIVE',async()=>{
         db.controlled_template_versions.findFirst.mockResolvedValue({
