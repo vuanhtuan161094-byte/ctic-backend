@@ -2511,6 +2511,15 @@ export class AuditDocumentsService {
                     documentData.attendance_rows,
                     built.plan,
                 ),
+                audit_note_rows: Array.isArray(documentData.audit_note_rows)
+                    ? documentData.audit_note_rows
+                        .filter((row): row is Record<string, unknown> => this.isPlainObject(row))
+                        .map((row) => ({
+                            clause: this.displayText(row.clause, ''),
+                            content: this.displayText(row.content, ''),
+                            finding: this.displayText(row.finding, ''),
+                        }))
+                    : [],
                 checklists: this.normalizeChecklistPrograms(built.plan).map((item) => ({
                     program_key: item.program_key,
                     program_code: item.program_code,
@@ -2547,6 +2556,16 @@ export class AuditDocumentsService {
             throw new BadRequestException(
                 'Danh sách tham dự không được vượt quá 100 người',
             );
+        }
+        if (dto.audit_note_rows !== undefined) {
+            if (dto.audit_note_rows.length > 200) {
+                throw new BadRequestException('F.08 không được vượt quá 200 dòng ghi chép');
+            }
+            if (dto.audit_note_rows.some((row) =>
+                !row.clause?.trim() || !row.content?.trim()
+            )) {
+                throw new BadRequestException('F.08 phải có điều khoản và nội dung cho mỗi dòng');
+            }
         }
         if (dto.checklists) {
             const allowed = new Map(
@@ -2618,6 +2637,15 @@ export class AuditDocumentsService {
                     })),
                 }
                 : {}),
+            ...(dto.audit_note_rows !== undefined
+                ? {
+                    audit_note_rows: dto.audit_note_rows.map((row) => ({
+                        clause: row.clause.trim(),
+                        content: row.content.trim(),
+                        finding: row.finding.trim(),
+                    })),
+                }
+                : {}),
             ...(dto.checklists !== undefined
                 ? {
                     checklists: dto.checklists.map((checklist) => ({
@@ -2661,7 +2689,9 @@ export class AuditDocumentsService {
             await this.prisma.audit_logs.create({
                 data: {
                     user_id: userId,
-                    action: 'SAVE_AUDIT_DOCUMENT_DATA',
+                    action: dto.audit_note_rows !== undefined
+                        ? 'SAVE_P09_F08_AUDIT_NOTES'
+                        : 'SAVE_AUDIT_DOCUMENT_DATA',
                     entity_type: 'audit_plan',
                     entity_id: planId,
                 },
