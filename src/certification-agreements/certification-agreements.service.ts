@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
@@ -81,7 +82,11 @@ export class CertificationAgreementsService {
     // Tạo thỏa thuận chứng nhận
     async create(
         dto: CreateCertificationAgreementDto,
+        actorId?: string,
     ) {
+        if (!actorId) {
+            throw new ForbiddenException('Không xác định được người lập F.18');
+        }
         // Kiểm tra khách hàng tồn tại
         const customer =
             await this.prisma.customers.findUnique({
@@ -144,29 +149,48 @@ export class CertificationAgreementsService {
             }
         }
 
-        return this.prisma.certification_agreements.create({
-            data: {
-                customer_id: dto.customer_id,
-                contract_id: dto.contract_id,
-                agreement_number:
-                    dto.agreement_number,
-                sign_date: new Date(dto.sign_date),
-            },
-            include: {
-                customers: {
-                    select: {
-                        id: true,
-                        customer_code: true,
-                        company_name: true,
+        // A F.18 register row is not proof of either party's signature.
+        // The separately versioned signed_scan remains the documentary evidence.
+        return this.prisma.$transaction(async (tx) => {
+            const agreement = await tx.certification_agreements.create({
+                data: {
+                    customer_id: dto.customer_id,
+                    contract_id: dto.contract_id,
+                    agreement_number: dto.agreement_number,
+                    sign_date: new Date(dto.sign_date),
+                },
+                include: {
+                    customers: {
+                        select: {
+                            id: true,
+                            customer_code: true,
+                            company_name: true,
+                        },
+                    },
+                    contracts: {
+                        select: {
+                            id: true,
+                            contract_number: true,
+                        },
                     },
                 },
-                contracts: {
-                    select: {
-                        id: true,
-                        contract_number: true,
-                    },
+            });
+            await tx.audit_logs.create({
+                data: {
+                    user_id: actorId,
+                    action: 'CREATE_P09_F18_AGREEMENT',
+                    entity_type: 'certification_agreement',
+                    entity_id: agreement.id,
+                    outcome: 'SUCCESS',
+                    details_json: JSON.stringify({
+                        agreement_number: agreement.agreement_number,
+                        customer_id: agreement.customer_id,
+                        contract_id: agreement.contract_id,
+                        signed_evidence_verified: false,
+                    }),
                 },
-            },
+            });
+            return agreement;
         });
     }
 }
