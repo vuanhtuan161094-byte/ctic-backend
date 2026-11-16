@@ -4,6 +4,7 @@ import {
     Get,
     Param,
     Post,
+    Query,
     Req,
     UseGuards,
 } from '@nestjs/common';
@@ -62,6 +63,12 @@ export class CertificationAgreementsController {
     findAll() {
         return this.certificationAgreementsService.findAll();
     }
+
+    @Get('language-sources')
+    @Roles('ADMIN', 'STAFF', 'SALES', 'COORDINATOR')
+    @Permissions('contracts.read')
+    @ApiOperation({ summary: 'Kiểm tra 3 mẫu F.18 VN, VN-EN, VN-CN đã có hiệu lực trong thư viện' })
+    languages() { return this.certificationAgreementsService.languageSources(); }
 
     @Get(':id')
     @Roles(
@@ -142,6 +149,21 @@ export class CertificationAgreementsController {
     ) {
         return this.certificationAgreementsService.verifyEvidence(
             id, dto, getActorUserId(request) ?? undefined,
+        );
+    }
+
+    @Post(':id/prepare-language')
+    @Roles('ADMIN', 'STAFF')
+    @Permissions('contracts.manage')
+    @ApiOperation({ summary: 'Tạo bản F.18 VN / VN-EN / VN-CN chưa ký từ mẫu pháp lý nguyên gốc đã kiểm soát' })
+    prepareLanguage(
+        @Param('id') id: string,
+        @Query('language') language: 'vi' | 'vi_en' | 'vi_cn',
+        @Query('format') format: 'docx' | 'pdf',
+        @Req() request: SecurityRequest,
+    ) {
+        return this.certificationAgreementsService.prepareLanguage(
+            id, language, format, getActorUserId(request) ?? undefined,
         );
     }
 
